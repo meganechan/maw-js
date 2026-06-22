@@ -144,28 +144,38 @@ export function kbLearnPayload(company: string, dept: string, knowledge: string)
 }
 
 /**
- * Build the KB search URL. The dept tag is prepended to the query so the tag
- * boosts relevance; results are then post-filtered by `filterByDeptTag`. When
- * the user gives no query, the tag alone is the query.
+ * Build the KB search URL. The dept tag is prepended to the query as a SOFT
+ * BIAS — it nudges ranking toward the department's own notes without excluding
+ * semantic neighbors. When the user gives no query, the tag alone is the query.
  *
- * Uses `mode=fts` (full-text/exact match) rather than `mode=hybrid`: hybrid
- * ranks dept-tagged entries below semantic noise so the exact `dept:<co>:<dept>`
- * matches fall outside `limit=10` and `filterByDeptTag` then drops everything
- * (always 0 results). fts surfaces the tagged entries directly.
+ * Uses `mode=hybrid` (semantic + keyword) rather than `mode=fts`: this phase we
+ * prioritize search QUALITY (synonyms/paraphrases of the query are recalled)
+ * over strict dept scoping. company/dept is a soft grouping, not a boundary —
+ * the prepended tag biases hybrid ranking toward in-dept content, and
+ * `softBiasByDeptTag` then surfaces tagged entries first WITHOUT dropping the
+ * neighbors. (fts was keyword-only and missed semantic matches entirely.)
  */
 export function kbSearchUrl(base: string, deptTag: string, query?: string): string {
   const q = query && query.trim() ? `${deptTag} ${query.trim()}` : deptTag;
-  return `${base}/api/search?q=${encodeURIComponent(q)}&limit=10&mode=fts`;
+  return `${base}/api/search?q=${encodeURIComponent(q)}&limit=10&mode=hybrid`;
 }
 
 /**
- * Best-effort dept scoping: the search endpoint has no concept filter and does
- * not return concepts, so we keep only results whose `content` embeds the dept
- * tag (written there by `kbLearnPayload`). Trade-off: knowledge stored OUTSIDE
- * `dept learn` (which lacks the inline tag) won't match — accepted per spec.
+ * Soft-bias ordering for dept knowledge — NOTHING is dropped. The dept tag is a
+ * soft grouping, not a boundary: results whose `content` embeds the dept tag
+ * (written there by `kbLearnPayload`) are surfaced FIRST so the department's own
+ * notes lead, followed by the semantic neighbors in their original KB rank
+ * order. The partition is STABLE within each group, so KB relevance ranking is
+ * preserved among tagged and among untagged entries respectively.
  */
-export function filterByDeptTag(results: KbSearchResult[], deptTag: string): KbSearchResult[] {
-  return results.filter((r) => typeof r.content === "string" && r.content.includes(deptTag));
+export function softBiasByDeptTag(results: KbSearchResult[], deptTag: string): KbSearchResult[] {
+  const tagged: KbSearchResult[] = [];
+  const rest: KbSearchResult[] = [];
+  for (const r of results) {
+    if (typeof r.content === "string" && r.content.includes(deptTag)) tagged.push(r);
+    else rest.push(r);
+  }
+  return [...tagged, ...rest];
 }
 
 // ─── share / sync target planning (pure) ─────────────────────────────────────
@@ -227,11 +237,11 @@ export interface DeptKnowledgeResult {
   ok: boolean;
   /** Status / error line (e.g. "KB unreachable"). */
   message: string;
-  /** Dept-scoped results (empty on error or no match). */
+  /** Soft-bias-ordered results — tagged first, neighbors kept (empty on error). */
   results: KbSearchResult[];
 }
 
-/** GET dept-scoped search results from the KB. Graceful on unreachable / non-2xx. */
+/** GET hybrid search results, soft-biased to the dept tag. Graceful on unreachable / non-2xx. */
 export async function deptKnowledge(
   company: string,
   dept: string,
@@ -249,8 +259,8 @@ export async function deptKnowledge(
       return { ok: false, message: `KB rejected search (HTTP ${res.status}) at ${base}`, results: [] };
     }
     const data = (await res.json()) as { results?: KbSearchResult[] };
-    const scoped = filterByDeptTag(data.results ?? [], deptTag);
-    return { ok: true, message: `${scoped.length} result(s) for ${deptTag}`, results: scoped };
+    const ranked = softBiasByDeptTag(data.results ?? [], deptTag);
+    return { ok: true, message: `${ranked.length} result(s), dept '${deptTag}' first`, results: ranked };
   } catch {
     return { ok: false, message: `KB unreachable at ${base}`, results: [] };
   }

@@ -7,7 +7,7 @@ import {
   createCompany, addDepartment, assignMember, kbTagFor,
 } from "../src/vendor/mpr-plugins/company/company-helpers";
 import {
-  kbLearnPayload, kbSearchUrl, filterByDeptTag, resolveKbUrl,
+  kbLearnPayload, kbSearchUrl, softBiasByDeptTag, resolveKbUrl,
   resolveLead, planShareTargets, planSyncTargets,
   deptLearn, deptKnowledge, deptShare, deptSync,
   type FetchLike, type KbSearchResult, type ClaudeJson,
@@ -149,8 +149,8 @@ describe("kbSearchUrl", () => {
     const url = kbSearchUrl("http://localhost:47778", tag, "retry logic");
     expect(url).toContain(`q=${encodeURIComponent(`${tag} retry logic`)}`);
     expect(url).toContain("limit=10");
-    expect(url).toContain("mode=fts");
-    expect(url).not.toContain("mode=hybrid");
+    expect(url).toContain("mode=hybrid");
+    expect(url).not.toContain("mode=fts");
   });
 
   test("no query: tag alone is the q", () => {
@@ -170,26 +170,52 @@ describe("kbSearchUrl", () => {
   });
 });
 
-// ─── pure: filterByDeptTag ───────────────────────────────────────────────────
+// ─── pure: softBiasByDeptTag ─────────────────────────────────────────────────
 
-describe("filterByDeptTag", () => {
+describe("softBiasByDeptTag", () => {
   const tag = "dept:kob:payment";
-  const mk = (content: string): KbSearchResult => ({ content, type: "learning", source_file: "f", score: 1 });
+  const mk = (content: string, source_file: string): KbSearchResult => ({ content, type: "learning", source_file, score: 1 });
 
-  test("keeps only results whose content embeds the tag", () => {
+  test("keeps ALL results — nothing is dropped (untagged still returned)", () => {
     const results = [
-      mk(`[${tag}] in dept`),
-      mk("unrelated knowledge"),
-      mk(`some text [${tag}] mid`),
+      mk(`[${tag}] in dept`, "a"),
+      mk("unrelated knowledge", "b"),
+      mk(`some text [${tag}] mid`, "c"),
     ];
-    const kept = filterByDeptTag(results, tag);
-    expect(kept).toHaveLength(2);
-    expect(kept.every((r) => r.content.includes(tag))).toBe(true);
+    const out = softBiasByDeptTag(results, tag);
+    expect(out).toHaveLength(3);
+    expect(out.map((r) => r.source_file).sort()).toEqual(["a", "b", "c"]);
   });
 
-  test("non-string content is dropped safely", () => {
-    const results = [{ content: undefined as any, type: "x", source_file: "f", score: 1 }];
-    expect(filterByDeptTag(results, tag)).toHaveLength(0);
+  test("orders tagged entries before untagged", () => {
+    const results = [
+      mk("untagged-1", "u1"),
+      mk(`[${tag}] tagged-1`, "t1"),
+      mk("untagged-2", "u2"),
+      mk(`[${tag}] tagged-2`, "t2"),
+    ];
+    const out = softBiasByDeptTag(results, tag);
+    expect(out.map((r) => r.source_file)).toEqual(["t1", "t2", "u1", "u2"]);
+  });
+
+  test("is stable within each group (preserves KB rank order)", () => {
+    const results = [
+      mk(`[${tag}] first-tagged`, "t1"),
+      mk("first-untagged", "u1"),
+      mk(`[${tag}] second-tagged`, "t2"),
+      mk("second-untagged", "u2"),
+    ];
+    const out = softBiasByDeptTag(results, tag);
+    expect(out.map((r) => r.source_file)).toEqual(["t1", "t2", "u1", "u2"]);
+  });
+
+  test("non-string content is treated as untagged (kept, ordered last)", () => {
+    const results = [
+      { content: undefined as any, type: "x", source_file: "u", score: 1 },
+      mk(`[${tag}] tagged`, "t"),
+    ];
+    const out = softBiasByDeptTag(results, tag);
+    expect(out.map((r) => r.source_file)).toEqual(["t", "u"]);
   });
 });
 
@@ -269,7 +295,7 @@ describe("deptLearn (injected fetch)", () => {
 // ─── async: deptKnowledge (injected fetch) ───────────────────────────────────
 
 describe("deptKnowledge (injected fetch)", () => {
-  test("builds dept-scoped GET url and post-filters by tag", async () => {
+  test("builds dept-scoped GET url and soft-biases (tagged first, none dropped)", async () => {
     let capturedUrl = "";
     const fakeFetch: FetchLike = async (url) => {
       capturedUrl = url;
@@ -278,8 +304,9 @@ describe("deptKnowledge (injected fetch)", () => {
         status: 200,
         json: async () => ({
           results: [
+            // KB returns an untagged semantic neighbor RANKED ABOVE the tagged one
+            { content: "unrelated", type: "learning", source_file: "b", score: 0.95 },
             { content: "[dept:kob:payment] scoped one", type: "learning", source_file: "a", score: 0.9 },
-            { content: "unrelated", type: "learning", source_file: "b", score: 0.8 },
           ],
         }),
       };
@@ -288,8 +315,12 @@ describe("deptKnowledge (injected fetch)", () => {
     expect(res.ok).toBe(true);
     expect(capturedUrl).toContain("http://kb/api/search");
     expect(capturedUrl).toContain(encodeURIComponent("dept:kob:payment retries"));
-    expect(res.results).toHaveLength(1);
+    expect(capturedUrl).toContain("mode=hybrid");
+    // soft bias: ALL results kept (regression guard — untagged neighbor NOT dropped)
+    expect(res.results).toHaveLength(2);
+    // tagged entry surfaced first despite lower KB score
     expect(res.results[0].source_file).toBe("a");
+    expect(res.results[1].source_file).toBe("b");
   });
 
   test("no query → tag-only q", async () => {

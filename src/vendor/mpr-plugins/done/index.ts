@@ -1,5 +1,6 @@
 import type { InvokeContext, InvokeResult } from "maw-js/plugin/types";
 import { cmdDone, cmdDoneAll } from "./impl";
+import { triggerPrPollNow } from "maw-js/core/worklog/pr-watch";
 
 export const command = {
   name: ["done", "finish"],
@@ -57,6 +58,8 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
 
     if (all) {
       await cmdDoneAll({ force: Boolean(force), dryRun: Boolean(dryRun), cleanBranch: Boolean(cleanBranch), oracle: name, cwd: process.cwd() });
+      // on-signal: worker finished → poll PR state once so the worklog catches a merge
+      if (!dryRun) await triggerPrPollNow();
       return { ok: true, output: logs.join("\n") || undefined };
     }
 
@@ -65,6 +68,8 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
     }
 
     await cmdDone(name, { force: Boolean(force), dryRun: Boolean(dryRun), cleanBranch: Boolean(cleanBranch), cwd: process.cwd() });
+    // on-signal: worker finished → poll PR state once so the worklog catches a merge
+    if (!dryRun) await triggerPrPollNow();
     return { ok: true, output: logs.join("\n") || undefined };
   } catch (e: any) {
     return { ok: false, error: logs.join("\n") || e.message, output: logs.join("\n") || undefined };

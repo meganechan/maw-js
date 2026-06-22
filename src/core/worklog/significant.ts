@@ -1,34 +1,35 @@
 /**
- * Significance filter (filter "b" — significant only).
+ * Significance filter (filter "b") — raw CC feed event → worklog entry, or null.
  *
- * Maps a raw CC feed event → a worklog entry, keeping ONLY state-changing
- * tool calls and dropping read-only chatter (Read/Grep/Glob/...). PR lifecycle
- * events are NOT handled here — they are written directly by ./pr-watch.ts, so
- * this filter returns null for them to avoid double-writing.
+ * Captures:
+ *   - PostToolUse      state-changing tool calls (git/gh Bash, Edit/Write); drops read-only
+ *   - UserPromptSubmit decisions/instructions ("Tony→oracle: X")  → kind "conversation"
+ *
+ * PR / claim events are written directly by their modules, so they return null here.
+ * The company is resolved from the oracle so the entry routes to the right log.
  */
 
 import type { FeedEvent } from "../../lib/feed";
 import type { WorklogEntry } from "./types";
+import { companyOfOracle } from "./company-scope";
 
-/** Tools that never change state — never logged even if a hook forwards them. */
 const READONLY_TOOLS = new Set([
   "Read", "Grep", "Glob", "LS", "NotebookRead", "TodoWrite", "WebFetch", "WebSearch",
 ]);
 
-const MAX_SUMMARY = 120;
+const MAX_SUMMARY = 160;
 
-function clip(s: string): string {
+function clip(s: string, max = MAX_SUMMARY): string {
   s = s.trim().replace(/\s+/g, " ");
-  return s.length > MAX_SUMMARY ? s.slice(0, MAX_SUMMARY - 1) + "…" : s;
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
 
-/** Build a one-line summary for a significant tool, or null if not significant. */
+/** One-line summary for a significant tool, or null if not significant. */
 export function toolSummary(toolName: string, input: any): string | null {
   if (toolName === "Bash") {
     const cmd = String(input?.command ?? "").trim();
     if (!cmd) return null;
-    // only git / gh shell counts as significant fleet activity
-    if (!/\b(git|gh)\b/.test(cmd)) return null;
+    if (!/\b(git|gh)\b/.test(cmd)) return null; // only git/gh shell is fleet-significant
     return clip(cmd);
   }
   if (toolName === "Edit" || toolName === "Write" || toolName === "MultiEdit") {
@@ -38,19 +39,29 @@ export function toolSummary(toolName: string, input: any): string | null {
   return null;
 }
 
-/** Convert a tool-call feed event into a worklog entry, or null to skip. */
+/** Convert a capture feed event into a worklog entry, or null to skip. */
 export function eventToWorklog(event: FeedEvent): WorklogEntry | null {
-  if (event.event !== "PostToolUse" && event.event !== "PreToolUse") return null;
-  const data: any = event.data;
-  const toolName = String(data?.tool_name ?? data?.toolName ?? "");
-  if (!toolName || READONLY_TOOLS.has(toolName)) return null;
-  const summary = toolSummary(toolName, data?.tool_input ?? data?.toolInput);
-  if (!summary) return null;
-  return {
+  const base = {
     ts: event.ts || Date.now(),
     iso: event.timestamp || new Date().toISOString(),
     oracle: event.oracle || "unknown",
-    kind: "tool",
-    summary,
+    company: companyOfOracle(event.oracle) ?? undefined,
   };
+  const data: any = event.data;
+
+  if (event.event === "PostToolUse" || event.event === "PreToolUse") {
+    const toolName = String(data?.tool_name ?? data?.toolName ?? "");
+    if (!toolName || READONLY_TOOLS.has(toolName)) return null;
+    const summary = toolSummary(toolName, data?.tool_input ?? data?.toolInput);
+    if (!summary) return null;
+    return { ...base, kind: "tool", summary };
+  }
+
+  if (event.event === "UserPromptSubmit") {
+    const prompt = String(data?.prompt ?? event.message ?? "").trim();
+    if (!prompt) return null;
+    return { ...base, kind: "conversation", summary: clip(prompt) };
+  }
+
+  return null;
 }

@@ -1,75 +1,83 @@
 /**
- * Install the worklog PostToolUse hook into oracles' Claude Code settings.
+ * Install the worklog CC hooks into company oracles' Claude Code settings.
  *
- * P1 "sets it up" rather than relying on each oracle having configured a hook:
- * `maw watch setup-hooks` provisions the hook script + merges a PostToolUse hook
- * (matcher = significant tools only) into each target oracle's .claude/settings.json,
- * idempotently — mirroring scripts/deploy-hooks.ts.
+ * Engine-first: `maw watch setup-hooks` provisions the hook scripts + merges the
+ * hooks into each company member's .claude/settings.json, idempotently, so the
+ * capture+inject engine runs without anyone configuring anything.
+ *
+ *   PostToolUse      → capture significant tool calls           (worklog-tool.sh)
+ *   UserPromptSubmit → capture decisions + inject read-before-act (worklog-convo.sh)
+ *   SessionStart     → inject orientation on wake                 (worklog-orient.sh)
+ *
+ * Scripts are base64-embedded (survive bundling); source of truth =
+ * scripts/hooks/*.sh, kept in sync by hook-setup.test.ts.
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
 import { homedir } from "os";
 import { mawConfigPath } from "../xdg";
-import { loadCompany } from "../../vendor/mpr-plugins/company/company-helpers";
+import { companyOracles } from "./company-scope";
 
-/** Tools worth logging. CC fires the hook only for these (coarse filter); the
- *  server applies the fine filter (git/gh for Bash). Keep in sync with significant.ts. */
-const MATCHER = "Bash|Edit|Write|MultiEdit";
-
-/** Embedded copy of scripts/hooks/worklog-tool.sh so a bundled binary can self-provision. */
-const HOOK_SCRIPT = `#!/bin/bash
-# Claude Code PostToolUse hook → maw worklog (managed by \`maw watch setup-hooks\`).
-MAW_PORT="\${MAW_PORT:-3456}"
-MAW_URL="http://localhost:\${MAW_PORT}/api/feed"
-command -v jq >/dev/null 2>&1 || exit 0
-INPUT=$(cat)
-TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty')
-[ -z "$TOOL" ] && exit 0
-TOOL_INPUT=$(printf '%s' "$INPUT" | jq -c '.tool_input // {}')
-ORACLE="\${CLAUDE_AGENT_NAME:-}"
-if [ -z "$ORACLE" ]; then
-  ORACLE=$(tmux display-message -p '#{session_name}' 2>/dev/null | sed 's/^[0-9]*-//')
-fi
-[ -z "$ORACLE" ] && ORACLE="unknown"
-PROJECT=$(basename "\${PWD}" 2>/dev/null)
-PAYLOAD=$(jq -n --arg o "$ORACLE" --arg p "$PROJECT" --arg t "$TOOL" --argjson ti "$TOOL_INPUT" \\
-  '{oracle:$o, event:"PostToolUse", project:$p, host:"local", message:("tool:"+$t), data:{tool_name:$t, tool_input:$ti}}')
-curl -s -X POST "$MAW_URL" -H 'Content-Type: application/json' -d "$PAYLOAD" >/dev/null 2>&1 &
-exit 0
-`;
-
-export function worklogHookPath(): string {
-  return mawConfigPath("hooks", "worklog-tool.sh");
+interface HookSpec {
+  event: "PostToolUse" | "UserPromptSubmit" | "SessionStart";
+  matcher: string;
+  file: string; // basename under ~/.config/maw/hooks/
+  b64: string; // base64 of scripts/hooks/<file>
 }
 
-/** Provision the hook script to the config dir (idempotent). Returns true if written. */
-export function ensureWorklogHookScript(): boolean {
-  const p = worklogHookPath();
-  if (existsSync(p) && readFileSync(p, "utf-8") === HOOK_SCRIPT) return false;
-  mkdirSync(join(p, ".."), { recursive: true });
-  writeFileSync(p, HOOK_SCRIPT);
-  chmodSync(p, 0o755);
-  return true;
+// base64 of scripts/hooks/*.sh — kept in sync by hook-setup.test.ts.
+const HOOKS: HookSpec[] = [
+  {
+    event: "PostToolUse",
+    matcher: "Bash|Edit|Write|MultiEdit",
+    file: "worklog-tool.sh",
+    b64: "IyEvYmluL2Jhc2gKIyBDbGF1ZGUgQ29kZSBQb3N0VG9vbFVzZSBob29rIOKGkiBtYXcgd29ya2xvZyAoc2lnbmlmaWNhbnQgdG9vbC1jYWxsIGFjdGl2aXR5KS4KIwojIEZvcndhcmRzIHRoZSB0b29sIG5hbWUgKyBpbnB1dCB0byBtYXcgL2FwaS9mZWVkOyB0aGUgbWF3IHNlcnZlciBhcHBsaWVzIHRoZQojIHNpZ25pZmljYW5jZSBmaWx0ZXIgKGdpdC9naCBCYXNoLCBFZGl0L1dyaXRlL011bHRpRWRpdCkgYW5kIHBlcnNpc3RzIG1hdGNoaW5nCiMgY2FsbHMgdG8gd29ya2xvZy5qc29ubC4gVGhlIHNldHRpbmdzLmpzb24gbWF0Y2hlciBhbHJlYWR5IG5hcnJvd3MgdG8gdGhvc2UKIyB0b29scywgc28gdGhpcyBzY3JpcHQganVzdCBmb3J3YXJkcyB3aGF0IGl0IHJlY2VpdmVzLgojCiMgUHJvdmlzaW9uZWQgdG8gJEhPTUUvLmNvbmZpZy9tYXcvaG9va3Mvd29ya2xvZy10b29sLnNoIGJ5IGBtYXcgd2F0Y2ggc2V0dXAtaG9va3NgLgoKTUFXX1BPUlQ9IiR7TUFXX1BPUlQ6LTM0NTZ9IgpNQVdfVVJMPSJodHRwOi8vbG9jYWxob3N0OiR7TUFXX1BPUlR9L2FwaS9mZWVkIgoKY29tbWFuZCAtdiBqcSA+L2Rldi9udWxsIDI+JjEgfHwgZXhpdCAwCgpJTlBVVD0kKGNhdCkKVE9PTD0kKHByaW50ZiAnJXMnICIkSU5QVVQiIHwganEgLXIgJy50b29sX25hbWUgLy8gZW1wdHknKQpbIC16ICIkVE9PTCIgXSAmJiBleGl0IDAKVE9PTF9JTlBVVD0kKHByaW50ZiAnJXMnICIkSU5QVVQiIHwganEgLWMgJy50b29sX2lucHV0IC8vIHt9JykKCk9SQUNMRT0iJHtDTEFVREVfQUdFTlRfTkFNRTotfSIKaWYgWyAteiAiJE9SQUNMRSIgXTsgdGhlbgogIE9SQUNMRT0kKHRtdXggZGlzcGxheS1tZXNzYWdlIC1wICcje3Nlc3Npb25fbmFtZX0nIDI+L2Rldi9udWxsIHwgc2VkICdzL15bMC05XSotLy8nKQpmaQpbIC16ICIkT1JBQ0xFIiBdICYmIE9SQUNMRT0idW5rbm93biIKUFJPSkVDVD0kKGJhc2VuYW1lICIke1BXRH0iIDI+L2Rldi9udWxsKQoKUEFZTE9BRD0kKGpxIC1uIC0tYXJnIG8gIiRPUkFDTEUiIC0tYXJnIHAgIiRQUk9KRUNUIiAtLWFyZyB0ICIkVE9PTCIgLS1hcmdqc29uIHRpICIkVE9PTF9JTlBVVCIgXAogICd7b3JhY2xlOiRvLCBldmVudDoiUG9zdFRvb2xVc2UiLCBwcm9qZWN0OiRwLCBob3N0OiJsb2NhbCIsIG1lc3NhZ2U6KCJ0b29sOiIrJHQpLCBkYXRhOnt0b29sX25hbWU6JHQsIHRvb2xfaW5wdXQ6JHRpfX0nKQoKY3VybCAtcyAtWCBQT1NUICIkTUFXX1VSTCIgXAogIC1IICdDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL2pzb24nIFwKICAtZCAiJFBBWUxPQUQiID4vZGV2L251bGwgMj4mMSAmCgpleGl0IDAK",
+  },
+  {
+    event: "UserPromptSubmit",
+    matcher: "",
+    file: "worklog-convo.sh",
+    b64: "IyEvYmluL2Jhc2gKIyBDbGF1ZGUgQ29kZSBVc2VyUHJvbXB0U3VibWl0IGhvb2sg4oaSIG1hdyB3b3JrbG9nLgojICAgY2FwdHVyZTogcmVjb3JkIHRoZSBkZWNpc2lvbi9pbnN0cnVjdGlvbiAoIlRvbnnihpJvcmFjbGU6IFgiKQojICAgaW5qZWN0OiAgcmVhZC1iZWZvcmUtYWN0IOKAlCBwdXNoIGNvbXBhbnkgc3RhdGUgKyBvcGVuIGNsYWltcyBiYWNrIGludG8gY29udGV4dAojIFByb3Zpc2lvbmVkIGJ5IGBtYXcgd2F0Y2ggc2V0dXAtaG9va3NgLgoKTUFXX1BPUlQ9IiR7TUFXX1BPUlQ6LTM0NTZ9IgpCQVNFPSJodHRwOi8vbG9jYWxob3N0OiR7TUFXX1BPUlR9Igpjb21tYW5kIC12IGpxID4vZGV2L251bGwgMj4mMSB8fCBleGl0IDAKCklOUFVUPSQoY2F0KQpQUk9NUFQ9JChwcmludGYgJyVzJyAiJElOUFVUIiB8IGpxIC1yICcucHJvbXB0IC8vIGVtcHR5JykKCk9SQUNMRT0iJHtDTEFVREVfQUdFTlRfTkFNRTotfSIKaWYgWyAteiAiJE9SQUNMRSIgXTsgdGhlbgogIE9SQUNMRT0kKHRtdXggZGlzcGxheS1tZXNzYWdlIC1wICcje3Nlc3Npb25fbmFtZX0nIDI+L2Rldi9udWxsIHwgc2VkICdzL15bMC05XSotLy8nKQpmaQpbIC16ICIkT1JBQ0xFIiBdICYmIE9SQUNMRT0idW5rbm93biIKUFJPSkVDVD0kKGJhc2VuYW1lICIke1BXRH0iIDI+L2Rldi9udWxsKQoKIyBjYXB0dXJlIChmaXJlLWFuZC1mb3JnZXQpCmlmIFsgLW4gIiRQUk9NUFQiIF07IHRoZW4KICBDQVA9JChqcSAtbiAtLWFyZyBvICIkT1JBQ0xFIiAtLWFyZyBwICIkUFJPSkVDVCIgLS1hcmcgcHIgIiRQUk9NUFQiIFwKICAgICd7b3JhY2xlOiRvLCBldmVudDoiVXNlclByb21wdFN1Ym1pdCIsIHByb2plY3Q6JHAsIGhvc3Q6ImxvY2FsIiwgbWVzc2FnZToicHJvbXB0IiwgZGF0YTp7cHJvbXB0OiRwcn19JykKICBjdXJsIC1zIC1YIFBPU1QgIiRCQVNFL2FwaS9mZWVkIiAtSCAnQ29udGVudC1UeXBlOiBhcHBsaWNhdGlvbi9qc29uJyAtZCAiJENBUCIgPi9kZXYvbnVsbCAyPiYxICYKZmkKCiMgaW5qZWN0IChyZWFkLWJlZm9yZS1hY3QpIOKAlCBzaG9ydCB0aW1lb3V0IHNvIGEgc2xvdy9hYnNlbnQgc2VydmVyIG5ldmVyIGJsb2NrcyB0aGUgYWdlbnQKSU5KRUNUPSQoY3VybCAtcyAtLW1heC10aW1lIDIgIiRCQVNFL2FwaS93b3JrbG9nP29yYWNsZT0ke09SQUNMRX0iIDI+L2Rldi9udWxsIHwganEgLXIgJy5pbmplY3QgLy8gZW1wdHknKQpbIC16ICIkSU5KRUNUIiBdICYmIGV4aXQgMApqcSAtbiAtLWFyZyBjdHggIiRJTkpFQ1QiICd7aG9va1NwZWNpZmljT3V0cHV0Ontob29rRXZlbnROYW1lOiJVc2VyUHJvbXB0U3VibWl0IiwgYWRkaXRpb25hbENvbnRleHQ6JGN0eH19JwpleGl0IDAK",
+  },
+  {
+    event: "SessionStart",
+    matcher: "",
+    file: "worklog-orient.sh",
+    b64: "IyEvYmluL2Jhc2gKIyBDbGF1ZGUgQ29kZSBTZXNzaW9uU3RhcnQgaG9vayDihpIgbWF3IHdvcmtsb2c6IGluamVjdCBsYXRlc3QgY29tcGFueSBzdGF0ZSBvbiB3YWtlCiMgKG9yaWVudGF0aW9uKSwgc28gYW4gb3JhY2xlIHN0YXJ0cyBhbHJlYWR5IGF3YXJlIG9mIHJlY2VudCBhY3Rpdml0eSArIG9wZW4gY2xhaW1zLgojIFByb3Zpc2lvbmVkIGJ5IGBtYXcgd2F0Y2ggc2V0dXAtaG9va3NgLgoKTUFXX1BPUlQ9IiR7TUFXX1BPUlQ6LTM0NTZ9IgpCQVNFPSJodHRwOi8vbG9jYWxob3N0OiR7TUFXX1BPUlR9Igpjb21tYW5kIC12IGpxID4vZGV2L251bGwgMj4mMSB8fCBleGl0IDAKCk9SQUNMRT0iJHtDTEFVREVfQUdFTlRfTkFNRTotfSIKaWYgWyAteiAiJE9SQUNMRSIgXTsgdGhlbgogIE9SQUNMRT0kKHRtdXggZGlzcGxheS1tZXNzYWdlIC1wICcje3Nlc3Npb25fbmFtZX0nIDI+L2Rldi9udWxsIHwgc2VkICdzL15bMC05XSotLy8nKQpmaQpbIC16ICIkT1JBQ0xFIiBdICYmIGV4aXQgMAoKSU5KRUNUPSQoY3VybCAtcyAtLW1heC10aW1lIDIgIiRCQVNFL2FwaS93b3JrbG9nP29yYWNsZT0ke09SQUNMRX0iIDI+L2Rldi9udWxsIHwganEgLXIgJy5pbmplY3QgLy8gZW1wdHknKQpbIC16ICIkSU5KRUNUIiBdICYmIGV4aXQgMApqcSAtbiAtLWFyZyBjdHggIiRJTkpFQ1QiICd7aG9va1NwZWNpZmljT3V0cHV0Ontob29rRXZlbnROYW1lOiJTZXNzaW9uU3RhcnQiLCBhZGRpdGlvbmFsQ29udGV4dDokY3R4fX0nCmV4aXQgMAo=",
+  },
+];
+
+export function hookScriptBody(file: string): string {
+  const h = HOOKS.find(x => x.file === file);
+  if (!h) throw new Error(`unknown worklog hook: ${file}`);
+  return Buffer.from(h.b64, "base64").toString("utf8");
 }
 
-function makeHookEntry() {
-  return { type: "command", command: worklogHookPath() };
+function hookPath(file: string): string {
+  return mawConfigPath("hooks", file);
 }
 
-function isWorklogHook(hook: any): boolean {
-  return typeof hook?.command === "string" && hook.command.includes("worklog-tool.sh");
-}
-
-/** Oracles in a company (all departments' members). Empty if company unknown. */
-export function companyOracles(company: string): string[] {
-  const c = loadCompany(company);
-  if (!c) return [];
-  const set = new Set<string>();
-  for (const dept of Object.values(c.departments)) {
-    for (const m of dept.members) set.add(m.oracle);
+/** Provision all hook scripts to the config dir (idempotent). Returns count written. */
+export function ensureWorklogHookScripts(): number {
+  let written = 0;
+  for (const h of HOOKS) {
+    const p = hookPath(h.file);
+    const body = hookScriptBody(h.file);
+    if (existsSync(p) && readFileSync(p, "utf-8") === body) {
+      try { chmodSync(p, 0o755); } catch {}
+      continue;
+    }
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, body);
+    try { chmodSync(p, 0o755); } catch {}
+    written++;
   }
-  return [...set];
+  return written;
+}
+
+function isWorklogHook(hook: any, file: string): boolean {
+  return typeof hook?.command === "string" && hook.command.includes(file);
 }
 
 export interface SetupHooksOpts {
@@ -79,22 +87,23 @@ export interface SetupHooksOpts {
 }
 
 export interface SetupHooksResult {
-  scriptInstalled: boolean;
+  scriptsInstalled: number;
   updated: string[];
   alreadyOk: string[];
   skipped: string[];
 }
 
-/** Merge the PostToolUse worklog hook into each target oracle's settings.json. */
+/** Merge all worklog hooks into each company member's settings.json. */
 export function setupWorklogHooks(opts: SetupHooksOpts = {}): SetupHooksResult {
   const company = opts.company ?? "kobo";
   const ghqRoot = opts.ghqRoot ?? join(homedir(), "ghq/github.com/meganechan");
-  const result: SetupHooksResult = { scriptInstalled: false, updated: [], alreadyOk: [], skipped: [] };
+  const result: SetupHooksResult = { scriptsInstalled: 0, updated: [], alreadyOk: [], skipped: [] };
 
-  result.scriptInstalled = opts.dryRun ? !existsSync(worklogHookPath()) : ensureWorklogHookScript();
+  result.scriptsInstalled = opts.dryRun
+    ? HOOKS.filter(h => !existsSync(hookPath(h.file))).length
+    : ensureWorklogHookScripts();
 
-  const oracles = companyOracles(company);
-  for (const oracle of oracles) {
+  for (const oracle of companyOracles(company)) {
     const repo = oracle.endsWith("-oracle") ? oracle : `${oracle}-oracle`;
     const dir = join(ghqRoot, repo);
     if (!existsSync(dir)) {
@@ -104,17 +113,20 @@ export function setupWorklogHooks(opts: SetupHooksOpts = {}): SetupHooksResult {
     const settingsPath = join(dir, ".claude", "settings.json");
     let settings: any = {};
     if (existsSync(settingsPath)) {
-      try {
-        settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-      } catch {
-        settings = {};
-      }
+      try { settings = JSON.parse(readFileSync(settingsPath, "utf-8")); } catch { settings = {}; }
     }
     settings.hooks ??= {};
-    settings.hooks.PostToolUse ??= [];
-    const entries = settings.hooks.PostToolUse as any[];
-    const has = entries.some(e => e.hooks?.some(isWorklogHook));
-    if (has) {
+
+    let changed = false;
+    for (const h of HOOKS) {
+      settings.hooks[h.event] ??= [];
+      const entries = settings.hooks[h.event] as any[];
+      if (entries.some(e => e.hooks?.some((hk: any) => isWorklogHook(hk, h.file)))) continue;
+      entries.push({ matcher: h.matcher, hooks: [{ type: "command", command: hookPath(h.file) }] });
+      changed = true;
+    }
+
+    if (!changed) {
       result.alreadyOk.push(oracle);
       continue;
     }
@@ -122,7 +134,6 @@ export function setupWorklogHooks(opts: SetupHooksOpts = {}): SetupHooksResult {
       result.updated.push(oracle);
       continue;
     }
-    entries.push({ matcher: MATCHER, hooks: [makeHookEntry()] });
     mkdirSync(join(settingsPath, ".."), { recursive: true });
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
     result.updated.push(oracle);

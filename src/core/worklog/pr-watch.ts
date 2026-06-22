@@ -1,18 +1,14 @@
 /**
- * PR watcher — on-demand (NO background loop, per re-scope).
+ * PR watcher — on-demand (NO background loop).
  *
- * Poll is triggered three ways, each a single pass:
- *   1. `maw done`        — on-signal (worker finished)
- *   2. `maw watch log`   — on-read (someone opens the log)
- *   3. `maw watch sync`  — manual
+ * Triggered by: `maw done` (on-signal), `maw watch log` (on-read), `maw watch sync`.
+ * `gh pr list` is ground truth for open/merged/closed; we diff against a snapshot
+ * so each transition logs exactly once. On merge we ping the author's dept lead +
+ * the author (carrying content), so the log gets read.
  *
- * gh PR state is the ground truth for open/merged/closed. We diff against a
- * snapshot so each transition is logged exactly once. On a merge transition we
- * also ping the dept lead + author (see ./ping.ts).
- *
- * Tradeoff (accepted): a merge made on github.com while nobody triggers a poll
- * is only picked up on the next trigger. PostToolUse hooks catch in-pane
- * `gh pr merge` immediately, so this gap only affects out-of-band web merges.
+ * Tradeoff (accepted): an out-of-band github.com web merge with no trigger is
+ * picked up on the next trigger. In-pane `gh pr merge` is caught immediately by
+ * the PostToolUse hook.
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
@@ -22,23 +18,18 @@ import { scanWorktrees } from "../fleet/worktrees";
 import { loadConfig } from "../../config";
 import { appendWorklog } from "./store";
 import { pingOnMerge } from "./ping";
+import { scopeOfOracle, companyOfOracle } from "./company-scope";
 import type { WorklogEntry } from "./types";
 
 type PrState = "OPEN" | "MERGED" | "CLOSED";
 
-interface SnapEntry {
-  state: PrState;
-  repo: string;
-  number: number;
-  title: string;
-  author?: string;
-}
+interface SnapEntry { state: PrState; repo: string; number: number; title: string; author?: string }
 type PrSnapshot = Record<string, SnapEntry>; // key = `${repo}#${number}`
 
 interface GhPr {
   number: number;
   title: string;
-  state: string; // OPEN | CLOSED | MERGED
+  state: string;
   mergedAt: string | null;
   author?: { login?: string };
 }
@@ -79,22 +70,17 @@ function prStateOf(pr: GhPr): PrState {
   return pr.state === "CLOSED" ? "CLOSED" : "OPEN";
 }
 
-/** Best-effort: forward the entry to the live feed (browsers) — never throws. */
+/** Best-effort: forward to the live feed (browsers). Never throws. */
 function postLive(entry: WorklogEntry): void {
   const port = process.env.MAW_PORT || "3456";
-  const body = JSON.stringify({
-    oracle: entry.oracle,
-    event: "Notification",
-    project: entry.repo ?? "",
-    host: "local",
-    message: entry.summary,
-    ts: entry.ts,
-    data: { kind: entry.kind, pr: entry.pr, repo: entry.repo, by: entry.by, summary: entry.summary },
-  });
   fetch(`http://localhost:${port}/api/feed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body,
+    body: JSON.stringify({
+      oracle: entry.oracle, event: "Notification", project: entry.repo ?? "", host: "local",
+      message: entry.summary, ts: entry.ts,
+      data: { kind: entry.kind, pr: entry.pr, repo: entry.repo, by: entry.by, summary: entry.summary },
+    }),
   }).catch(() => {});
 }
 
@@ -112,16 +98,10 @@ async function mergedBy(repo: string, num: number): Promise<string | undefined> 
   }
 }
 
-export interface PollOpts {
-  company?: string;
-  dept?: string;
-}
-
-/** One poll pass over the fleet's repos. Returns the entries it recorded. */
-export async function pollPrsOnce(opts: PollOpts = {}): Promise<WorklogEntry[]> {
+/** One poll pass over the fleet's repos. Returns the entries recorded. */
+export async function pollPrsOnce(): Promise<WorklogEntry[]> {
   const cfg = loadConfig() as any;
-  const company = opts.company ?? cfg.company;
-  const dept = opts.dept ?? cfg.department;
+  const fallbackCompany: string | undefined = cfg.company;
 
   let repos: string[];
   try {
@@ -144,7 +124,7 @@ export async function pollPrsOnce(opts: PollOpts = {}): Promise<WorklogEntry[]> 
       ]);
       prs = JSON.parse(out || "[]") as GhPr[];
     } catch {
-      continue; // repo unreachable / no gh auth — skip, don't fail the pass
+      continue;
     }
 
     for (const pr of prs) {
@@ -152,20 +132,21 @@ export async function pollPrsOnce(opts: PollOpts = {}): Promise<WorklogEntry[]> 
       const cur = prStateOf(pr);
       const prev = snap[key]?.state;
       const author = pr.author?.login;
-
       snap[key] = { state: cur, repo, number: pr.number, title: pr.title, author };
 
-      // First ever run only seeds the baseline — no retroactive event spam.
-      if (firstRun) continue;
+      if (firstRun) continue; // seed baseline only — no retroactive spam
       if (prev === cur) continue;
 
-      const base = { ts: Date.now(), iso: new Date().toISOString(), oracle: author || "unknown", repo, pr: pr.number };
+      const company = (author ? companyOfOracle(author) : null) ?? fallbackCompany;
+      const base = { ts: Date.now(), iso: new Date().toISOString(), oracle: author || "unknown", company, repo, pr: pr.number };
+
       if (cur === "MERGED") {
         const by = await mergedBy(repo, pr.number);
         const entry: WorklogEntry = { ...base, kind: "pr-merged", summary: `merged #${pr.number} ${pr.title}`, by };
         record(entry);
         recorded.push(entry);
-        pingOnMerge({ company, dept, author: author ?? null, pr: pr.number, repo, by });
+        const lead = author ? scopeOfOracle(author)?.lead ?? null : null;
+        pingOnMerge({ lead, author: author ?? null, pr: pr.number, repo, by });
       } else if (cur === "CLOSED") {
         const entry: WorklogEntry = { ...base, kind: "pr-closed", summary: `closed #${pr.number} ${pr.title}` };
         record(entry);
@@ -183,6 +164,6 @@ export async function pollPrsOnce(opts: PollOpts = {}): Promise<WorklogEntry[]> 
 }
 
 /** Fire-and-forget single poll (used by `maw done`). Never throws. */
-export function triggerPrPollNow(opts: PollOpts = {}): Promise<WorklogEntry[]> {
-  return pollPrsOnce(opts).catch(() => []);
+export function triggerPrPollNow(): Promise<WorklogEntry[]> {
+  return pollPrsOnce().catch(() => []);
 }

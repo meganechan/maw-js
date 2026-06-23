@@ -9,17 +9,26 @@
 
 import type { FeedEvent } from "../../lib/feed";
 import { eventToWorklog } from "./significant";
-import { appendWorklog } from "./store";
+import { appendWorklogAsync } from "./store";
+
+let registered = false;
 
 export function registerWorklogListener(
   feedListeners: Set<(event: FeedEvent) => void>,
 ): void {
+  if (registered) return; // idempotent — survive serve-hook reloads
+  registered = true;
   feedListeners.add((event) => {
     try {
       const entry = eventToWorklog(event);
-      if (entry) appendWorklog(entry);
+      if (entry) appendWorklogAsync(entry); // non-blocking on the feed hot path
     } catch {
       /* never break the feed pipeline because of the worklog */
     }
   });
+}
+
+/** @internal — tests */
+export function _resetWorklogListener(): void {
+  registered = false;
 }

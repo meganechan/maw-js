@@ -3,7 +3,6 @@ import { cors } from "@elysiajs/cors";
 import { swagger } from "@elysiajs/swagger";
 import { sessionsApi } from "./sessions";
 import { feedApi } from "./feed";
-import { worklogApi } from "./worklog";
 import { teamsApi } from "./teams";
 import { configApi } from "./config";
 import { fleetApi } from "./fleet";
@@ -51,7 +50,6 @@ export const api = new Elysia({ prefix: "/api" })
   }))
   .use(sessionsApi)
   .use(feedApi)
-  .use(worklogApi)
   .use(teamsApi)
   .use(configApi)
   .use(fleetApi)

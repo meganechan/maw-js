@@ -5,7 +5,6 @@ import { existsSync, readFileSync } from "fs";
 import { api } from "../api";
 import { feedBuffer, feedListeners } from "../api/feed";
 import { setupTriggerListener } from "./runtime/trigger-listener";
-import { registerWorklogListener } from "./worklog/listener";
 import { createScopedTransportRouter } from "../transports";
 import { isProtected, setBunServer } from "../lib/elysia-auth";
 import { runServeLifecycleHooks } from "../plugin/lifecycle";
@@ -329,9 +328,9 @@ export async function startBunGatewayServer(
 
   // Hook workflow triggers into feed events
   setupTriggerListener(feedListeners);
-  // Persist significant tool-call events to the worklog (passive listener — not
-  // a background loop). PostToolUse hooks → POST /api/feed → here → worklog.jsonl.
-  registerWorklogListener(feedListeners);
+  // NOTE: the worklog engine (capture listener + /api/worklog route) is registered
+  // by the `watch` plugin's serve lifecycle hook, not here — so disabling the
+  // plugin turns the engine off. See src/vendor/mpr-plugins/watch/serve.ts.
   feedListeners.add((event) => {
     dispatchEnginePluginEvent(event).catch((err) => {
       log.warn(`[engine-plugin] event dispatch failed: ${err instanceof Error ? err.message : String(err)}`);

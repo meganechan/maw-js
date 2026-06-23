@@ -6,7 +6,8 @@ import { join } from "path";
 import { toolSummary, eventToWorklog } from "./significant";
 import { renderTimeline } from "./render";
 import { pingOnMerge, pingCollision } from "./ping";
-import { appendWorklog, readWorklog, openClaims } from "./store";
+import { appendWorklog, readWorklog, openClaims, flushWorklog } from "./store";
+import { handleWorklogRequest } from "./route";
 import { tasksOverlap, collidingClaims, addClaim, releaseClaim } from "./claim";
 import { buildInjectSlice } from "./slice";
 import type { FeedEvent } from "../../lib/feed";
@@ -43,6 +44,16 @@ describe("significant filter (filter b)", () => {
     const e = eventToWorklog(feed({ event: "UserPromptSubmit", data: { prompt: "keep the hash field" } }));
     expect(e?.kind).toBe("conversation");
     expect(e?.summary).toBe("keep the hash field");
+  });
+
+  it("maps interrupt (Notification + kind:interrupt) → interrupt entry", () => {
+    const e = eventToWorklog(feed({ event: "Notification", data: { kind: "interrupt", prompt: "no, keep the field" } }));
+    expect(e?.kind).toBe("interrupt");
+    expect(e?.summary).toContain("no, keep the field");
+  });
+
+  it("ignores pr-* Notification (poller writes those directly)", () => {
+    expect(eventToWorklog(feed({ event: "Notification", data: { kind: "pr-merged", pr: 1 } }))).toBeNull();
   });
 });
 
@@ -133,10 +144,29 @@ describe("server wiring — feed listener persists tool-calls (as in server.ts)"
     const before = readWorklog(null).length; // _unscoped (no company in test)
     pushFeedEvent(feed({ event: "PostToolUse", ts: 5_000, data: { tool_name: "Bash", tool_input: { command: "git push wire-marker" } } }));
     pushFeedEvent(feed({ event: "PostToolUse", ts: 6_000, data: { tool_name: "Read", tool_input: { file_path: "/x" } } }));
+    await flushWorklog(); // listener now writes async (non-blocking hot path)
 
     const entries = readWorklog(null);
     expect(entries.length - before).toBe(1);
     expect(entries[entries.length - 1].summary).toBe("git push wire-marker");
+  });
+});
+
+describe("append safety + route", () => {
+  it("bounds line size so appends stay atomic (large summary truncated, still valid JSON)", () => {
+    const huge = "git " + "x".repeat(10_000);
+    appendWorklog({ ts: 99, iso: "i", oracle: "big", company: "bnd", kind: "tool", summary: huge });
+    const got = readWorklog("bnd");
+    expect(got.length).toBe(1); // line parsed (not corrupt/dropped)
+    expect(got[0].summary.length).toBeLessThan(huge.length);
+  });
+
+  it("handleWorklogRequest serves inject + entries as JSON", async () => {
+    appendWorklog({ ts: 1, iso: "i", oracle: "rr", company: "rc", kind: "tool", summary: "git route-marker" });
+    const entriesRes = handleWorklogRequest(new Request("http://x/api/worklog?company=rc&limit=10"));
+    expect(await entriesRes.json()).toEqual({ entries: expect.arrayContaining([expect.objectContaining({ summary: "git route-marker" })]) });
+    const injectRes = handleWorklogRequest(new Request("http://x/api/worklog?oracle=rr"));
+    expect((await injectRes.json())).toHaveProperty("inject");
   });
 });
 

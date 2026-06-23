@@ -9,7 +9,15 @@ export default definePlugin({
   "author": "kobo:core",
   "cli": {
     "command": "watch",
-    "help": "maw watch <log|claim|release|sync|setup-hooks> [opts]"
+    "help": "maw watch <log|inject|claim|release|sync|setup-hooks> [opts]"
+  },
+  "hooks": {
+    "serve": {
+      "script": "./serve.ts",
+      "handler": "serve",
+      "ensures": ["http:route:/api/worklog"],
+      "policy": "best-effort"
+    }
   },
   "weight": 10,
   "license": "MIT",

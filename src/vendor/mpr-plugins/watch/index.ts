@@ -7,6 +7,7 @@ import { setupWorklogHooks } from "../../../core/worklog/hook-setup";
 import { companyOfOracle } from "../../../core/worklog/company-scope";
 import { addClaim, releaseClaim } from "../../../core/worklog/claim";
 import { pingCollision } from "../../../core/worklog/ping";
+import { buildInjectSlice } from "../../../core/worklog/slice";
 
 export const command = {
   name: "watch",
@@ -35,6 +36,12 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
       const company = flags["--company"] ?? companyOfOracle(myOracle()) ?? (loadConfig() as any).company;
       const limit = flags["--limit"] ? Math.max(1, parseInt(flags["--limit"], 10) || 50) : 50;
       console.log(renderTimeline(readWorklog(company, { limit, oracle: flags["--oracle"] })));
+    } else if (subcmd === "inject") {
+      // offline preview of the exact slice the hooks inject (no server needed)
+      const flags = parseFlags(args.slice(1), { "--oracle": String }, 0);
+      const oracle = flags["--oracle"] ?? myOracle();
+      const slice = buildInjectSlice(oracle);
+      console.log(slice || `(nothing to inject for ${oracle} — no open claims or recent activity)`);
     } else if (subcmd === "claim") {
       const task = args.slice(1).filter(a => !a.startsWith("--")).join(" ").trim();
       if (!task) return { ok: false, error: 'usage: maw watch claim "<task>"' };
@@ -65,7 +72,7 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
       if (!res.updated.length && !res.alreadyOk.length) console.log(`  \x1b[33mno target oracles\x1b[0m (check company config)`);
       console.log();
     } else {
-      return { ok: false, error: 'usage: maw watch <log|claim|release|sync|setup-hooks> [opts]' };
+      return { ok: false, error: 'usage: maw watch <log|inject|claim|release|sync|setup-hooks> [opts]' };
     }
 
     return { ok: true, output: logs.join("\n") || undefined };

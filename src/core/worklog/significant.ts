@@ -49,6 +49,18 @@ export function eventToWorklog(event: FeedEvent): WorklogEntry | null {
   };
   const data: any = event.data;
 
+  // interrupt — emitted by worklog-convo.sh when the CC transcript shows the
+  // prior turn ended with "[Request interrupted by user...]". (pr-* Notification
+  // kinds are written directly by the poller, so they are NOT handled here.)
+  if (data?.kind === "interrupt") {
+    const correction = String(data.prompt ?? "").trim();
+    return {
+      ...base,
+      kind: "interrupt",
+      summary: clip(correction ? `interrupted → ${correction}` : "interrupted by user"),
+    };
+  }
+
   if (event.event === "PostToolUse" || event.event === "PreToolUse") {
     const toolName = String(data?.tool_name ?? data?.toolName ?? "");
     if (!toolName || READONLY_TOOLS.has(toolName)) return null;

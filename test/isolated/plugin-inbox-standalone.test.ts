@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const realSdk = await import("../../src/sdk/index.ts");
@@ -66,6 +66,7 @@ mock.module("maw-js/sdk", () => ({ ...realSdk, ...sdkMock }));
 
 const { command, default: handler } = await import("../../src/vendor/mpr-plugins/inbox/index.ts");
 const {
+  cmdInboxDrain,
   cmdInboxMarkRead,
   cmdInboxWrite,
   cmdQueueList,
@@ -206,5 +207,28 @@ describe("inbox plugin standalone boundary (#2329)", () => {
     expect(readFileSync(join(psiPath, "inbox", files[0]), "utf8")).toContain("standalone note");
     expect(relativeTime(new Date(0))).toBe("—");
     expect(relativeTime(new Date(Date.now() + 1000))).toBe("future");
+  });
+
+  test("drain --force archives chatter the stale-ack filter skips; reversible (moved to processed/)", async () => {
+    const inbox = join(psiPath, "inbox");
+    // a normal federation report — NOT a stale-ack, so the safe filter ignores it
+    const name = "2026-06-01_00-00_eq3_eq3-some-update.md";
+    writeFileSync(join(inbox, name), [
+      "---", "from: eq3", "timestamp: 2026-06-01T00:00:00.000Z", "read: false", "---",
+      "", "just a normal report — nothing the stale-ack filter matches",
+    ].join("\n"));
+
+    // --safe leaves it (matches the filter → 0)
+    const safe = await cmdInboxDrain(undefined, { safe: true, json: true });
+    expect(safe.archived).toBe(0);
+    expect(readdirSync(inbox).filter((f) => f.endsWith(".md"))).toContain(name);
+
+    // --force archives it — moved under processed/, not deleted
+    const forced = await cmdInboxDrain(undefined, { force: true, json: true });
+    expect(forced.forced).toBe(true);
+    expect(forced.safe).toBe(false);
+    expect(forced.archived).toBe(1);
+    expect(readdirSync(inbox).filter((f) => f.endsWith(".md"))).toHaveLength(0);
+    expect(existsSync(join(inbox, "processed"))).toBe(true);
   });
 });

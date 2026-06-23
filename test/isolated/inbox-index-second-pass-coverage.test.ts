@@ -32,6 +32,7 @@ let inboxStatusCalls: Array<{ oracle?: string; json?: boolean; all?: boolean }> 
 let inboxDrainCalls: Array<{
   oracle?: string;
   safe?: boolean;
+  force?: boolean;
   max?: number;
   json?: boolean;
   dryRun?: boolean;
@@ -96,6 +97,7 @@ mock.module(implPath, () => ({
   },
   cmdInboxDrain: async (oracle?: string, opts?: {
     safe?: boolean;
+    force?: boolean;
     max?: number;
     json?: boolean;
     dryRun?: boolean;
@@ -104,6 +106,7 @@ mock.module(implPath, () => ({
     inboxDrainCalls.push({
       oracle,
       safe: opts?.safe,
+      force: opts?.force,
       max: opts?.max,
       json: opts?.json,
       dryRun: opts?.dryRun,
@@ -280,12 +283,16 @@ describe("inbox plugin index", () => {
 
     expect(await invoke(["drain"])).toEqual({
       ok: false,
-      error: "usage: maw inbox drain [oracle-name] --safe [--max N] [--older-than-hours H] [--json] [--dry-run]",
+      error: "usage: maw inbox drain [oracle-name] (--safe | --force) [--max N] [--older-than-hours H] [--json] [--dry-run]",
       output: "",
     });
     expect(await invoke(["drain", "mawjs-oracle", "--safe", "--max=7", "--older-than-hours", "12", "--json", "--dry-run"])).toEqual({
       ok: true,
       output: "json drain mawjs-oracle",
+    });
+    expect(await invoke(["drain", "--force", "--json"])).toEqual({
+      ok: true,
+      output: "json drain current",
     });
     expect(await invoke(["drain", "--safe", "--max", "bad"])).toEqual({
       ok: false,
@@ -296,10 +303,20 @@ describe("inbox plugin index", () => {
       {
         oracle: "mawjs-oracle",
         safe: true,
+        force: false,
         max: 7,
         json: true,
         dryRun: true,
         olderThanSeconds: 12 * 60 * 60,
+      },
+      {
+        oracle: undefined,
+        safe: false,
+        force: true,
+        max: undefined,
+        json: true,
+        dryRun: false,
+        olderThanSeconds: undefined,
       },
     ]);
 

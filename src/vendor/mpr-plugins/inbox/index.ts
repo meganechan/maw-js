@@ -108,7 +108,11 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
       // maw inbox read <id>  — mark as read
       await cmdInboxMarkRead(args[1] ?? "");
     } else if (sub === "drain") {
-      // maw inbox drain [oracle-name] --safe [--max N] [--older-than-hours H] [--json] [--dry-run]
+      // maw inbox drain [oracle-name] (--safe | --force) [--max N] [--older-than-hours H] [--json] [--dry-run]
+      // --safe: archive only stale-ack chatter (conservative caps).
+      // --force: archive ALL messages (federation chatter never matches the
+      //          stale-ack filter); no max/min-age by default. Reversible —
+      //          messages move to processed/, never deleted. Per-oracle scoped.
       const rest = args.slice(1);
       const positions = positionalArgs(rest);
       const maxRaw = flagValue(rest, "--max");
@@ -117,8 +121,10 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
       const olderHours = olderRaw === undefined ? undefined : parseFloat(olderRaw);
       const hasMaxFlag = rest.some(arg => arg === "--max" || arg.startsWith("--max="));
       const hasOlderFlag = rest.some(arg => arg === "--older-than-hours" || arg.startsWith("--older-than-hours="));
-      if (positions.length > 1 || !rest.includes("--safe")) {
-        return { ok: false, error: "usage: maw inbox drain [oracle-name] --safe [--max N] [--older-than-hours H] [--json] [--dry-run]", output: out() };
+      const safe = rest.includes("--safe");
+      const force = rest.includes("--force");
+      if (positions.length > 1 || (!safe && !force)) {
+        return { ok: false, error: "usage: maw inbox drain [oracle-name] (--safe | --force) [--max N] [--older-than-hours H] [--json] [--dry-run]", output: out() };
       }
       if (hasMaxFlag && (maxRaw === undefined || maxRaw === "" || !Number.isFinite(max) || max < 0)) {
         return { ok: false, error: "--max must be a non-negative integer", output: out() };
@@ -127,7 +133,8 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
         return { ok: false, error: "--older-than-hours must be a non-negative number", output: out() };
       }
       await cmdInboxDrain(positions[0], {
-        safe: true,
+        safe,
+        force,
         json: rest.includes("--json"),
         dryRun: rest.includes("--dry-run"),
         max,

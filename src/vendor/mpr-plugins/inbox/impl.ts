@@ -75,7 +75,9 @@ export interface InboxDrainResult {
   remaining_matches: number;
   max: number;
   dry_run: boolean;
-  safe: true;
+  safe: boolean;
+  /** true = --force run (bypassed the stale-ack filter, archives all matches). */
+  forced: boolean;
   older_than_seconds: number;
   processed_dir: string;
   items: InboxDrainItem[];
@@ -501,19 +503,23 @@ function parsePositiveInt(value: number | undefined, fallback: number): number {
 
 export async function cmdInboxDrain(
   oracle?: string,
-  opts: { safe?: boolean; max?: number; dryRun?: boolean; json?: boolean; olderThanSeconds?: number } = {},
+  opts: { safe?: boolean; force?: boolean; max?: number; dryRun?: boolean; json?: boolean; olderThanSeconds?: number } = {},
   nowMs = Date.now(),
 ): Promise<InboxDrainResult> {
-  if (!opts.safe) throw new Error("usage: maw inbox drain [oracle-name] --safe [--max N] [--older-than-hours H] [--json] [--dry-run]");
+  if (!opts.safe && !opts.force) throw new Error("usage: maw inbox drain [oracle-name] (--safe | --force) [--max N] [--older-than-hours H] [--json] [--dry-run]");
 
   const target = await resolveInboxStatusTarget(oracle);
-  const max = parsePositiveInt(opts.max, SAFE_DRAIN_DEFAULT_MAX);
-  const olderThanSeconds = parsePositiveInt(opts.olderThanSeconds, SAFE_DRAIN_DEFAULT_MIN_AGE_SECONDS);
+  // --force archives EVERY message (federation chatter never matches the
+  // stale-ack filter, so --safe drains nothing) — no max + no min-age by
+  // default. Both modes are reversible: messages move to processed/, never
+  // deleted. --safe keeps the conservative caps.
+  const max = parsePositiveInt(opts.max, opts.force ? Number.MAX_SAFE_INTEGER : SAFE_DRAIN_DEFAULT_MAX);
+  const olderThanSeconds = parsePositiveInt(opts.olderThanSeconds, opts.force ? 0 : SAFE_DRAIN_DEFAULT_MIN_AGE_SECONDS);
   const processedDir = join(target.inboxDir, "processed", archiveDay(nowMs));
   const messages = loadInboxMessages(target.inboxDir);
   const candidates = messages
     .map((msg) => {
-      const reason = safeDrainReason(msg);
+      const reason = opts.force ? "forced" : safeDrainReason(msg);
       const timestampMs = drainTimestampMs(msg);
       const ageSecondsValue = timestampMs === null ? null : ageSeconds(timestampMs, nowMs);
       return { msg, reason, timestampMs, ageSecondsValue };
@@ -521,15 +527,20 @@ export async function cmdInboxDrain(
     .filter((candidate): candidate is {
       msg: InboxMessage;
       reason: string;
-      timestampMs: number;
-      ageSecondsValue: number;
-    } => (
-      candidate.reason !== null &&
-      candidate.timestampMs !== null &&
-      candidate.ageSecondsValue !== null &&
-      candidate.ageSecondsValue >= olderThanSeconds
-    ))
-    .sort((a, b) => a.timestampMs - b.timestampMs);
+      timestampMs: number | null;
+      ageSecondsValue: number | null;
+    } => {
+      if (candidate.reason === null) return false;
+      // With an age threshold, require a known timestamp old enough. Without one
+      // (force default), drain regardless of timestamp parseability.
+      if (olderThanSeconds > 0) {
+        return candidate.timestampMs !== null &&
+          candidate.ageSecondsValue !== null &&
+          candidate.ageSecondsValue >= olderThanSeconds;
+      }
+      return true;
+    })
+    .sort((a, b) => (a.timestampMs ?? 0) - (b.timestampMs ?? 0));
 
   const selected = candidates.slice(0, max);
   if (selected.length && !opts.dryRun) mkdirSync(processedDir, { recursive: true });
@@ -546,7 +557,7 @@ export async function cmdInboxDrain(
       id: candidate.msg.id,
       filename: candidate.msg.filename,
       reason: candidate.reason,
-      age_seconds: candidate.ageSecondsValue,
+      age_seconds: candidate.ageSecondsValue ?? 0,
       destination,
       action: opts.dryRun ? "would_archive" : "archived",
     });
@@ -560,7 +571,8 @@ export async function cmdInboxDrain(
     remaining_matches: Math.max(0, candidates.length - items.length),
     max,
     dry_run: Boolean(opts.dryRun),
-    safe: true,
+    safe: Boolean(opts.safe),
+    forced: Boolean(opts.force),
     older_than_seconds: olderThanSeconds,
     processed_dir: processedDir,
     items,
@@ -572,12 +584,14 @@ export async function cmdInboxDrain(
 
 export function formatInboxDrainResult(result: InboxDrainResult): string {
   const verb = result.dry_run ? "would archive" : "archived";
+  const kind = result.forced ? "forced" : "safe stale";
+  const maxLabel = result.max >= Number.MAX_SAFE_INTEGER ? "∞" : String(result.max);
   const lines = [
-    `${result.oracle}: ${verb} ${result.archived}/${result.matched} safe stale inbox message(s) (scanned ${result.scanned}, max ${result.max})`,
+    `${result.oracle}: ${verb} ${result.archived}/${result.matched} ${kind} inbox message(s) (scanned ${result.scanned}, max ${maxLabel})`,
   ];
-  if (result.remaining_matches > 0) lines.push(`   → ${result.remaining_matches} safe match(es) remain after max cap`);
+  if (result.remaining_matches > 0) lines.push(`   → ${result.remaining_matches} match(es) remain after max cap`);
   if (!result.items.length) {
-    lines.push(`   → no messages matched the safe stale-ack filter`);
+    lines.push(`   → no messages matched${result.forced ? "" : " the safe stale-ack filter"}`);
     return lines.join("\n");
   }
   for (const item of result.items.slice(0, 10)) {

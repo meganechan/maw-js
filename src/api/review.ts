@@ -162,6 +162,11 @@ export const reviewApi = new Elysia()
   .post(
     "/review",
     ({ body, set }) => {
+      // Rate-limit first so malformed (but schema-valid) floods also consume quota.
+      if (!rateOk(body.asker)) {
+        set.status = 429;
+        return { error: "rate limit exceeded for asker" };
+      }
       const contentType = body.contentType ?? "markdown";
       if (contentType !== "markdown") {
         set.status = 400;
@@ -175,13 +180,9 @@ export const reviewApi = new Elysia()
         set.status = 413;
         return { error: `md exceeds ${MAX_MD_BYTES} bytes` };
       }
-      if (!body.title || !body.asker || !body.contextNote) {
+      if (!body.title || !body.contextNote) {
         set.status = 400;
         return { error: "title, asker, contextNote are required" };
-      }
-      if (!rateOk(body.asker)) {
-        set.status = 429;
-        return { error: "rate limit exceeded for asker" };
       }
       const row = reviewDeskStore().create({
         title: body.title,
@@ -264,7 +265,11 @@ export const reviewApi = new Elysia()
     });
   })
 
-  /** GET /api/review/:token — full envelope + thread history. */
+  /**
+   * GET /api/review/:token — full envelope + thread history.
+   * The token IS the capability (no extra auth). It rides in the URL path, so
+   * callers/proxies must not log it or leak it via Referer (capability-URL caveat).
+   */
   .get("/review/:token", ({ params, set }) => {
     const store = reviewDeskStore();
     const row = store.getByToken(params.token);

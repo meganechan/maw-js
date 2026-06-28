@@ -201,6 +201,36 @@ describe("/api/review routes", () => {
     expect(body.pending.every((s: any) => !("md" in s))).toBe(true);
   });
 
+  it("desk flow: list via /pending → open + decide WITHOUT the asker's token", async () => {
+    const app = await makeApp();
+    // asker submits; the desk never sees this POST response / token.
+    await app.handle(
+      new Request(url("/review"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: "DeskFlow", asker: "headless:df", contextNote: "c", md: "review me" }),
+      }),
+    );
+    // desk lists with desk-secret and recovers the token from the snapshot.
+    const snap = await json(
+      await app.handle(new Request(url("/review/pending"), { headers: { authorization: `Bearer ${SECRET}` } })),
+    );
+    const item = snap.pending.find((s: any) => s.title === "DeskFlow");
+    expect(item?.token).toBeTruthy(); // ← summary must carry the token (blocker fix)
+
+    const env = await json(await app.handle(new Request(url(`/review/${item.token}`))));
+    expect(env.md).toBe("review me");
+    const dec = await app.handle(
+      new Request(url(`/review/${item.token}/decision`), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ outcome: "approve", feedback: { comment: "ok" } }),
+      }),
+    );
+    expect(dec.status).toBe(200);
+    expect((await json(dec)).ok).toBe(true);
+  });
+
   it("GET /:token returns envelope; decision is single-use and updates status", async () => {
     const app = await makeApp();
     const created = await json(

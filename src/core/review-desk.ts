@@ -49,11 +49,21 @@ export interface ReviewRow {
   decidedAt: string | null;
 }
 
-/** Pending-list / stream summary — never includes the review body (`md`). */
+/**
+ * Pending-list / stream summary — never includes the review body (`md`).
+ *
+ * Carries the per-Round `token` so a desk-secret holder who lists via /pending
+ * (or receives a /stream event) can open GET /:token and decide. /pending and
+ * /stream are both desk-secret gated, and desk-secret strictly dominates a lone
+ * token, so surfacing the token to those callers is consistent (the Discord
+ * capability-link still works token-only). Without this the desk has no path to
+ * a token — only the asker gets one, in the POST /review response.
+ */
 export interface ReviewSummary {
   reviewId: string;
   threadId: string;
   roundNo: number;
+  token: string;
   title: string;
   asker: string;
   contextNote: string;
@@ -145,6 +155,7 @@ export function reviewSummary(row: ReviewRow): ReviewSummary {
     reviewId: row.reviewId,
     threadId: row.threadId,
     roundNo: row.roundNo,
+    token: row.token,
     title: row.title,
     asker: row.asker,
     contextNote: row.contextNote,

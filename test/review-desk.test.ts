@@ -52,28 +52,26 @@ describe("ReviewDeskStore", () => {
   it("decide() is single-use: approve then a repeat → already_decided", () => {
     const store = new ReviewDeskStore(":memory:");
     const row = store.create({ title: "T", asker: "a", contextNote: "c", md: "m" });
-    const first = store.decide(row.token, { outcome: "approve", md: "# final" });
+    const first = store.decide(row.token, { outcome: "approve", feedback: { comment: "lgtm" } });
     expect(first.ok).toBe(true);
     expect(first.row?.status).toBe("approved");
-    expect(first.row?.decisionMd).toBe("# final");
+    expect(first.row?.feedback).toEqual({ comment: "lgtm" });
+    // md is submit-time + immutable — decision never changes it (ADR-0002)
+    expect(first.row?.md).toBe("m");
     const second = store.decide(row.token, { outcome: "reject" });
     expect(second.ok).toBe(false);
     expect(second.error).toBe("already_decided");
     store.close();
   });
 
-  it("return stores annotations + comment and marks status returned", () => {
+  it("return stores opaque feedback verbatim and marks status returned", () => {
     const store = new ReviewDeskStore(":memory:");
     const row = store.create({ title: "T", asker: "a", contextNote: "c", md: "m" });
-    const res = store.decide(row.token, {
-      outcome: "return",
-      annotations: [{ anchor: { quote: "m" }, intent: "rephrase", note: "tighten" }],
-      comment: "needs work",
-    });
+    const feedback = { comment: "needs work", ink: { strokes: [[1, 2]] } };
+    const res = store.decide(row.token, { outcome: "return", feedback });
     expect(res.ok).toBe(true);
     expect(res.row?.status).toBe("returned");
-    expect(res.row?.decisionAnnotations?.[0]?.intent).toBe("rephrase");
-    expect(res.row?.comment).toBe("needs work");
+    expect(res.row?.feedback).toEqual(feedback); // opaque round-trip, shape untouched
     store.close();
   });
 
@@ -102,7 +100,7 @@ describe("ReviewDeskStore", () => {
   it("threads: resubmit with threadId increments roundNo and builds history", () => {
     const store = new ReviewDeskStore(":memory:");
     const r1 = store.create({ title: "T", asker: "a", contextNote: "c", md: "v1" });
-    store.decide(r1.token, { outcome: "return", comment: "redo" });
+    store.decide(r1.token, { outcome: "return", feedback: { comment: "redo" } });
     const r2 = store.create({ title: "T", asker: "a", contextNote: "c", md: "v2", threadId: r1.threadId });
     expect(r2.roundNo).toBe(2);
     expect(r2.threadId).toBe(r1.threadId);
@@ -225,7 +223,7 @@ describe("/api/review routes", () => {
       new Request(url(`/review/${token}/decision`), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ outcome: "approve", md: "# final" }),
+        body: JSON.stringify({ outcome: "approve", feedback: { comment: "lgtm" } }),
       }),
     );
     expect(dec.status).toBe(200);

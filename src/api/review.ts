@@ -26,7 +26,6 @@ import {
   reviewEvents,
   reviewSummary,
   safeEqual,
-  type ReviewAnnotation,
   type ReviewEvent,
   type ReviewRow,
 } from "../core/review-desk";
@@ -38,6 +37,7 @@ import { loadConfig } from "../config";
 
 const HEARTBEAT_MS = 20_000; // SSE keepalive — beats proxy idle-cut (traefik/cloudflare)
 const MAX_MD_BYTES = 256 * 1024;
+const MAX_FEEDBACK_BYTES = 256 * 1024; // opaque feedback blob cap (comment + ink)
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = 30; // POST /api/review per asker per window
 
@@ -82,22 +82,20 @@ interface DecisionPayload {
   threadId: string;
   roundNo: number;
   outcome: ReviewRow["outcome"];
-  md: string;
-  annotations: ReviewAnnotation[];
-  comment: string | null;
+  /** Opaque reviewer feedback (comment + ink + future ui); omitted when absent. No `md` — desk is read-only (ADR-0002). */
+  feedback?: unknown;
 }
 
 function buildDecisionPayload(row: ReviewRow): DecisionPayload {
-  return {
+  const payload: DecisionPayload = {
     type: "review.decision",
     reviewId: row.reviewId,
     threadId: row.threadId,
     roundNo: row.roundNo,
     outcome: row.outcome,
-    md: row.decisionMd ?? row.md,
-    annotations: row.decisionAnnotations ?? [],
-    comment: row.comment,
   };
+  if (row.feedback != null) payload.feedback = row.feedback;
+  return payload;
 }
 
 function formatDecisionMessage(p: DecisionPayload): string {
@@ -300,16 +298,11 @@ export const reviewApi = new Elysia()
         set.status = 400;
         return { error: "outcome must be approve | reject | return" };
       }
-      if (body.md && Buffer.byteLength(body.md, "utf8") > MAX_MD_BYTES) {
+      if (body.feedback !== undefined && Buffer.byteLength(JSON.stringify(body.feedback), "utf8") > MAX_FEEDBACK_BYTES) {
         set.status = 413;
-        return { error: `md exceeds ${MAX_MD_BYTES} bytes` };
+        return { error: `feedback exceeds ${MAX_FEEDBACK_BYTES} bytes` };
       }
-      const res = reviewDeskStore().decide(params.token, {
-        outcome,
-        md: body.md,
-        annotations: body.annotations as ReviewAnnotation[] | undefined,
-        comment: body.comment,
-      });
+      const res = reviewDeskStore().decide(params.token, { outcome, feedback: body.feedback });
       if (!res.ok) {
         if (res.error === "not_found") {
           set.status = 404;
@@ -331,9 +324,7 @@ export const reviewApi = new Elysia()
     {
       body: t.Object({
         outcome: t.String(),
-        md: t.Optional(t.String()),
-        annotations: t.Optional(t.Array(t.Unknown())),
-        comment: t.Optional(t.String()),
+        feedback: t.Optional(t.Unknown()),
       }),
     },
   );

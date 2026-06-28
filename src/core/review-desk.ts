@@ -28,13 +28,6 @@ export type ReviewContentType = "markdown";
 export type ReviewOutcome = "approve" | "reject" | "return" | "expired";
 export type ReviewStatus = "pending" | "approved" | "rejected" | "returned" | "expired";
 
-/** Text-anchored annotation (ADR-0001) — asker re-locates via fuzzy match on quote/prefix/suffix, not byte offsets. */
-export interface ReviewAnnotation {
-  anchor: { quote: string; prefix?: string; suffix?: string };
-  intent: "explain" | "remove" | "rephrase" | "disagree" | "question";
-  note?: string;
-}
-
 export interface ReviewRow {
   reviewId: string;
   threadId: string;
@@ -45,12 +38,12 @@ export interface ReviewRow {
   title: string;
   contextNote: string;
   contentType: ReviewContentType;
+  /** Submit-time review body. Immutable — the desk never edits it (ADR-0002). */
   md: string;
   status: ReviewStatus;
   outcome: ReviewOutcome | null;
-  comment: string | null;
-  decisionMd: string | null;
-  decisionAnnotations: ReviewAnnotation[] | null;
+  /** Reviewer feedback — opaque JSON pass-through (comment + ink + future ui); maw never interprets its shape. */
+  feedback: unknown | null;
   createdAt: string;
   expiresAt: string;
   decidedAt: string | null;
@@ -72,7 +65,8 @@ export interface ReviewSummary {
 export interface ReviewHistoryEntry {
   roundNo: number;
   outcome: ReviewOutcome;
-  comment: string | null;
+  /** Opaque reviewer feedback for that Round (or null). */
+  feedback: unknown | null;
   decidedAt: string | null;
 }
 
@@ -88,9 +82,8 @@ export interface CreateReviewInput {
 
 export interface DecisionInput {
   outcome: Exclude<ReviewOutcome, "expired">;
-  md?: string;
-  annotations?: ReviewAnnotation[];
-  comment?: string;
+  /** Opaque pass-through — stored + relayed verbatim, never validated/interpreted (ADR-0002). */
+  feedback?: unknown;
 }
 
 export type DecisionError = "not_found" | "already_decided" | "expired";
@@ -116,9 +109,7 @@ interface RawRow {
   md: string;
   status: string;
   outcome: string | null;
-  comment: string | null;
-  decision_md: string | null;
-  decision_annotations: string | null;
+  feedback: string | null;
   created_at: string;
   expires_at: string;
   decided_at: string | null;
@@ -138,9 +129,7 @@ function hydrate(r: RawRow): ReviewRow {
     md: r.md,
     status: r.status as ReviewStatus,
     outcome: (r.outcome as ReviewOutcome | null) ?? null,
-    comment: r.comment,
-    decisionMd: r.decision_md,
-    decisionAnnotations: r.decision_annotations ? safeJson(r.decision_annotations) : null,
+    feedback: r.feedback != null ? safeJson(r.feedback) : null,
     createdAt: r.created_at,
     expiresAt: r.expires_at,
     decidedAt: r.decided_at,
@@ -189,7 +178,7 @@ export class ReviewDeskStore {
         "review_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, round_no INTEGER NOT NULL, " +
         "corr TEXT NOT NULL, token TEXT NOT NULL, asker TEXT NOT NULL, title TEXT NOT NULL, " +
         "context_note TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT 'markdown', md TEXT NOT NULL, " +
-        "status TEXT NOT NULL, outcome TEXT, comment TEXT, decision_md TEXT, decision_annotations TEXT, " +
+        "status TEXT NOT NULL, outcome TEXT, feedback TEXT, " +
         "created_at TEXT NOT NULL, expires_at TEXT NOT NULL, decided_at TEXT" +
         "); " +
         "CREATE INDEX IF NOT EXISTS idx_reviews_token ON reviews(token); " +
@@ -217,9 +206,7 @@ export class ReviewDeskStore {
       md: input.md,
       status: "pending",
       outcome: null,
-      comment: null,
-      decisionMd: null,
-      decisionAnnotations: null,
+      feedback: null,
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + deadlineSec * 1000).toISOString(),
       decidedAt: null,
@@ -280,16 +267,16 @@ export class ReviewDeskStore {
   history(threadId: string, beforeRoundNo: number): ReviewHistoryEntry[] {
     const rows = this.db
       .query(
-        "SELECT round_no, outcome, comment, decided_at FROM reviews " +
+        "SELECT round_no, outcome, feedback, decided_at FROM reviews " +
           "WHERE thread_id = $threadId AND round_no < $round AND status != 'pending' ORDER BY round_no ASC",
       )
       .all({ $threadId: threadId, $round: beforeRoundNo }) as Array<
-      Pick<RawRow, "round_no" | "outcome" | "comment" | "decided_at">
+      Pick<RawRow, "round_no" | "outcome" | "feedback" | "decided_at">
     >;
     return rows.map((r) => ({
       roundNo: r.round_no,
       outcome: (r.outcome as ReviewOutcome) ?? "expired",
-      comment: r.comment,
+      feedback: r.feedback != null ? safeJson(r.feedback) : null,
       decidedAt: r.decided_at,
     }));
   }
@@ -306,19 +293,15 @@ export class ReviewDeskStore {
 
     const status = outcomeToStatus(input.outcome);
     const decidedAt = new Date(nowMs).toISOString();
-    const decisionMd = input.md ?? row.md;
-    const annotations = input.annotations ?? null;
     this.db
       .query(
-        "UPDATE reviews SET status = $status, outcome = $outcome, decision_md = $decisionMd, " +
-          "decision_annotations = $annotations, comment = $comment, decided_at = $decidedAt WHERE token = $token",
+        "UPDATE reviews SET status = $status, outcome = $outcome, feedback = $feedback, " +
+          "decided_at = $decidedAt WHERE token = $token",
       )
       .run({
         $status: status,
         $outcome: input.outcome,
-        $decisionMd: decisionMd,
-        $annotations: annotations ? JSON.stringify(annotations) : null,
-        $comment: input.comment ?? null,
+        $feedback: input.feedback !== undefined ? JSON.stringify(input.feedback) : null,
         $decidedAt: decidedAt,
         $token: token,
       });

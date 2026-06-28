@@ -29,11 +29,13 @@ import {
   type ReviewEvent,
   type ReviewRow,
 } from "../core/review-desk";
-import { messageQueue } from "../core/message-queue";
-import { extractOracleName } from "../core/agent-status-guard";
-import { listSessions } from "../core/transport/ssh";
-import { resolveTarget } from "../core/routing";
-import { loadConfig } from "../config";
+
+// NB: the delivery deps (config, routing, transport, message-queue) are loaded
+// DYNAMICALLY inside deliverDecisionToAsker — not statically — to keep `../config`
+// (which transitively pulls the transports/scout link graph) out of this module's
+// static surface. A static import drags that whole graph into api/index.ts and
+// breaks isolated tests that partially mock api/pair (scout imports recordHelloZid
+// from it). Same rationale as server.ts's dynamic comm-send/tmux imports.
 
 const HEARTBEAT_MS = 20_000; // SSE keepalive — beats proxy idle-cut (traefik/cloudflare)
 const MAX_MD_BYTES = 256 * 1024;
@@ -112,6 +114,14 @@ async function deliverDecisionToAsker(
   payload: DecisionPayload,
 ): Promise<{ delivered: boolean; reason?: string }> {
   try {
+    const [{ loadConfig }, { listSessions }, { resolveTarget }, { messageQueue }, { extractOracleName }] =
+      await Promise.all([
+        import("../config"),
+        import("../core/transport/ssh"),
+        import("../core/routing"),
+        import("../core/message-queue"),
+        import("../core/agent-status-guard"),
+      ]);
     const config = loadConfig();
     const sessions = await listSessions();
     const result = resolveTarget(asker, config, sessions);

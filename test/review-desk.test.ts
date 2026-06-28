@@ -127,6 +127,10 @@ describe("ReviewDeskStore", () => {
 describe("/api/review routes", () => {
   let dataDir: string;
   const SECRET = "test-desk-secret";
+  // Snapshot + restore these — default-safe runs non-mock files in ONE bun
+  // process, so a leaked MAW_DATA_DIR pollutes later files (e.g. the preflight
+  // default-path test reads it).
+  const original = { dataDir: process.env.MAW_DATA_DIR, secret: process.env.MAW_REVIEW_DESK_SECRET };
 
   beforeAll(() => {
     dataDir = mkdtempSync(join(tmpdir(), "maw-review-api-"));
@@ -135,6 +139,10 @@ describe("/api/review routes", () => {
   });
   afterAll(() => {
     rmSync(dataDir, { recursive: true, force: true });
+    if (original.dataDir === undefined) delete process.env.MAW_DATA_DIR;
+    else process.env.MAW_DATA_DIR = original.dataDir;
+    if (original.secret === undefined) delete process.env.MAW_REVIEW_DESK_SECRET;
+    else process.env.MAW_REVIEW_DESK_SECRET = original.secret;
   });
 
   async function makeApp() {

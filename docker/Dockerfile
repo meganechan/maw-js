@@ -15,10 +15,13 @@ RUN chmod +x src/cli.ts && ln -sf /app/src/cli.ts /usr/local/bin/maw
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-ENV MAW_HOME=/root/.maw \
-    NODE_NAME=node-a \
-    PEER_URL=http://node-b:3456 \
-    PEER_ALIAS=peer
+# NODE_NAME / PEER_URL / PEER_ALIAS are NOT baked here — they are federation
+# *harness* config, set per-service in docker/compose.yml. Baking a default
+# PEER_URL (node-b) made every standalone deploy (e.g. the review-plane) add a
+# bogus peer → `maw serve` handshake failure → unhealthy. The entrypoint already
+# defaults NODE_NAME to $(hostname) and skips `peers add` when PEER_URL is unset,
+# so a peerless standalone container now boots clean.
+ENV MAW_HOME=/root/.maw
 
 EXPOSE 3456
 

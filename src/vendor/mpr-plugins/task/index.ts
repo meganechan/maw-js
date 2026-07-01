@@ -337,6 +337,9 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
   const args = ctx.source === "cli" ? (ctx.args as string[]) : [];
   const r = await runTask(args, emit);
   const output = logs.join("\n") || undefined;
-  if (!r.ok) return { ok: false, error: ctx.writer ? undefined : (output ?? r.error), output };
+  // Transparent forward: surface runTask's clean error (usage / not-found) in
+  // `error` — the notice lives in `output` and must NOT shadow it (the shim
+  // forwards ALL input, not just the happy path).
+  if (!r.ok) return { ok: false, error: r.error, output };
   return { ok: true, output };
 }

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expectStandalonePluginBoundary } from "./helpers/plugin-standalone-boundary";
+import { loadManifestFromDir } from "../../src/plugin/manifest-load";
 
 // #2316 plugin-coverage-gate: the Company-Home git engine lives in src/core/home/*
 // (+ the worklog company-scope resolver). The `home` plugin is the thin CLI shell
@@ -47,12 +48,12 @@ describe("home command plugin standalone boundary", () => {
     expect(src).not.toContain("moved →"); // no deprecation shim notice
   });
 
-  test("manifest is a module surface with NO cli command (maw home → unknown)", () => {
-    const manifest = JSON.parse(
-      readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/home/plugin.json"), "utf8"),
-    );
+  // Authoritative manifest via loadManifestFromDir (plugin.ts-first) — guards
+  // against plugin.ts/json drift hiding a still-registered `maw home` (kobo-26).
+  test("loaded manifest is a module surface with NO cli command (maw home → unknown)", () => {
+    const manifest = loadManifestFromDir(join(import.meta.dir, "../../src/vendor/mpr-plugins/home"))!.manifest;
     expect(manifest.name).toBe("home");
     expect(manifest.cli).toBeUndefined(); // hard-removed — not dispatchable as `maw home`
-    expect(manifest.module.exports).toContain("runHome"); // company imports this
+    expect(manifest.module?.exports).toContain("runHome"); // company imports this
   });
 });

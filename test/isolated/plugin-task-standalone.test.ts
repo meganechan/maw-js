@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expectStandalonePluginBoundary } from "./helpers/plugin-standalone-boundary";
+import { loadManifestFromDir } from "../../src/plugin/manifest-load";
 
 // #2316 plugin-coverage-gate: the task board engine lives in src/core/tasks/* +
 // the worklog company-scope helper. The `task` plugin is the thin CLI shell over
@@ -65,12 +66,13 @@ describe("task command plugin standalone boundary", () => {
     expect(src).not.toContain("moved →"); // no deprecation shim notice
   });
 
-  test("manifest is a module surface with NO cli command (maw task → unknown)", () => {
-    const manifest = JSON.parse(
-      readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/task/plugin.json"), "utf8"),
-    );
+  // Assert the AUTHORITATIVE manifest via loadManifestFromDir (reads plugin.ts
+  // first, plugin.json fallback) — NOT a raw plugin.json read, so plugin.ts/json
+  // drift can't hide a still-registered `maw task` command (kobo-26 regression).
+  test("loaded manifest is a module surface with NO cli command (maw task → unknown)", () => {
+    const manifest = loadManifestFromDir(join(import.meta.dir, "../../src/vendor/mpr-plugins/task"))!.manifest;
     expect(manifest.name).toBe("task");
     expect(manifest.cli).toBeUndefined(); // hard-removed — not dispatchable as `maw task`
-    expect(manifest.module.exports).toContain("runTask"); // company imports this
+    expect(manifest.module?.exports).toContain("runTask"); // company imports this
   });
 });

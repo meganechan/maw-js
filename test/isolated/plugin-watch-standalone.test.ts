@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expectStandalonePluginBoundary } from "./helpers/plugin-standalone-boundary";
+import { loadManifestFromDir } from "../../src/plugin/manifest-load";
 
 // #2316 plugin-coverage-gate: the worklog engine lives in src/core/worklog/* +
 // the feed singleton (src/api/feed). The `watch` plugin is its thin CLI + serve
@@ -57,16 +58,16 @@ describe("watch command plugin standalone boundary", () => {
   // cli-reorg kobo-26: `maw watch` is HARD-REMOVED (no cli command). The plugin
   // keeps its serve hook (HTTP routes) — hooks make it non-dispatchable as a
   // command — and exposes `runWorklog` as a module for `maw company worklog`.
+  // Authoritative manifest via loadManifestFromDir (plugin.ts-first) — guards
+  // against plugin.ts/json drift hiding a still-registered `maw watch` (kobo-26).
   test("no cli command (maw watch → unknown), serve hook + module surface intact", () => {
-    const manifest = JSON.parse(
-      readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/watch/plugin.json"), "utf8"),
-    );
+    const manifest = loadManifestFromDir(join(import.meta.dir, "../../src/vendor/mpr-plugins/watch"))!.manifest;
     expect(manifest.cli).toBeUndefined(); // hard-removed — not dispatchable as `maw watch`
-    expect(manifest.module.exports).toContain("runWorklog"); // company imports this
+    expect(manifest.module?.exports).toContain("runWorklog"); // company imports this
     // serve hook untouched — the worklog/board HTTP routes still toggle with the plugin.
-    expect(manifest.hooks.serve.ensures).toContain("http:route:/api/worklog/feed");
-    expect(manifest.hooks.serve.ensures).toContain("http:route:/api/tasks");
-    expect(manifest.hooks.serve.ensures).toContain("http:route:/api/state");
+    expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/worklog/feed");
+    expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks");
+    expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/state");
   });
 
   // cli-reorg kobo-26: exports the shared `runWorklog` runner (all verbs, OQ2 —

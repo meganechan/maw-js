@@ -52,25 +52,25 @@ describe("task command plugin standalone boundary", () => {
     expect(src).toContain("resolveSenderIdentity");
   });
 
-  // cli-reorg (ADR docs/company/0001): dispatch is a shared `runTask` runner so
-  // `maw company task` (company plugin) and the top-level `maw task` shim share
-  // ONE copy. Top-level handler is now a deprecation shim → the maw_task MCP tool.
-  test("exports a shared runTask runner and the top-level handler is a deprecation shim", () => {
+  // cli-reorg kobo-26: `maw task` is HARD-REMOVED (no shim). The plugin exports
+  // the shared `runTask` runner (imported by the company plugin for
+  // `maw company task`) but registers NO cli command and NO default handler.
+  test("exports runTask but has no shim handler / no default export", () => {
     const src = readFileSync(
       join(import.meta.dir, "../../src/vendor/mpr-plugins/task/index.ts"),
       "utf8",
     );
     expect(src).toContain("export async function runTask");
-    expect(src).toContain("moved → 'maw company task'"); // shim notice
-    expect(src).toContain("await runTask("); // handler forwards to the shared runner
+    expect(src).not.toContain("export default"); // no top-level command handler
+    expect(src).not.toContain("moved →"); // no deprecation shim notice
   });
 
-  test("manifest keeps the `task` command as a deprecation alias", () => {
+  test("manifest is a module surface with NO cli command (maw task → unknown)", () => {
     const manifest = JSON.parse(
       readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/task/plugin.json"), "utf8"),
     );
     expect(manifest.name).toBe("task");
-    expect(manifest.cli.command).toBe("task"); // still registered — it's the shim
-    expect(manifest.cli.help).toMatch(/DEPRECATED/);
+    expect(manifest.cli).toBeUndefined(); // hard-removed — not dispatchable as `maw task`
+    expect(manifest.module.exports).toContain("runTask"); // company imports this
   });
 });

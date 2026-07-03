@@ -34,6 +34,7 @@ import {
   prOpenedReview,
   readTask,
   resolveEpicParent,
+  reviewTask,
   setTaskEpic,
   setTaskPr,
   startTask,
@@ -183,6 +184,20 @@ describe("task store (file-per-card under Company Home)", () => {
     expect(noteTask("pgw", "pgw-1", "patchwork", "still going")?.state).toBe("in-progress");
     completeTask("pgw", "pgw-1", "patchwork"); // → done
     expect(noteTask("pgw", "pgw-1", "patchwork", "post-mortem")?.state).toBe("done");
+  });
+
+  test("noteTask by the assignee on a BLOCKED card keeps it blocked — never auto-unblocks (kobo-54 guard)", () => {
+    addTask({ company: "pgw", title: "t", by: "eq3", assignee: "patchwork" });
+    blockTask("pgw", "pgw-1", "patchwork", { kind: "needs_input" });
+    const n = noteTask("pgw", "pgw-1", "patchwork", "here's the answer");
+    expect(n?.state).toBe("blocked"); // still blocked — advance only fires on todo
+    expect(n?.block?.kind).toBe("needs_input"); // block metadata untouched
+  });
+
+  test("noteTask by the assignee on a REVIEW card keeps it in review (kobo-54 guard)", () => {
+    addTask({ company: "pgw", title: "t", by: "eq3", assignee: "patchwork" });
+    reviewTask("pgw", "pgw-1", "patchwork");
+    expect(noteTask("pgw", "pgw-1", "patchwork", "addressed feedback")?.state).toBe("review");
   });
 
   test("done on a never-claimed card emits no spurious claim-release", () => {

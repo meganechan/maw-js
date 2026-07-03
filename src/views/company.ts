@@ -63,6 +63,14 @@ function companyBody(): string {
       --epic:#c4a7ff;                 /* epic / subtask purple */
       --field-bg:#0d131c;             /* input / textarea / code / button surface */
       --bd-ok:#2f5a3f; --bd-bad:#6b3a3a; --bd-epic:#4a3a6b; --bd-warn:#5a4a22; --bd-accent:#31516b; /* badge/button border tints */
+      /* semantic STATUS colors — modal-body structured blocks (kobo-58 #4, worker-3 design).
+         Aliases onto the base palette so the whole epic shares one color contract; the base
+         tokens (--card/--accent/--ok/--bad/--warn/--line/--muted) stay unchanged. */
+      --st-source:var(--accent);   /* source / target / host — provenance */
+      --st-premise:var(--warn);    /* premise / interim — provisional / caution */
+      --st-bug:var(--bad);         /* bug / broken */
+      --st-accept:var(--ok);       /* accept / decision — settled / go */
+      --st-meta:var(--muted);      /* meta / secondary detail */
       /* radius scale */
       --r-xs:6px; --r-sm:8px; --r-md:10px; --r-lg:12px; --r-xl:14px; --r-pill:999px;
       /* spacing scale (the px steps actually in use, ranked xs→xl) */

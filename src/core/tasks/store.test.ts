@@ -154,6 +154,37 @@ describe("task store (file-per-card under Company Home)", () => {
     expect(noteTask("pgw", "pgw-999", "x", "hi")).toBeNull();
   });
 
+  // kobo-54 — board-truth: a note by the assignee on their own todo card is
+  // "I'm working on this" evidence → auto-advance todo→in-progress (no lying).
+  test("noteTask by the assignee on a todo card auto-advances todo→in-progress + emits claim", () => {
+    addTask({ company: "pgw", title: "t", by: "eq3", assignee: "patchwork" });
+    const n = noteTask("pgw", "pgw-1", "patchwork", "diagnosing the repro");
+    expect(n?.state).toBe("in-progress");
+    expect(readTask("pgw", "pgw-1")?.state).toBe("in-progress"); // persisted
+    expect(openClaims("pgw").some((c) => c.oracle === "patchwork" && c.task === "pgw-1")).toBe(true);
+  });
+
+  test("noteTask by a NON-assignee on a todo card keeps it todo (no lying)", () => {
+    addTask({ company: "pgw", title: "t", by: "eq3", assignee: "patchwork" });
+    const n = noteTask("pgw", "pgw-1", "eq3", "any progress on this?"); // eq3 asks, not the doer
+    expect(n?.state).toBe("todo");
+    expect(openClaims("pgw").some((c) => c.task === "pgw-1")).toBe(false);
+  });
+
+  test("noteTask on an UNASSIGNED todo card does not auto-advance (fall back to explicit start)", () => {
+    addTask({ company: "pgw", title: "t", by: "eq3" }); // no assignee
+    const n = noteTask("pgw", "pgw-1", "patchwork", "picking this up");
+    expect(n?.state).toBe("todo");
+  });
+
+  test("noteTask on an in-progress/done card leaves state unchanged (idempotent, never resurrects)", () => {
+    addTask({ company: "pgw", title: "t", by: "eq3", assignee: "patchwork" });
+    startTask("pgw", "pgw-1", "patchwork"); // → in-progress
+    expect(noteTask("pgw", "pgw-1", "patchwork", "still going")?.state).toBe("in-progress");
+    completeTask("pgw", "pgw-1", "patchwork"); // → done
+    expect(noteTask("pgw", "pgw-1", "patchwork", "post-mortem")?.state).toBe("done");
+  });
+
   test("done on a never-claimed card emits no spurious claim-release", () => {
     addTask({ company: "pgw", title: "t", by: "eq3" });
     completeTask("pgw", "pgw-1", "tony");

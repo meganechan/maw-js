@@ -54,6 +54,20 @@ describe("crew-skills global asset contract", () => {
     expect(skill).toContain('--settings "$HOME/.claude/crew-worker-settings.json"');
     expect(skill).not.toContain("--settings .claude/crew-worker-settings.json");
   });
+
+  // warroom's coord reads its own contract and spawns workers too — same global
+  // path requirement (kobo-94): a bare/relative --settings there re-opens the
+  // deadlock once local .claude/ copies are removed.
+  test("warroom skill has no cwd-relative crew-worker-settings reference", () => {
+    const skill = readFileSync(join(assetsDir, "skills/warroom/SKILL.md"), "utf8");
+    expect(skill).toContain('--settings "$HOME/.claude/crew-worker-settings.json"');
+    expect(skill).not.toContain("--settings .claude/crew-worker-settings.json");
+    // no bare relative "crew-worker-settings.json" (only the $HOME-absolute form)
+    for (const m of skill.matchAll(/crew-worker-settings\.json/g)) {
+      const before = skill.slice(Math.max(0, m.index! - 20), m.index!);
+      expect(before).toContain("$HOME/.claude/");
+    }
+  });
 });
 
 describe("crew-skills sync", () => {

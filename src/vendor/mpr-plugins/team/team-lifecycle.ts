@@ -409,9 +409,11 @@ export async function cmdTeamSpawn(
       // worker's real pane — previously the id was discarded and never bound.
       const spawner = process.env.TMUX_PANE;
       const targetFlag = spawner ? ` -t '${spawner.replace(/'/g, "'\\''")}'` : "";
-      const paneId = (await hostExec(
+      // String(... ?? "") tolerates a transport that resolves void (e.g. a test
+      // double or an SSH host that returns no stdout) — never let .trim() throw.
+      const paneId = String((await hostExec(
         `tmux split-window -h${targetFlag} -P -F '#{pane_id}' -l 50% '${claudeCmd.replace(/'/g, "'\\''")}'`,
-      )).trim();
+      )) ?? "").trim();
       if (paneId) bindMemberPaneId(teamName, role, paneId);
       console.log();
       console.log(`  \x1b[32m✓ --exec\x1b[0m spawned ${role} in a new tmux pane${paneId ? ` (${paneId})` : " (right, 50%)"}`);

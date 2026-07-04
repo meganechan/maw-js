@@ -24,9 +24,11 @@ if [ -z "$ORACLE" ]; then
 fi
 [ -z "$ORACLE" ] && ORACLE="unknown"
 PROJECT=$(basename "${PWD}" 2>/dev/null)
-# Pane index distinguishes multiple panes of one oracle (human/coord/worker).
+# Pane id ($TMUX_PANE, e.g. "%40") distinguishes multiple panes of one oracle
+# (human/coord/worker). SAME key the statusline presence capture uses (kobo-109),
+# so the board can join feed activity to a presence pane per-pane, not per-oracle.
 # Empty outside tmux — the server treats a missing pane as back-compat.
-PANE=$(tmux display-message -p '#{pane_index}' 2>/dev/null)
+PANE="${TMUX_PANE:-}"
 
 PAYLOAD=$(jq -n --arg o "$ORACLE" --arg p "$PROJECT" --arg t "$TOOL" --arg pane "$PANE" --argjson ti "$TOOL_INPUT" \
   '{oracle:$o, event:"PostToolUse", project:$p, host:"local", message:("tool:"+$t), data:({tool_name:$t, tool_input:$ti} + (if $pane != "" then {pane:$pane} else {} end))}')

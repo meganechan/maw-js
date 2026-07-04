@@ -35,14 +35,16 @@ export type WorklogKind =
   | "task-unblocked"
   | "task-note"
   | "task-updated"
-  | "interrupt";
+  | "interrupt"
+  | "idle"; // pane went idle (CC Stop hook) — durable per-pane state (kobo-109)
 
 export interface WorklogEntry {
   ts: number; // epoch ms (sort key)
   iso: string; // ISO-8601 timestamp
   oracle: string; // who produced the event
-  pane?: string; // tmux pane index (#{pane_index}) — distinguishes multiple panes
-  //              of one oracle (human/coord/worker). Optional: old entries + non-tmux
+  pane?: string; // tmux pane id ($TMUX_PANE, e.g. "%40") — distinguishes multiple panes
+  //              of one oracle (human/coord/worker); SAME key as the presence file so the
+  //              board joins feed↔presence per-pane (kobo-109). Optional: old entries + non-tmux
   //              contexts omit it. NEVER folded into `oracle` (that string feeds
   //              company/scope lookups) — the `name.N` suffix is a DISPLAY concern.
   company?: string; // routing key — which company's log this belongs to

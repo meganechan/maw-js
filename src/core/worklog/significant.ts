@@ -42,8 +42,11 @@ export function toolSummary(toolName: string, input: any): string | null {
 /** Convert a capture feed event into a worklog entry, or null to skip. */
 export function eventToWorklog(event: FeedEvent): WorklogEntry | null {
   const data: any = event.data;
-  // Pane index rides in on the capture hook's `data.pane` (tmux #{pane_index}).
-  // Kept OUT of `oracle` on purpose — that string feeds company/scope lookups.
+  // Pane id rides in on the capture hook's `data.pane` (tmux $TMUX_PANE, e.g.
+  // "%40") — the SAME key the statusline presence file uses, so the board can
+  // join feed activity to a presence pane per-pane (kobo-109). Format-agnostic:
+  // whatever the hook emits lands here verbatim. Kept OUT of `oracle` on purpose
+  // — that string feeds company/scope lookups.
   const pane = data?.pane != null ? String(data.pane).trim() : "";
   const base = {
     ts: event.ts || Date.now(),
@@ -77,6 +80,16 @@ export function eventToWorklog(event: FeedEvent): WorklogEntry | null {
     const prompt = String(data?.prompt ?? event.message ?? "").trim();
     if (!prompt) return null;
     return { ...base, kind: "conversation", summary: clip(prompt) };
+  }
+
+  // Stop — the pane finished its turn and went idle (kobo-109, decision B). Persisted
+  // (not dropped) so the board's per-pane busy/idle survives a maw-server restart: the
+  // newest event for a pane in worklog.jsonl is the source of truth, not volatile
+  // recency. Needs the pane id to attribute idle to the right pane; a paneless Stop
+  // (non-tmux) carries no per-pane signal but is harmless. SessionStart stays dropped
+  // (orientation, not a state transition).
+  if (event.event === "Stop") {
+    return { ...base, kind: "idle", summary: "idle" };
   }
 
   return null;

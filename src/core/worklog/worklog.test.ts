@@ -73,6 +73,23 @@ describe("significant filter (filter b)", () => {
     const e = eventToWorklog(feed({ oracle: "eq3", data: { tool_name: "Bash", tool_input: { command: "git status" } } }));
     expect(e?.pane).toBeUndefined();
   });
+
+  it("persists Stop as a durable per-pane idle entry (kobo-109, decision B)", () => {
+    const e = eventToWorklog(feed({ event: "Stop", oracle: "eq3", data: { pane: "%40" } }));
+    expect(e?.kind).toBe("idle");
+    expect(e?.pane).toBe("%40"); // idle attributed to the exact pane
+    expect(e?.oracle).toBe("eq3");
+  });
+
+  it("paneless Stop still yields an idle entry (non-tmux, no per-pane signal)", () => {
+    const e = eventToWorklog(feed({ event: "Stop", oracle: "eq3" }));
+    expect(e?.kind).toBe("idle");
+    expect(e?.pane).toBeUndefined();
+  });
+
+  it("SessionStart stays dropped (orientation, not a state transition)", () => {
+    expect(eventToWorklog(feed({ event: "SessionStart" }))).toBeNull();
+  });
 });
 
 describe("timeline render", () => {

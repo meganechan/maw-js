@@ -20,9 +20,11 @@ if [ -z "$ORACLE" ]; then
 fi
 [ -z "$ORACLE" ] && ORACLE="unknown"
 PROJECT=$(basename "${PWD}" 2>/dev/null)
-# Pane index distinguishes multiple panes of one oracle (human/coord/worker).
+# Pane id ($TMUX_PANE, e.g. "%40") distinguishes multiple panes of one oracle
+# (human/coord/worker). SAME key the statusline presence capture uses (kobo-109),
+# so the board can join feed activity to a presence pane per-pane, not per-oracle.
 # Empty outside tmux — the server treats a missing pane as back-compat.
-PANE=$(tmux display-message -p '#{pane_index}' 2>/dev/null)
+PANE="${TMUX_PANE:-}"
 
 # capture (fire-and-forget)
 if [ -n "$PROMPT" ]; then

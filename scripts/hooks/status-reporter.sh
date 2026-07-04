@@ -21,9 +21,16 @@ fi
 SESSION_ID="${CLAUDE_SESSION_ID:-}"
 PROJECT=$(basename "${PWD}" 2>/dev/null)
 
+# Pane id ($TMUX_PANE, e.g. "%40") — carried as data.pane so a Stop event attributes
+# the idle state to the right pane (kobo-109, decision B). SAME key the worklog + presence
+# hooks use. Empty outside tmux → omit data (back-compat: paneless Stop = no per-pane signal).
+PANE="${TMUX_PANE:-}"
+DATA=""
+[ -n "$PANE" ] && DATA=",\"data\":{\"pane\":\"${PANE}\"}"
+
 curl -s -X POST "$MAW_URL" \
   -H 'Content-Type: application/json' \
-  -d "{\"oracle\":\"${ORACLE}\",\"event\":\"${HOOK_EVENT}\",\"sessionId\":\"${SESSION_ID}\",\"project\":\"${PROJECT}\",\"host\":\"$(hostname -s 2>/dev/null || echo local)\",\"message\":\"hook:${HOOK_EVENT}\"}" \
+  -d "{\"oracle\":\"${ORACLE}\",\"event\":\"${HOOK_EVENT}\",\"sessionId\":\"${SESSION_ID}\",\"project\":\"${PROJECT}\",\"host\":\"$(hostname -s 2>/dev/null || echo local)\",\"message\":\"hook:${HOOK_EVENT}\"${DATA}}" \
   >/dev/null 2>&1 &
 
 exit 0

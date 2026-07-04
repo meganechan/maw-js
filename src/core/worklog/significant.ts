@@ -42,17 +42,18 @@ export function toolSummary(toolName: string, input: any): string | null {
 /** Convert a capture feed event into a worklog entry, or null to skip. */
 export function eventToWorklog(event: FeedEvent): WorklogEntry | null {
   const data: any = event.data;
-  // Pane id rides in on the capture hook's `data.pane` (tmux $TMUX_PANE, e.g.
-  // "%40") — the SAME key the statusline presence file uses, so the board can
-  // join feed activity to a presence pane per-pane (kobo-109). Format-agnostic:
-  // whatever the hook emits lands here verbatim. Kept OUT of `oracle` on purpose
-  // — that string feeds company/scope lookups.
+  // Pane fields ride in on the capture hook's `data`. `pane` = tmux #{pane_index}
+  // (0/1) → DISPLAY (the feed shows oracle.0/.1). `paneId` = $TMUX_PANE (%N) → the
+  // stable JOIN key the board matches against the presence file per-pane (kobo-109).
+  // Both kept OUT of `oracle` — that string feeds company/scope lookups.
   const pane = data?.pane != null ? String(data.pane).trim() : "";
+  const paneId = data?.paneId != null ? String(data.paneId).trim() : "";
   const base = {
     ts: event.ts || Date.now(),
     iso: event.timestamp || new Date().toISOString(),
     oracle: event.oracle || "unknown",
     ...(pane ? { pane } : {}),
+    ...(paneId ? { paneId } : {}),
     company: companyOfOracle(event.oracle) ?? undefined,
   };
 

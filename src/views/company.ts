@@ -1038,18 +1038,19 @@ function renderPresence(entries, roster, presence, held) {
   note.innerHTML = 'Company roster from <b>/api/roster</b> (authoritative membership) — every registered oracle appears, even with no recent activity. Live status (last-seen · pane · count · last action) is derived from the worklog feed; clock-in/out/seat/toilet are best-effort text matches, not structured events.';
   host.appendChild(note);
   // Fold the feed to one activity record per oracle: newest entry wins for last-seen + pane.
-  // kobo-109 — ALSO derive a durable busy/idle state PER PANE (%N). The newest event for a
-  // pane decides: an 'idle' event (CC Stop hook, persisted to worklog.jsonl) → idle, any
-  // other activity → busy. Reading it from the persisted feed (not volatile recency) is what
-  // makes the badge survive a maw-server restart (decision B). Feed pane now shares the
-  // presence key ($TMUX_PANE) so the two join per-pane. 'idle' events are kept OUT of the
-  // oracle-level fold (count/last/active) — they are a pane-state signal, not real activity.
+  // kobo-109 — ALSO derive a durable busy/idle state PER PANE, keyed by paneId (%N, the
+  // stable TMUX_PANE join key — NOT the display pane index). The newest event for a pane
+  // decides: an 'idle' event (CC Stop hook, persisted to worklog.jsonl) → idle, any other
+  // activity → busy. Reading it from the persisted feed (not volatile recency) is what makes
+  // the badge survive a maw-server restart (decision B). paneId matches the presence file's
+  // pane (%N) so the two join per-pane. 'idle' events are kept OUT of the oracle-level fold
+  // (count/last/active) — they are a pane-state signal, not real activity.
   const byOracle = new Map();
-  const paneState = new Map(); // pane (%N) → { ts, idle } from the newest event touching it
+  const paneState = new Map(); // paneId (%N) → { ts, idle } from the newest event touching it
   for (const e of entries) {
-    if (e.pane) {
-      const cur = paneState.get(e.pane);
-      if (!cur || (e.ts || 0) >= cur.ts) paneState.set(e.pane, { ts: e.ts || 0, idle: e.kind === 'idle' });
+    if (e.paneId) {
+      const cur = paneState.get(e.paneId);
+      if (!cur || (e.ts || 0) >= cur.ts) paneState.set(e.paneId, { ts: e.ts || 0, idle: e.kind === 'idle' });
     }
     if (e.kind === 'idle') continue; // pane-state only — never an oracle activity record
     const key = e.oracle || '?';
@@ -1141,7 +1142,7 @@ function renderPresence(entries, roster, presence, held) {
         const st = paneState.get(p.pane);
         const pBusy = !!st && !st.idle;
         const row = el('div', 'p-pane-row' + (p.stale ? ' is-stale' : '') + (pBusy ? ' is-pane-busy' : ''));
-        if (p.stale) row.title = 'last known — statusline has not updated in 5+ min (idle pane)';
+        if (p.stale) row.title = 'last known — statusline stale 5+ min (context readout may be outdated)';
         row.appendChild(el('span', 'p-pane-id', '.' + (p.pane || '?')));
         row.appendChild(el('span', 'p-pane-model', p.model || '—'));
         const pct = ctxPct(p);

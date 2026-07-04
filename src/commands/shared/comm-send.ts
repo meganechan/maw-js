@@ -1066,9 +1066,6 @@ export async function cmdSend(
     console.log(`\x1b[90m  ⤷ ${reason}\x1b[0m`);
     return true;
   };
-  const warnOfflineInboxOnly = (): void => {
-    console.warn(`\x1b[33m⚠ target node offline — message written to inbox only, will not be seen until node wakes\x1b[0m`);
-  };
   const notifyQueuedInbox = async (inbox: ReceiverInboxResult | null, target: string, reason: string): Promise<void> => {
     if (!inbox?.ok) return;
     const notify = await notifyLiveInboxReceiver(inbox, senderIdentity.display, {
@@ -1386,26 +1383,39 @@ export async function cmdSend(
     process.exit(1);
   }
 
-  // Try receiver inbox queue before surfacing a local-only resolver miss.
+  // kobo-119 — OFFLINE (the oracle's repo was located but there is NO active session,
+  // i.e. the pane is dead) = HARD REJECT (Tony 2026-07-05, overriding kobo-113's
+  // durable-park). Don't write a fresh inbox entry for a pane that isn't there to read
+  // it — reject the new send and tell the sender it's offline so they can wake/retry.
+  // Rejects only the NEW send; existing inbox contents are untouched. `away` (park) +
+  // `online` (inject) are handled earlier and unchanged — only this offline branch flips.
   if (bareResolution.locate?.repoPath) {
-    const reason = `${query} found at ${bareResolution.locate.repoPath} but no active session — written to inbox only`;
-    const inbox = await writeReceiverInbox(bareResolution.locate.repoPath);
-    if (logQueuedInbox(inbox, query, reason)) {
-      await notifyQueuedInbox(inbox, query, reason);
-      warnOfflineInboxOnly();
-      return;
-    }
-    console.warn(`\x1b[33mwarn\x1b[0m: ${reason}`);
-  } else {
-    // eq3-005 — human-facing wording: this is NOT a failure. The message lands in
-    // the receiver's inbox and is read on their next poll. (Delivery state stays
-    // "queued" on the feed event; only the operator-visible reason changed.)
-    const reason = `delivered to ${query}'s inbox (not live now) — they'll read it on the next poll`;
-    const inbox = await writeReceiverInbox();
-    if (logQueuedInbox(inbox, query, reason)) {
-      await notifyQueuedInbox(inbox, query, reason);
-      return;
-    }
+    emitMessageFeed({
+      direction: "outbound",
+      state: "failed",
+      channel: "hey",
+      route: "reject",
+      from: senderIdentity.display,
+      to: query,
+      target: query,
+      text: outboundMessage,
+      lastLine: "target offline — not sent (no active session)",
+      signed: true,
+    }, config.port || 3456);
+    logMessage(senderName, query, outboundMessage, "reject");
+    console.error(`\x1b[31moffline\x1b[0m: '${query}' found at ${bareResolution.locate.repoPath} but no active session — ส่งไม่ได้ (offline, not sent)`);
+    console.error(`\x1b[33mhint\x1b[0m:  wake it first: maw wake ${query}`);
+    process.exit(1);
+  }
+
+  // No repo located (unknown target) — keep the existing default-inbox fallback so a
+  // genuinely-mis-typed / not-yet-resolved name is not silently dropped (eq3-005). This
+  // is NOT the "offline" case Tony rejected; it is "couldn't resolve the target at all".
+  const reason = `delivered to ${query}'s inbox (not live now) — they'll read it on the next poll`;
+  const inbox = await writeReceiverInbox();
+  if (logQueuedInbox(inbox, query, reason)) {
+    await notifyQueuedInbox(inbox, query, reason);
+    return;
   }
 
   // Local-only miss — no network was attempted (#411). Show resolver's own detail.

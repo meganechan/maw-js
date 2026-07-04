@@ -258,7 +258,16 @@ function companyBody(): string {
     #detail-notes .note-author { font-weight:600; color:var(--fg); }
     #detail-notes .note-src { font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:0 7px; }
     #detail-notes .note-ts { color:var(--muted); font-size:11px; margin-left:auto; font-variant-numeric:tabular-nums; }
-    #detail-notes .note-body { color:var(--fg); font-size:13px; line-height:1.55; white-space:pre-wrap; word-break:break-word; }
+    /* kobo-115 — note body renders as markdown (.md), so prose rhythm comes from the
+       .md scale, not pre-wrap. Tighten paragraph margins for the bubble; long notes
+       clamp with a fade + show-more toggle so the timeline stays scannable. */
+    #detail-notes .note-body { color:var(--fg); font-size:13px; word-break:break-word; }
+    #detail-notes .note-body.md p { margin:6px 0; line-height:1.6; }
+    #detail-notes .note-body.md p:first-child { margin-top:0; }
+    #detail-notes .note-body.md p:last-child { margin-bottom:0; }
+    #detail-notes .note-body.clamp { max-height:150px; overflow:hidden; -webkit-mask-image:linear-gradient(#000 72%, transparent); mask-image:linear-gradient(#000 72%, transparent); }
+    #detail-notes .note-more { margin:4px 0 0; cursor:pointer; color:var(--link); background:none; border:0; font:inherit; font-size:12px; padding:0; }
+    #detail-notes .note-more:hover, #detail-notes .note-more:focus-visible { text-decoration:underline; outline:none; }
     /* kobo-44: card detail as a modal overlay (was an inline sidebar panel). */
     .overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; padding:24px; z-index:50; }
     .overlay[hidden] { display:none; }
@@ -731,7 +740,12 @@ function noteBubble(n, src) {
   if (src) head.appendChild(el('span', 'note-src', '↳ ' + src));
   head.appendChild(el('span', 'note-ts', n.iso ? (relTime(n.ts) + ' · ' + localTs(n.iso)) : text(n.ts)));
   main.appendChild(head);
-  main.appendChild(el('div', 'note-body', n.text || ''));
+  // kobo-115: render the note as markdown (bold/list/code/headings) via mdToHtml —
+  // escape-first, so it is XSS-safe like the card body / state.md. Reuses the .md
+  // typographic scale so a long note reads as prose, not a flat pre-wrap wall.
+  const body = el('div', 'note-body md');
+  body.innerHTML = mdToHtml(n.text || '');
+  main.appendChild(body);
   note.appendChild(main);
   return note;
 }
@@ -763,6 +777,24 @@ function openDetail(task) {
   // kobo-48: write controls (+ subtask, comment box) live inside the modal.
   buildWriteSection(task);
   openModal();
+  clampLongNotes(); // kobo-115 — measured after the modal is visible (offscreen scrollHeight = 0)
+}
+
+// kobo-115: a long note clamps to a few lines with a show-more toggle so one tall
+// note can't push the rest of the timeline out of view. Must run after openModal()
+// — a hidden element reports scrollHeight 0, so nothing would ever clamp.
+function clampLongNotes() {
+  const CAP = 150; // px — matches .note-body.clamp max-height
+  for (const body of $('detail-notes').querySelectorAll('.note-body')) {
+    if (body.scrollHeight <= CAP + 24) continue; // small slack → not worth a toggle
+    body.classList.add('clamp');
+    const btn = el('button', 'note-more', 'show more');
+    btn.addEventListener('click', function () {
+      const clamped = body.classList.toggle('clamp');
+      btn.textContent = clamped ? 'show more' : 'show less';
+    });
+    body.after(btn);
+  }
 }
 
 // kobo-48 web write — the modal's write controls: a "+ subtask" input (creates a

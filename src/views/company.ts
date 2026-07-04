@@ -996,13 +996,12 @@ function renderPresence(entries, roster) {
     if ((e.ts || 0) >= (o.last.ts || 0)) { o.last = e; o.pane = e.pane; }
     if (STATUS_RE.test(e.summary || '') && (!o.status || (e.ts || 0) >= (o.status.ts || 0))) o.status = e;
   }
-  // Roster is the authoritative membership; overlay activity. An oracle with
-  // activity but NOT in the roster (e.g. a cross-company visitor) is still shown.
-  const rosterNames = new Set(roster.map((r) => r.oracle));
+  // ROSTER-ONLY (kobo-104, Tony): show ONLY /api/roster members — a worklog actor
+  // NOT in the roster (a cross-company visitor: human/meganechan/tony) is no longer
+  // surfaced here. Roster is authoritative membership; worklog only overlays activity.
   const rows = [];
   for (const r of roster) rows.push({ member: r, act: byOracle.get(r.oracle) || null });
-  for (const [name, act] of byOracle) if (!rosterNames.has(name)) rows.push({ member: { oracle: name, dept: null, role: null }, act: act });
-  if (!rows.length) { host.appendChild(el('div', 'empty', 'no roster + no worklog activity')); return; }
+  if (!rows.length) { host.appendChild(el('div', 'empty', 'no roster members')); return; }
   // active first, then most-recent activity, then roster-only alphabetical.
   rows.sort((a, b) => {
     const ta = a.act ? (a.act.last.ts || 0) : 0, tb = b.act ? (b.act.last.ts || 0) : 0;

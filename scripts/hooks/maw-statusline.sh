@@ -19,6 +19,14 @@
 
 INPUT=$(cat)
 
+# Oracle identity — self-describe the presence file so the read side (the board)
+# groups per-oracle by a file field, with NO tmux join at read time (a dead agent
+# just stops updating → mtime goes stale). Same resolution the worklog hooks use:
+# CLAUDE_AGENT_NAME, else the tmux session name minus its numeric pane prefix.
+ORACLE="${CLAUDE_AGENT_NAME:-}"
+[ -z "$ORACLE" ] && ORACLE="$(tmux display-message -p '#{session_name}' 2>/dev/null | sed 's/^[0-9]*-//')"
+[ -z "$ORACLE" ] && ORACLE="?"
+
 # --- capture (guarded so it can never fault the statusline) ------------------
 PANE="${TMUX_PANE:-}"
 if command -v jq >/dev/null 2>&1 && [ -n "$PANE" ]; then
@@ -32,8 +40,9 @@ if command -v jq >/dev/null 2>&1 && [ -n "$PANE" ]; then
     # jq paths are tolerant of nesting (context_window.X // top-level X) so a schema
     # tweak on the CC side degrades to null instead of breaking capture.
     if printf '%s' "$INPUT" | jq -c \
-        --arg pane "$PANE" --arg ts "$TS" '{
+        --arg pane "$PANE" --arg ts "$TS" --arg oracle "$ORACLE" '{
           pane: $pane,
+          oracle: $oracle,
           ts: ($ts | tonumber),
           model: (.model.display_name // .model.id // null),
           model_id: (.model.id // null),
@@ -68,8 +77,5 @@ if command -v jq >/dev/null 2>&1; then
 else
   MODEL="?"; PCT="—"
 fi
-ORACLE="${CLAUDE_AGENT_NAME:-}"
-[ -z "$ORACLE" ] && ORACLE="$(tmux display-message -p '#{session_name}' 2>/dev/null | sed 's/^[0-9]*-//')"
-[ -z "$ORACLE" ] && ORACLE="?"
 printf '%s · ctx %s · %s' "$MODEL" "$PCT" "$ORACLE"
 exit 0

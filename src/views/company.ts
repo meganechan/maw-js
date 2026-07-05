@@ -1111,12 +1111,13 @@ function pendingMentions(tasks) {
     const notes = t.notes || [];
     if (!notes.length) continue;
     const latest = new Map();
-    for (const n of notes) {
+    notes.forEach((n, i) => {
       for (const who of parseMentions(n.text)) {
-        const answered = notes.some((n2) => (n2.ts || 0) > (n.ts || 0) && mentionKey(n2.by) === who);
+        // answered if a LATER note (by append order, not ts — same-ms collision safe) is by who
+        const answered = notes.slice(i + 1).some((n2) => mentionKey(n2.by) === who);
         if (answered) latest.delete(who); else latest.set(who, n);
       }
-    }
+    });
     for (const [who, n] of latest) out.push({ id: t.id, title: t.title, who: who, by: n.by, ts: n.ts, text: n.text });
   }
   out.sort((a, b) => (b.ts || 0) - (a.ts || 0));

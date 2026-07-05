@@ -21,10 +21,15 @@ import {
   resolveBareHeyByLocatePath,
   type HeyLocateResolution,
 } from "./hey-locate-resolution";
-import { checkBusyGuard, queueForDispatch, extractOracleName } from "../../core/agent-status-guard";
+import { checkBusyGuard, queueForDispatch } from "../../core/agent-status-guard";
 import { runPluginEventHooks } from "../../plugin/event-hooks";
 import { notifyLiveInboxReceiver } from "./live-inbox-notify";
 import { getPaneRoute } from "../../core/pane-routes";
+// Pane-aware oracle extraction for the presence gate: unlike agent-status-guard's
+// (which takes the last `:`-segment → returns "0.2" for a crew pane address like
+// "13-patchwork:0.2"), this pulls the session slug → "patchwork". kobo-120: the gate
+// keys presence per-pane, so a pane-addressed hey must still resolve its owning oracle.
+import { extractOracleName as extractPaneOracle } from "./target-cwd";
 
 /**
  * Resolve a `session:window` target to a specific pane running an agent
@@ -103,6 +108,28 @@ export async function resolveOraclePane(
     return `${target}.${Math.min(...agentIndexes)}`;
   } catch {
     return target;
+  }
+}
+
+/**
+ * Canonicalize a send-keys target to its stable tmux pane id (`%N`) — the same form
+ * the worklog stamps in `paneId` (kobo-120). Bridges the key-format gap between a
+ * resolved target (`session:window.N` | `session:window` | `%N`) and per-pane presence:
+ * `#{pane_id}` resolves every target form to one `%N`. A `%`-target is already an id.
+ * Returns undefined when tmux can't resolve it (non-tmux / dead pane) → the caller
+ * falls back to oracle-level presence.
+ */
+export async function paneIdOfTarget(
+  target: string,
+  tmuxRun?: (...args: string[]) => Promise<string>,
+): Promise<string | undefined> {
+  if (target.startsWith("%")) return target;
+  try {
+    const run = tmuxRun ?? ((...args: string[]) => new Tmux().run(...args));
+    const id = (await run("display-message", "-p", "-t", target, "#{pane_id}")).trim();
+    return id || undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -1121,12 +1148,19 @@ export async function cmdSend(
     // The message is durable in the inbox; /seat drains it on return.
     // Lazy import: keeps presence-away out of comm-send's static module graph so the
     // plugin-standalone / cache-busting isolated re-imports don't surface a barrel cycle.
-    const { isOracleAway } = await import("../../core/worklog/presence-away");
-    if (isOracleAway(extractOracleName(query))) {
+    // Per-pane (kobo-120): one oracle can own several panes (crew coord + workers). Resolve
+    // the target to its `%N` pane id so the gate parks only when THAT pane is away — a coord
+    // who stepped out parks, while an active worker pane of the same oracle still injects.
+    const { isPaneAway } = await import("../../core/worklog/presence-away");
+    const targetPaneId = await paneIdOfTarget(target);
+    // Pane-aware oracle (handles "patchwork", "13-patchwork:0.2", "m5:patchwork"); strip a
+    // trailing -oracle. This is the oracle whose worklog carries the away/back events.
+    const awayOracle = extractPaneOracle(query).replace(/-oracle$/i, "");
+    if (isPaneAway(awayOracle, targetPaneId)) {
       const inbox = await writeReceiverInbox(target);
-      const reason = `'${extractOracleName(query)}' is away (stepped out) — parked to inbox, delivered on their /seat`;
+      const reason = `'${awayOracle}' is away (stepped out) — parked to inbox, delivered on their /seat`;
       if (logQueuedInbox(inbox, target, reason)) return; // sender-side notice + feed; NO pane injection
-      console.log(`\x1b[33mparked\x1b[0m '${extractOracleName(query)}' is away — queued to inbox; they'll get it on /seat`);
+      console.log(`\x1b[33mparked\x1b[0m '${awayOracle}' is away — queued to inbox; they'll get it on /seat`);
       return;
     }
 

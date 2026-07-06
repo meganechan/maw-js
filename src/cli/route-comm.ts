@@ -1,5 +1,6 @@
 import { cmdPeek, cmdSend, cmdFlush } from "../commands/shared/comm";
 import { UserError } from "../core/util/user-error";
+import { CHANNEL_TASK_EVENTS } from "../core/pane-routes";
 
 function printCommUsage(cmd: "hey" | "send" | "notify", write: (line: string) => void = console.log): void {
   if (cmd === "notify") {
@@ -195,10 +196,11 @@ export async function routeComm(cmd: string, args: string[]): Promise<boolean> {
     // appends the message to that card as a note, so coordination said over hey lands
     // on the board instead of only in a hey log. Same best-effort shape as the
     // `[request:]` hook above (cheap gate → dynamic import → try/catch, before cmdSend
-    // which may process.exit). Excludes the `task-events` channel (CHANNEL_TASK_EVENTS):
-    // notify pings ride it carrying card-ids, so capturing them would loop. The cheap
-    // `letter-hyphen-digit` gate lets normal heys skip the import entirely.
-    if (!isNotify && channel !== "task-events" && !message.includes("[via hey") && /[a-z]-\d/.test(message)) {
+    // which may process.exit). Excludes the CHANNEL_TASK_EVENTS channel: notify pings
+    // ride it carrying card-ids, so capturing them would loop. The cheap gate MIRRORS
+    // CARD_ID_RE (letter, then any letters/digits/hyphens, then `-<digit>`) so a company
+    // whose name ends in a digit (`eq3-11`, `s3-2`) isn't dropped before the fn re-checks.
+    if (!isNotify && channel !== CHANNEL_TASK_EVENTS && !message.includes("[via hey") && /[a-z][a-z0-9-]*-\d/.test(message)) {
       try {
         const [{ autoCaptureCardMentions }, { resolveSenderIdentity }, { loadConfig }] = await Promise.all([
           import("../core/tasks/auto-create"),

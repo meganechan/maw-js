@@ -101,7 +101,7 @@ describe("autoCreateFromDispatch", () => {
 });
 
 describe("autoCaptureCardMentions", () => {
-  const existing = new Set(["kobo-1", "kobo-2", "kob-payment-5"]);
+  const existing = new Set(["kobo-1", "kobo-2", "kob-payment-5", "eq3-11"]);
   const noted: { company: string; id: string; by: string; text: string }[] = [];
   const deps = {
     readCard: (_c: string, id: string) => (existing.has(id) ? ({ id } as never) : null),
@@ -128,6 +128,10 @@ describe("autoCaptureCardMentions", () => {
   test("company prefix may contain hyphens (<company>-<n>)", () => {
     expect(cap("bug in kob-payment-5")).toEqual(["kob-payment-5"]);
     expect(noted[0].company).toBe("kob-payment");
+  });
+  test("company name ending in a digit is captured (eq3-11, not dropped)", () => {
+    expect(cap("look at eq3-11")).toEqual(["eq3-11"]);
+    expect(noted[0].company).toBe("eq3");
   });
   test("skips unknown / non-card tokens silently (kobo-999, utf-8)", () => {
     expect(cap("what about kobo-999 or utf-8 encoding")).toEqual([]);

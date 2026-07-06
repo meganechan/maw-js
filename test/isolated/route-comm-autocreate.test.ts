@@ -48,6 +48,7 @@ beforeEach(() => {
   calls.length = 0;
   cmdSendImpl = async (...a) => { calls.push(a); };
   rmSync(join(dir, "companies", "kobo"), { recursive: true, force: true });
+  rmSync(join(dir, "companies", "web3"), { recursive: true, force: true });
 });
 
 describe("routeComm hey → auto-create board card (Track 3 integration)", () => {
@@ -110,6 +111,15 @@ describe("routeComm hey → auto-capture card mention as note (kobo-165)", () =>
       `[task] eq3 commented on ${card.id}: hi`,
     ]);
     expect(readTask("kobo", card.id)!.notes ?? []).toEqual([]);
+  });
+
+  test("gate does not drop a digit-suffix company (web3-1 captured, regression)", async () => {
+    const card = addTask({ company: "web3", title: "seed3", by: "eq3", assignee: "patchwork", state: "todo" });
+    expect(card.id).toBe("web3-1"); // company name ends in a digit — old gate /[a-z]-\d/ would skip
+    await routeComm("hey", ["hey", "--from", "local:eq3", "patchwork", `heads up on ${card.id}`]);
+    const after = readTask("web3", card.id)!;
+    expect(after.notes?.length).toBe(1);
+    expect(after.notes![0].text).toContain("[via hey→patchwork]");
   });
 
   test("references an unknown card → no note, delivery still happens", async () => {

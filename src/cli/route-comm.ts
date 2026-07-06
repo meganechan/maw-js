@@ -191,6 +191,32 @@ export async function routeComm(cmd: string, args: string[]): Promise<boolean> {
       }
     }
 
+    // kobo-165 — auto-capture: a hey that references an EXISTING card id (`kobo-42`)
+    // appends the message to that card as a note, so coordination said over hey lands
+    // on the board instead of only in a hey log. Same best-effort shape as the
+    // `[request:]` hook above (cheap gate → dynamic import → try/catch, before cmdSend
+    // which may process.exit). Excludes the `task-events` channel (CHANNEL_TASK_EVENTS):
+    // notify pings ride it carrying card-ids, so capturing them would loop. The cheap
+    // `letter-hyphen-digit` gate lets normal heys skip the import entirely.
+    if (!isNotify && channel !== "task-events" && !message.includes("[via hey") && /[a-z]-\d/.test(message)) {
+      try {
+        const [{ autoCaptureCardMentions }, { resolveSenderIdentity }, { loadConfig }] = await Promise.all([
+          import("../core/tasks/auto-create"),
+          import("../commands/shared/comm-send"),
+          import("../config"),
+        ]);
+        autoCaptureCardMentions(message, target, () => {
+          try {
+            return resolveSenderIdentity(loadConfig(), from ? { from } : {}).senderName;
+          } catch {
+            return null; // can't resolve sender → skip capture (note needs an author)
+          }
+        });
+      } catch {
+        /* auto-capture is best-effort — never break hey/send delivery */
+      }
+    }
+
     await cmdSend(target, message, force, { approve, trust, inboxOnly, ...(noVerifySubmit ? { noVerifySubmit } : {}), ...(from ? { from } : {}), ...(channel ? { channel } : {}) });
     return true;
   }

@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectStandalonePluginBoundary } from "./helpers/plugin-standalone-boundary";
-import { SYNC_ITEMS, formatSyncResult, syncCrewSkills } from "../../src/vendor/mpr-plugins/crew-skills/sync.ts?plugin-crew-skills-standalone";
+import { SYNC_ITEMS, ensureSeatResumeHook, formatSyncResult, syncCrewSkills } from "../../src/vendor/mpr-plugins/crew-skills/sync.ts?plugin-crew-skills-standalone";
 
 const pluginRoot = join(import.meta.dir, "../../src/vendor/mpr-plugins/crew-skills");
 const assetsDir = join(pluginRoot, "assets");
@@ -157,5 +157,40 @@ describe("crew-skills sync", () => {
     expect(result.installed.length).toBe(SYNC_ITEMS.length);
     expect(existsSync(join(home, ".claude/skills/crew/SKILL.md"))).toBe(false);
     expect(formatSyncResult(result)).toContain("would install");
+  });
+
+  test("wires SessionStart:clear seat-resume hook into global settings.json", () => {
+    const home = freshHome();
+    const result = syncCrewSkills({ home, assetsDir });
+    expect(result.seatHookWired).toBe(true);
+    expect(existsSync(join(home, ".claude/hooks/seat-resume.sh"))).toBe(true);
+    const settings = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8"));
+    const entry = settings.hooks.SessionStart.find((e: any) => e.matcher === "clear");
+    expect(entry.hooks[0].command).toBe("bash $HOME/.claude/hooks/seat-resume.sh");
+  });
+
+  test("seat-resume hook wiring is idempotent (no duplicate entry)", () => {
+    const home = freshHome();
+    syncCrewSkills({ home, assetsDir });
+    const again = syncCrewSkills({ home, assetsDir });
+    expect(again.seatHookWired).toBe(false);
+    const settings = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8"));
+    const clears = settings.hooks.SessionStart.filter((e: any) => e.matcher === "clear");
+    expect(clears.length).toBe(1);
+  });
+
+  test("seat-resume wiring preserves pre-existing settings + hooks (non-destructive)", () => {
+    const home = freshHome();
+    const claudeDir = join(home, ".claude");
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({
+      model: "opus",
+      hooks: { SessionStart: [{ matcher: "", hooks: [{ type: "command", command: "keep-me.sh" }] }] },
+    }));
+    ensureSeatResumeHook(claudeDir);
+    const settings = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8"));
+    expect(settings.model).toBe("opus");
+    expect(settings.hooks.SessionStart.some((e: any) => e.hooks[0].command === "keep-me.sh")).toBe(true);
+    expect(settings.hooks.SessionStart.some((e: any) => e.matcher === "clear")).toBe(true);
   });
 });

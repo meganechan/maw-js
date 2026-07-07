@@ -22,9 +22,10 @@ describe("company board view — kobo-127 board UX Phase A (display)", () => {
     expect(html).toContain('id="assignee-bar"'); // the active-filter clear bar
   });
 
-  test("collapse: 1-line title clamp + latest-note-faint on every card (incl. Blocked, kobo-199)", () => {
-    expect(html).toContain("t-note-latest"); // all board cards → latest note only
-    expect(html).not.toContain("{ notes: 'full' }"); // kobo-199 — Blocked no longer renders full notes
+  test("collapse: 1-line title clamp + latest-note-faint / full-notes on Blocked (kobo-199 grid col)", () => {
+    expect(html).toContain("t-note-latest"); // flow-lane cards → latest note only
+    expect(html).toContain("t-notes-full"); // Blocked column → every note in full (decision queue)
+    expect(html).toContain("{ notes: 'full' }"); // the Blocked branch passes the flag
     expect(html).toContain("text-overflow:ellipsis; white-space:nowrap"); // title clamp
   });
 

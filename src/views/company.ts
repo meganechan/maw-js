@@ -287,8 +287,6 @@ function companyBody(): string {
     /* kobo-127 — note surfacing on the face: collapsed = latest 1 faint line;
        Blocked lane = every note in full (Tony's decision queue). */
     .task .t-note-latest { margin-top:var(--s-2); color:var(--muted); font-size:var(--t-sm); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:.75; }
-    .task .t-notes-full { margin-top:var(--s-2); display:flex; flex-direction:column; gap:var(--s-1); }
-    .task .t-notes-full .t-note { color:var(--fg); font-size:var(--t-sm); white-space:pre-wrap; word-break:break-word; border-left:2px solid var(--line); padding-left:var(--s-3); }
     .task .t-note-by { color:var(--muted); font-weight:600; }
     /* kobo-127 — Done-lane fold control ("show all N" / "collapse"). */
     .done-fold { grid-column:1 / -1; margin-top:var(--s-2); font-size:var(--t-xs); color:var(--muted); background:none; border:1px dashed var(--line); border-radius:var(--r-md); padding:var(--s-2) var(--s-4); cursor:pointer; width:100%; }
@@ -1001,29 +999,17 @@ function taskCard(task, opts) {
   card.appendChild(meta);
   // next-action — the board always says what happens next + who (Track 4)
   if (task.nextAction) card.appendChild(el('div', 't-na', '↳ ' + task.nextAction));
-  // kobo-127 — note surfacing. Collapsed cards (the flow lanes) show ONLY the
-  // latest note as a faint one-liner — the trail hides; click the card = expand
-  // (full trail lives in the detail modal). The Blocked lane is Tony's decision
-  // queue, so opts.notes==='full' shows every note in full, untruncated.
+  // kobo-127 — note surfacing. Every board card (all lanes, incl. Blocked as of
+  // kobo-199) shows ONLY the latest note as a faint one-liner — the trail hides;
+  // click the card = expand (full trail lives in the detail modal).
   const notes = task.notes || [];
   if (notes.length) {
-    if (opts.notes === 'full') {
-      const wrap = el('div', 't-notes-full');
-      for (const n of notes) {
-        const ln = el('div', 't-note');
-        ln.appendChild(el('span', 't-note-by', (n.by || '?') + ' · '));
-        ln.appendChild(document.createTextNode(n.text || ''));
-        wrap.appendChild(ln);
-      }
-      card.appendChild(wrap);
-    } else {
-      const n = notes[notes.length - 1];
-      const ln = el('div', 't-note-latest');
-      ln.appendChild(el('span', 't-note-by', (n.by || '?') + ': '));
-      const one = String(n.text || '').replace(/\\s+/g, ' ').trim();
-      ln.appendChild(document.createTextNode(one.length > 90 ? one.slice(0, 87) + '…' : one));
-      card.appendChild(ln);
-    }
+    const n = notes[notes.length - 1];
+    const ln = el('div', 't-note-latest');
+    ln.appendChild(el('span', 't-note-by', (n.by || '?') + ': '));
+    const one = String(n.text || '').replace(/\\s+/g, ' ').trim();
+    ln.appendChild(document.createTextNode(one.length > 90 ? one.slice(0, 87) + '…' : one));
+    card.appendChild(ln);
   }
   // archive button — ONLY on done cards (kobo-35). done = finished, awaiting
   // human review; clicking archive = Tony signs "checked" → the card moves off

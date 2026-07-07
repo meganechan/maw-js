@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { orderCommentTree, foldableResolvedIds, newestVisibleCommentId, companyHtml } from "./company";
+import { orderCommentTree, foldableResolvedIds, newestVisibleCommentId, waitingForTony, companyHtml } from "./company";
 
 // A comment factory — id, replyTo, ts, author. ts drives sibling order.
 const c = (id: string, replyTo: string | null, ts: number, by = "sapan") => ({ id, replyTo, ts, by, text: id + " body" });
@@ -89,6 +89,39 @@ describe("companyHtml injection (kobo-171 + kobo-176)", () => {
     expect(html).toContain("foldableResolvedIds(comments)"); // and consumed
     expect(html).toContain("function newestVisibleCommentId"); // kobo-180 injected
     expect(html).toContain("scrollToNewestComment(task)"); // and called on open
+    expect(html).toContain("function waitingForTony"); // kobo-187 injected
+    expect(html).toContain("renderApprovalQueue(tasks)"); // and rendered on the board
+    expect(html).toContain("'✅ Tony approved'"); // approve = mark-only comment
+    expect(html).not.toContain("/api/tasks/merge"); // golden rule: never auto-merge
+  });
+});
+
+describe("waitingForTony (kobo-187)", () => {
+  const t = (o: Record<string, unknown>) => ({ id: "k-1", state: "review", by: "eq3", assignee: "patchwork", ...o });
+  const q = (tasks: unknown[]) => waitingForTony(tasks).map((x: { id: string }) => x.id);
+  test("review + explicit reviewer=tony → in queue", () => {
+    expect(q([t({ id: "a", reviewer: "tony" })])).toEqual(["a"]);
+  });
+  test("review + reviewer resolves to human (creator IS the doer) → in queue", () => {
+    expect(q([t({ id: "b", by: "patchwork", assignee: "patchwork" })])).toEqual(["b"]); // reviewerOf → human
+  });
+  test("review + another reviewer (eq3) → NOT in queue", () => {
+    expect(q([t({ id: "c", reviewer: "eq3" })])).toEqual([]);
+    expect(q([t({ id: "d", by: "eq3", assignee: "patchwork" })])).toEqual([]); // reviewerOf → eq3
+  });
+  test("ready state → in queue (bug-report / decision gate)", () => {
+    expect(q([t({ id: "e", state: "ready" })])).toEqual(["e"]);
+  });
+  test("blocked for tony/human/lead → in; blocked for a peer → out", () => {
+    expect(q([t({ id: "f", state: "blocked", block: { for: "tony", kind: "needs_input" } })])).toEqual(["f"]);
+    expect(q([t({ id: "g", state: "blocked", block: { for: "eq3", kind: "dependency" } })])).toEqual([]);
+  });
+  test("done / in-progress / todo → never in queue", () => {
+    expect(q([t({ id: "h", state: "done", reviewer: "tony" }), t({ id: "i", state: "in-progress" }), t({ id: "j", state: "todo" })])).toEqual([]);
+  });
+  test("empty / null → empty", () => {
+    expect(waitingForTony([])).toEqual([]);
+    expect(waitingForTony(null)).toEqual([]);
   });
 });
 

@@ -128,6 +128,27 @@ export function newestVisibleCommentId(comments, foldableIds) {
   return best ? best.id : null;
 }
 
+// kobo-187: the "รอ Tony เคาะ" queue — cards awaiting the human's approve/merge gate,
+// derived from EXISTING state (no duplicate card): a card in `review` whose resolved
+// reviewer is Tony/human (reviewer field → creator-if-not-doer → human, mirroring
+// store.resolveReviewer), plus `ready` (the bug-report Tony-gate lane) and a card
+// blocked FOR tony/human/lead. DOM-free + annotation-free: unit-tested, injected into
+// the client script via `${waitingForTony.toString()}`. Surface/mark only — never merges.
+export function waitingForTony(tasks) {
+  const reviewerOf = (t) => t.reviewer || (t.by && t.by !== t.assignee ? t.by : "human");
+  const waiting = (t) => {
+    if (!t) return false;
+    if (t.state === "ready") return true; // bug-report / decision gate waits on Tony
+    if (t.state === "review") { const r = reviewerOf(t); return r === "tony" || r === "human"; }
+    if (t.state === "blocked" && t.block) {
+      const f = String(t.block.for || "").toLowerCase();
+      return f === "tony" || f === "human" || f === "lead";
+    }
+    return false;
+  };
+  return (tasks || []).filter(waiting);
+}
+
 function companyBody(): string {
   return `<!doctype html>
 <html lang="en">
@@ -293,6 +314,17 @@ function companyBody(): string {
     .mention-reply-btn { font-size:var(--t-xs); padding:3px 10px; border-radius:8px; border:1px solid var(--bd-warn); color:var(--warn); background:var(--field-bg); cursor:pointer; }
     .mention-reply-btn:hover { border-color:var(--warn); }
     .mention-reply-btn:disabled { opacity:.55; cursor:default; }
+    /* kobo-187: "รอ Tony เคาะ" approval queue — mirrors mentions-bar, green (approve) accent */
+    .approval-bar { margin-bottom:var(--s-4); border:1px solid var(--ok, #3fb950); border-radius:var(--r-lg); background:var(--col); padding:var(--s-4) var(--s-5); }
+    .approval-bar[hidden] { display:none; }
+    .approval-bar .approval-head { display:flex; align-items:center; gap:var(--s-3); color:var(--ok, #3fb950); font-weight:600; font-size:var(--t-sm); margin-bottom:var(--s-3); }
+    .approval-bar .approval-head .count { margin-left:auto; color:var(--muted); font-variant-numeric:tabular-nums; }
+    .approval-row { display:flex; align-items:center; gap:var(--s-2); flex-wrap:wrap; padding:var(--s-2) 0; border-top:1px dashed var(--line); }
+    .approval-row:first-of-type { border-top:0; }
+    .approval-state { font-size:var(--t-xs); color:var(--muted); font-variant-numeric:tabular-nums; }
+    .approve-btn { font-size:var(--t-xs); padding:3px 12px; border-radius:8px; border:1px solid var(--ok, #3fb950); color:var(--ok, #3fb950); background:var(--field-bg); cursor:pointer; }
+    .approve-btn:hover { border-color:var(--ok, #3fb950); filter:brightness(1.15); }
+    .approve-btn:disabled { opacity:.55; cursor:default; }
     /* kobo-128 — parent-badge: open ask-subcards routed to Tony (⧉ N open →tony);
        once answered (done) the badge flips to a review-colored "answered ✓". */
     .pill.q-open { color:var(--warn); border-color:var(--bd-warn); }
@@ -590,6 +622,7 @@ function companyBody(): string {
     <section class="tabpanel" data-tab="kanban" role="tabpanel">
       <div class="card">
         <div class="mentions-bar" id="mentions-bar" hidden></div>
+        <div class="approval-bar" id="approval-bar" hidden></div>
         <div class="family-bar" id="family-bar" hidden></div>
         <div class="assignee-bar" id="assignee-bar" hidden></div>
         <div class="attention" id="attention-panel" hidden>
@@ -824,6 +857,13 @@ function renderDetailMeta(task) {
   }
   const wf = waitFor(task);
   if (wf) bar.appendChild(el('span', 'pill wait', '⏳ ' + wf));
+  // kobo-187: approve button right on the card when it's in the Tony gate (mark-only).
+  if (waitingForTony([task]).length) {
+    const btn = el('button', 'approve-btn', '✅ approve'); btn.type = 'button';
+    btn.title = 'mark Tony approved (comment) — does NOT merge';
+    btn.addEventListener('click', () => approveCard(task.id, btn));
+    bar.appendChild(btn);
+  }
   bar.hidden = !bar.childNodes.length;
 }
 // kobo-62 — assignee avatar (core face). Reuses the maw-pane color hash + kobo-71
@@ -1280,6 +1320,7 @@ function commentBubble(task, c, indent, parent) {
 ${orderCommentTree.toString()}
 ${foldableResolvedIds.toString()}
 ${newestVisibleCommentId.toString()}
+${waitingForTony.toString()}
 
 function renderDetailComments(task) {
   const host = $('detail-comments');
@@ -1638,6 +1679,50 @@ function renderMentions(tasks) {
   bar.hidden = false;
 }
 
+// kobo-187: the "รอ Tony เคาะ" approval queue at the board head — every card awaiting
+// the human's gate (waitingForTony) surfaced in one place, each with an approve button.
+// Approve is MARK-ONLY: it posts a "✅ Tony approved" comment (POST /api/tasks/comment,
+// actor=tony) — it never merges (golden rule; merge stays with pr-watch / Tony).
+function renderApprovalQueue(tasks) {
+  const bar = $('approval-bar');
+  const pend = waitingForTony(tasks);
+  if (!pend.length) { bar.hidden = true; bar.replaceChildren(); return; }
+  bar.replaceChildren();
+  const head = el('div', 'approval-head');
+  head.appendChild(el('span', '', '✅ รอ Tony เคาะ'));
+  head.appendChild(el('span', 'count', String(pend.length)));
+  bar.appendChild(head);
+  for (const t of pend) {
+    const row = el('div', 'approval-row');
+    const idc = el('span', 'mention-id', t.id);
+    makeChip(idc, () => { const x = taskIndex.byId.get(t.id) || t; openDetail(x); }); // click id → open the card
+    row.appendChild(idc);
+    const title = el('span', 'mention-txt', t.title || ''); title.title = t.title || '';
+    row.appendChild(title);
+    row.appendChild(el('span', 'approval-state', t.state + (t.pr ? ' · PR #' + t.pr : '')));
+    const btn = el('button', 'approve-btn', '✅ approve'); btn.type = 'button';
+    btn.addEventListener('click', () => approveCard(t.id, btn));
+    row.appendChild(btn);
+    bar.appendChild(row);
+  }
+  bar.hidden = false;
+}
+
+// kobo-187: approve = mark only. Posts a "✅ Tony approved" comment (actor=tony,
+// server-side). NEVER merges — the merge stays a manual / pr-watch step (golden rule
+// "ห้าม merge อัตโนมัติ"). Reuses the existing comment endpoint — no new route.
+async function approveCard(id, btn) {
+  if (!currentCompany() || !id) return;
+  if (btn) btn.disabled = true;
+  try {
+    await postJson('/api/tasks/comment', { company: currentCompany(), id: id, text: '✅ Tony approved' });
+    await load();
+  } catch (err) {
+    if (btn) btn.disabled = false;
+    statusEl.textContent = 'approve failed: ' + errMsg(err); statusEl.className = 'error';
+  }
+}
+
 const FLOW = ['backlog', 'todo', 'ready', 'in-progress', 'review', 'done'];
 const COLS = ['backlog', 'todo', 'ready', 'in-progress', 'review', 'done', 'rejected']; // board columns = flow + Rejected terminal lane (kobo-101)
 
@@ -1664,6 +1749,7 @@ function renderBoard(tasks) {
   updateFamilyBar();
   updateAssigneeBar(); // kobo-127 — owner filter clear bar
   renderMentions(tasks); // kobo-128 — @mention decision queue at the board head
+  renderApprovalQueue(tasks); // kobo-187 — "รอ Tony เคาะ" approval queue
   const fam = familyFilter ? familyMembers(familyFilter) : null;
   let shown = fam ? tasks.filter((t) => fam.has(t.id)) : tasks;
   if (assigneeFilter) shown = shown.filter((t) => t.assignee === assigneeFilter); // kobo-127 — owner filter

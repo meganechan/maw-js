@@ -49,6 +49,15 @@ describe("crew-skills global asset contract", () => {
     expect(parsed.hooks.Stop[0].hooks[0].command).toContain("$HOME/.claude/hooks/crew-worker-stop.sh");
   });
 
+  // kobo-196 — worker panes spawn with crew-worker-settings.json (not the repo's
+  // settings), so the auto-seat SessionStart:clear hook must ride this asset too
+  // to cover them (scoped-both: repo settings → lead/comm/conductor, this → workers).
+  test("worker settings carries the SessionStart:clear seat-resume hook", () => {
+    const parsed = JSON.parse(readFileSync(join(assetsDir, "crew-worker-settings.json"), "utf8"));
+    const entry = parsed.hooks.SessionStart.find((e: any) => e.matcher === "clear");
+    expect(entry.hooks[0].command).toBe("bash $HOME/.claude/hooks/seat-resume.sh");
+  });
+
   // kobo-174 — the lead card-gate hook ships as an executable global asset so an
   // oracle that opts in (settings.json .mawCardGate) points at a real script.
   test("card-gate hook is a synced executable asset", () => {
@@ -159,22 +168,28 @@ describe("crew-skills sync", () => {
     expect(formatSyncResult(result)).toContain("would install");
   });
 
-  test("wires SessionStart:clear seat-resume hook into global settings.json", () => {
+  test("wires SessionStart:clear seat-resume hook into the REPO settings, not global (scoped-both)", () => {
     const home = freshHome();
-    const result = syncCrewSkills({ home, assetsDir });
+    const repoDir = freshHome(); // stands in for the oracle repo dir
+    const result = syncCrewSkills({ home, assetsDir, repoDir });
     expect(result.seatHookWired).toBe(true);
+    // asset script still installs globally (~/.claude/hooks) — unchanged
     expect(existsSync(join(home, ".claude/hooks/seat-resume.sh"))).toBe(true);
-    const settings = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8"));
+    // the wiring lands in the REPO's .claude/settings.json …
+    const settings = JSON.parse(readFileSync(join(repoDir, ".claude/settings.json"), "utf8"));
     const entry = settings.hooks.SessionStart.find((e: any) => e.matcher === "clear");
     expect(entry.hooks[0].command).toBe("bash $HOME/.claude/hooks/seat-resume.sh");
+    // … and NEVER the user's global ~/.claude/settings.json (worker.3 reject)
+    expect(existsSync(join(home, ".claude/settings.json"))).toBe(false);
   });
 
   test("seat-resume hook wiring is idempotent (no duplicate entry)", () => {
     const home = freshHome();
-    syncCrewSkills({ home, assetsDir });
-    const again = syncCrewSkills({ home, assetsDir });
+    const repoDir = freshHome();
+    syncCrewSkills({ home, assetsDir, repoDir });
+    const again = syncCrewSkills({ home, assetsDir, repoDir });
     expect(again.seatHookWired).toBe(false);
-    const settings = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8"));
+    const settings = JSON.parse(readFileSync(join(repoDir, ".claude/settings.json"), "utf8"));
     const clears = settings.hooks.SessionStart.filter((e: any) => e.matcher === "clear");
     expect(clears.length).toBe(1);
   });

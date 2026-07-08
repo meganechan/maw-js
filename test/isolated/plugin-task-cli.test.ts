@@ -265,6 +265,19 @@ describe("maw company task runner (runTask)", () => {
     expect(t.reviewReason).toBe("cross-company change");
   });
 
+  test("move to need-answer requires a reason (Tony's decision queue) (kobo-218)", async () => {
+    await run(["add", "which way", "--company", "pgw"]); // pgw-1
+    const noReason = await run(["move", "pgw-1", "need-answer", "--company", "pgw"]);
+    expect(noReason.ok).toBe(false);
+    expect(noReason.error).toContain("--reason is required");
+    expect(readTask("pgw", "pgw-1")!.state).toBe("todo");
+    const ok = await run(["move", "pgw-1", "need-answer", "--reason", "A or B?", "--company", "pgw"]);
+    expect(ok.ok).toBe(true);
+    const t = readTask("pgw", "pgw-1")!;
+    expect(t.state).toBe("need-answer");
+    expect(t.reviewReason).toBe("A or B?");
+  });
+
   test("move to a non-approve parking state still needs no reason (kobo-191 regression)", async () => {
     await run(["add", "park me", "--company", "pgw"]); // pgw-1
     const r = await run(["move", "pgw-1", "backlog", "--company", "pgw"]);

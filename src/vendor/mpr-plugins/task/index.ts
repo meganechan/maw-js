@@ -58,6 +58,7 @@ import {
   parseMentions,
   parsePrNumber,
   approveTask,
+  needAnswerTask,
   migrateQuestionNotesToComments,
   parsePrRepo,
   readTask,
@@ -165,6 +166,7 @@ const STATE_LABEL: Record<TaskState, string> = {
   "ready": "READY",
   "in-progress": "IN-PROGRESS",
   "review": "REVIEW",
+  "need-answer": "NEED-ANSWER",
   "approve": "APPROVE",
   "done": "DONE",
   "rejected": "REJECTED",
@@ -342,12 +344,14 @@ export async function runTask(
       const me = await resolveActor(flags["--from"]);
       const id = flags._[0];
       const state = flags._[1] as TaskState | undefined;
-      if (!id || !state) return { ok: false, error: "usage: maw company task move <id> <backlog|todo|ready|approve> [--reason <why> (approve)]" };
+      if (!id || !state) return { ok: false, error: "usage: maw company task move <id> <backlog|todo|ready|approve|need-answer> [--reason <why> (approve/need-answer)]" };
       // kobo-189: `approve` (the human gate before done) joins the manual-override
-      // targets — a human parks a reviewed card in Approve. in-progress/review/done
-      // still go via start/review/done; blocked via block.
-      if (state !== "backlog" && state !== "todo" && state !== "ready" && state !== "approve") {
-        return { ok: false, error: `move target must be backlog, todo, ready or approve (in-progress/review/done via start/review/done; blocked via block)` };
+      // targets — a human parks a reviewed card in Approve. kobo-218: `need-answer`
+      // (Tony's DECISION queue) joins too — the owner parks a card there instead of
+      // hold+@tony. in-progress/review/done still go via start/review/done; blocked
+      // via block.
+      if (state !== "backlog" && state !== "todo" && state !== "ready" && state !== "approve" && state !== "need-answer") {
+        return { ok: false, error: `move target must be backlog, todo, ready, approve or need-answer (in-progress/review/done via start/review/done; blocked via block)` };
       }
       const company = resolveCompany(flags["--company"], me);
       if (!company) return { ok: false, error: "no company — pass --company <c>" };
@@ -361,6 +365,18 @@ export async function runTask(
         const t = approveTask(company, id, me, flags["--reason"]);
         if (!t) return { ok: false, error: `task not found: ${id}` };
         console.log(`\x1b[32m✋ approve\x1b[0m ${t.id} \x1b[90m→ ${resolveReviewer(t)} (${t.reviewReason})\x1b[0m: ${t.title}`);
+        return { ok: true };
+      }
+      // kobo-218: moving INTO need-answer carries a mandatory question (the lane is
+      // Tony's decision queue — every card says WHAT it waits on). Same reason-park
+      // discipline as approve; route through needAnswerTask (single enforcement point).
+      if (state === "need-answer") {
+        if (!flags["--reason"] || !flags["--reason"].trim()) {
+          return { ok: false, error: "--reason is required to move a card to need-answer (Tony's decision queue — say what you need answered)" };
+        }
+        const t = needAnswerTask(company, id, me, flags["--reason"]);
+        if (!t) return { ok: false, error: `task not found: ${id}` };
+        console.log(`\x1b[36m❓ need-answer\x1b[0m ${t.id} \x1b[90m→ ${resolveReviewer(t)} (${t.reviewReason})\x1b[0m: ${t.title}`);
         return { ok: true };
       }
       const t = moveTask(company, id, state, me);

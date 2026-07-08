@@ -184,12 +184,12 @@ export function taskArgs(input: TaskInput): string[] {
     }
     case "move": {
       const mid = needId("move");
-      if (!input.state) throw new Error("task move requires a state (backlog|todo|ready|approve)");
+      if (!input.state) throw new Error("task move requires a state (backlog|todo|ready|approve|need-answer)");
       const argv = ["company", "task", "move", mid, input.state];
-      // kobo-191: moving into approve carries a mandatory reason (the Approve lane
-      // is the human queue — forward it so the CLI doesn't reject the MCP move).
-      if (input.state === "approve") {
-        if (!input.reason) throw new Error("task move to approve requires a reason (why this card needs a human decision)");
+      // kobo-191/218: moving into approve OR need-answer carries a mandatory reason
+      // (both are Tony's queues — forward it so the CLI doesn't reject the MCP move).
+      if (input.state === "approve" || input.state === "need-answer") {
+        if (!input.reason) throw new Error(`task move to ${input.state} requires a reason (${input.state === "approve" ? "why this card needs a human decision" : "what you need Tony to answer"})`);
         argv.push("--reason", input.reason);
       }
       return [...argv, ...common()];

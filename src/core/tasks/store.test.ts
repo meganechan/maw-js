@@ -1029,6 +1029,14 @@ describe("needAnswerTask (kobo-218 — Tony's decision queue, off-flow, question
   });
 });
 
+describe("addTask born-in-approve (kobo-218 — CREATE a deploy-approval card into the Approve lane)", () => {
+  test("state=approve + reviewReason → card opens in approve carrying the WHY", () => {
+    const t = addTask({ company: "app", title: "deploy m5", by: "eq3", assignee: "patchwork", state: "approve", reviewReason: "restart maw-server on m5" });
+    expect(t.state).toBe("approve");
+    expect(t.reviewReason).toBe("restart maw-server on m5"); // Approve lane invariant — every card says why
+  });
+});
+
 describe("reviewTask persists the reviewer field (kobo-144 — plain review keeps it)", () => {
   test("a card with a persistent reviewer keeps it through a plain review (no --to)", () => {
     const t = addTask({ company: "rev", title: "t", by: "eq3", assignee: "patchwork", reviewer: "somsri" });

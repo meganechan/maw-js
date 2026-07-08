@@ -101,6 +101,8 @@ describe("mcp plugin standalone boundary (#2113)", () => {
     // `add` accepts `--state`. taskArgs maps both to the canonical company surface.
     expect(tools).toContain('["company", "task", "move", mid, input.state');
     expect(tools).toContain('argv.push("--state", input.state)');
+    // kobo-218: `add` forwards --reason (born-in-approve deploy card carries WHY; CLI enforces it).
+    expect(tools).toContain('if (input.reason) argv.push("--reason", input.reason)');
     expect(server).toContain('"move"'); // enum + title advertise the verb
     // kobo-133: ready state — move accepts it (auto-promote's manual override);
     // the state enum + move error advertise backlog|todo|ready on both surfaces.

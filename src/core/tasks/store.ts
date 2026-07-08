@@ -290,6 +290,7 @@ export interface AddTaskInput {
   parentIds?: string[]; // card→card deps (ADR 0003 A) — child is blocked until each parent is done/archived
   body?: string; // free text / markdown checklist (ADR 0003 C)
   reviewer?: string; // kobo-144: persistent per-card reviewer (resolve chain head)
+  reviewReason?: string; // kobo-218: born-in-approve deploy-approval card carries WHY (the Approve lane invariant — every card says why it's in Tony's queue)
 }
 
 /**
@@ -319,6 +320,7 @@ export function addTask(input: AddTaskInput): TaskRecord {
   if (input.parentIds?.length) task.parentIds = [...new Set(input.parentIds)]; // dedupe, drop if empty
   if (input.body?.length) task.body = input.body;
   if (input.reviewer) task.reviewer = input.reviewer; // kobo-144: persistent per-card reviewer
+  if (input.reviewReason) task.reviewReason = input.reviewReason; // kobo-218: born-in-approve card's WHY
 
   // kobo-133: born ready — a todo card whose deps are ALL already done/archived
   // skips the todo lane. Without this it would strand: the parent-done event that

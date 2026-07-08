@@ -285,6 +285,23 @@ describe("maw company task runner (runTask)", () => {
     expect(readTask("pgw", "pgw-1")!.state).toBe("backlog");
   });
 
+  test("add --state approve CREATES a deploy-approval card into the Approve lane; --reason required (kobo-218)", async () => {
+    const noReason = await run(["add", "deploy m5", "--state", "approve", "--company", "pgw"]);
+    expect(noReason.ok).toBe(false);
+    expect(noReason.error).toContain("--reason is required");
+    const ok = await run(["add", "deploy m5", "--state", "approve", "--reason", "restart maw-server", "--company", "pgw"]); // pgw-1
+    expect(ok.ok).toBe(true);
+    const t = readTask("pgw", "pgw-1")!;
+    expect(t.state).toBe("approve");
+    expect(t.reviewReason).toBe("restart maw-server"); // carries the WHY
+  });
+
+  test("add --state in-progress is still refused (only backlog|todo|approve addable) (kobo-218)", async () => {
+    const r = await run(["add", "no direct", "--state", "in-progress", "--company", "pgw"]);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("--state must be backlog, todo or approve");
+  });
+
   test("reject on a done card is refused — terminal, no resurrection (kobo-101)", async () => {
     await run(["add", "shipped", "--company", "pgw"]); // pgw-1
     await run(["done", "pgw-1", "--company", "pgw"]);

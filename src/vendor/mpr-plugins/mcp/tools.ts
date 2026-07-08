@@ -176,6 +176,7 @@ export function taskArgs(input: TaskInput): string[] {
       if (input.dept) argv.push("--dept", input.dept);
       if (input.epic) argv.push("--epic", input.epic);
       if (input.state) argv.push("--state", input.state);
+      if (input.reason) argv.push("--reason", input.reason); // kobo-218: add --state approve → deploy-approval card carries WHY (CLI enforces reason)
       if (input.assignee) argv.push("--assignee", input.assignee);
       if (input.reviewer) argv.push("--reviewer", input.reviewer);
       for (const p of input.parent ?? []) argv.push("--parent", p);

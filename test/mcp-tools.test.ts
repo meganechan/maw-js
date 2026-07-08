@@ -173,6 +173,11 @@ describe("taskArgs", () => {
       .toEqual(["company", "task", "add", "later", "--state", "backlog"]);
   });
 
+  test("add: --state approve forwards --reason for a born-in-approve deploy card (kobo-218)", () => {
+    expect(taskArgs({ action: "add", title: "deploy m5", state: "approve", reason: "restart maw-server" }))
+      .toEqual(["company", "task", "add", "deploy m5", "--state", "approve", "--reason", "restart maw-server"]);
+  });
+
   test("move: id + state → company task move argv (kobo-70)", () => {
     expect(taskArgs({ action: "move", id: "kobo-5", state: "backlog", company: "kobo" }))
       .toEqual(["company", "task", "move", "kobo-5", "backlog", "--company", "kobo"]);

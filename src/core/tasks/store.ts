@@ -212,6 +212,21 @@ function writeTaskRecord(task: TaskRecord): void {
 }
 
 /**
+ * kobo-253 (state-machine, slice B) — persist a TRANSITION with a dep re-check. Every
+ * transition (start/claim/move/review/pr-open) tries to land a card in a flow lane; if a
+ * dep is STILL pending, reconcile forces it to blocked (+prevState) FIRST, so a card can
+ * never slip past a pending dep into an actionable lane. On a transition the mutator has
+ * already set the target flow state, so reconcile's restore branch (which fires only from
+ * state="blocked") is a no-op here — this is ENTER-only (auto-promote-back is slice C).
+ * The write-path invariant (kobo-252 slice A) then guarantees the persisted record is one
+ * truth. Use INSTEAD of writeTaskRecord in the transition mutators.
+ */
+function writeTaskWithDepGuard(task: TaskRecord): void {
+  reconcileDependencyState(task, parentStateResolver(task.company));
+  writeTaskRecord(task);
+}
+
+/**
  * Create a NEW card, claiming its id atomically via an exclusive open (O_EXCL,
  * the "wx" flag). If a concurrent writer already took this id the open throws
  * EEXIST — we report the collision so the caller can pick the next id and retry.
@@ -414,7 +429,7 @@ export function claimTask(company: string, id: string, oracle: string): TaskReco
   delete task.reviewer;
   delete task.reviewReason;
   task.updatedTs = Date.now();
-  writeTaskRecord(task);
+  writeTaskWithDepGuard(task); // kobo-253: pending dep → snaps back to blocked
   emit(task, oracle, "claim", `claimed ${task.id}: ${task.title}`);
   return task;
 }
@@ -465,7 +480,7 @@ export function startTask(company: string, id: string, oracle: string): TaskReco
   task.assignee = holder;
   task.state = "in-progress";
   task.updatedTs = Date.now();
-  writeTaskRecord(task);
+  writeTaskWithDepGuard(task); // kobo-253: pending dep → snaps back to blocked
   emit(task, holder, "claim", `started ${task.id}: ${task.title}`);
   return task;
 }
@@ -482,8 +497,8 @@ export function moveTask(company: string, id: string, state: TaskState, by: stri
   if (!task) return null;
   task.state = state;
   task.updatedTs = Date.now();
-  writeTaskRecord(task);
-  emit(task, by, "task-updated", `moved ${task.id} → ${state}: ${task.title}`);
+  writeTaskWithDepGuard(task); // kobo-253: pending dep → lands blocked, not the target lane
+  emit(task, by, "task-updated", `moved ${task.id} → ${task.state}: ${task.title}`); // task.state (blocked if dep-guarded)
   return task;
 }
 
@@ -564,7 +579,7 @@ export function reviewTask(company: string, id: string, by: string, opts: Review
   if (opts.to) task.reviewer = opts.to;
   if (opts.reason) task.reviewReason = opts.reason; else delete task.reviewReason;
   task.updatedTs = Date.now();
-  writeTaskRecord(task);
+  writeTaskWithDepGuard(task); // kobo-253 EDGE: review + pending dep → blocked (blocked wins)
   emit(task, by, "task-review", `review ${task.id}${opts.to ? ` → ${opts.to}` : ""}: ${task.title}`);
   return task;
 }
@@ -592,7 +607,7 @@ export function holdTask(company: string, id: string, by: string, reason?: strin
   task.state = "review";
   task.reviewReason = reason || "held";
   task.updatedTs = Date.now();
-  writeTaskRecord(task);
+  writeTaskWithDepGuard(task); // kobo-253 EDGE: hold into review + pending dep → blocked
   emit(task, by, "task-review", `hold ${task.id} → ${resolveReviewer(task)}: ${task.title}`);
   return task;
 }
@@ -660,7 +675,7 @@ export function setTaskPr(company: string, id: string, pr: number, by: string, r
   if (repo && !task.repo) task.repo = repo;
   task.state = "review";
   task.updatedTs = Date.now();
-  writeTaskRecord(task);
+  writeTaskWithDepGuard(task); // kobo-253 EDGE: PR up but dep still pending → blocked, not review
   emit(task, by, "task-review", `review ${task.id} (PR #${pr}): ${task.title}`);
   return task;
 }
@@ -717,7 +732,7 @@ export function prOpenedReview(company: string, id: string, author: string, revi
   task.state = "review";
   task.reviewer = target;
   task.updatedTs = Date.now();
-  writeTaskRecord(task);
+  writeTaskWithDepGuard(task); // kobo-253 EDGE: PR opened while a dep is still pending → blocked wins
   emit(task, author, "task-review", `review ${task.id}${task.pr ? ` (PR #${task.pr})` : ""} → ${target}: ${task.title}`);
   return task;
 }
@@ -1353,8 +1368,10 @@ function reconcileDependencyState(
   const pending = dependencyBlock(task, resolve).blockedBy.length > 0;
   if (pending) {
     // enter only from an actionable flow state; never touch an explicit or an
-    // already-dependency block (leave its prevState + kind intact).
-    if (task.state !== "todo" && task.state !== "ready" && task.state !== "in-progress") return null;
+    // already-dependency block (leave its prevState + kind intact). kobo-253 (slice B)
+    // adds "review" to the enter set: a card sitting in review with an OPEN PR but a
+    // STILL-pending dep must leave review → blocked (PR green, dep-waiting; blocked wins).
+    if (task.state !== "todo" && task.state !== "ready" && task.state !== "in-progress" && task.state !== "review") return null;
     task.prevState = task.state;
     task.state = "blocked";
     task.block = { kind: "dependency" };

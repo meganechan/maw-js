@@ -115,7 +115,7 @@ describe("watch command plugin standalone boundary", () => {
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks/archive"); // kobo-35
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks/note"); // kobo-46
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks/comment"); // kobo-141
-    expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks/resolve"); // kobo-141
+    expect(manifest.hooks!.serve!.ensures).not.toContain("http:route:/api/tasks/resolve"); // kobo-237: route removed → manifest must not declare it
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks/create"); // kobo-48
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks/done"); // kobo-50
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/roster"); // kobo-50

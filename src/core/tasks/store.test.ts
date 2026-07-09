@@ -523,10 +523,15 @@ describe("reject (kobo-101 — terminal 'done but not accepted', parallel to don
   });
 
   test("reject is allowed from todo / review / blocked (any non-terminal)", () => {
-    for (const state of ["todo", "review", "blocked"] as const) {
+    for (const state of ["todo", "review"] as const) {
       const t = addTask({ company: "pgw", title: state, by: "eq3", assignee: "patchwork", state });
       expect(rejectTask("pgw", t.id, "tony", "no")?.state).toBe("rejected");
     }
+    // a blocked card must carry a block {kind} (kobo-252 invariant) — reach it via blockTask,
+    // not a bare state="blocked" (which the CLI never allows and the store now rejects).
+    const b = addTask({ company: "pgw", title: "blocked", by: "eq3", assignee: "patchwork" });
+    blockTask("pgw", b.id, "eq3", { kind: "needs_input", for: "tony" });
+    expect(rejectTask("pgw", b.id, "tony", "no")?.state).toBe("rejected");
   });
 
   test("reject releases the doer's open claim (board-truth — no stale claim)", () => {
@@ -760,6 +765,46 @@ describe("dependency-block = real state + exact restore (kobo-223)", () => {
     expect(readTask("pgw", child.id)!.state).toBe("backlog");
     moveTask("pgw", child.id, "ready", "tony");
     expect(readTask("pgw", child.id)!.state).toBe("ready");
+  });
+});
+
+describe("block↔state mutual-exclusion invariant at the single write-path (kobo-252)", () => {
+  test("point 1: a pending dep DRIVES state=blocked + kind=dependency + prevState (born blocked)", () => {
+    const parent = addTask({ company: "k252a", title: "parent", by: "x" });
+    const child = addTask({ company: "k252a", title: "child", by: "x", assignee: "p", state: "in-progress", parentIds: [parent.id] });
+    const t = readTask("k252a", child.id)!;
+    expect(t.state).toBe("blocked"); // real STATE, not a render overlay
+    expect(t.block?.kind).toBe("dependency");
+    expect(t.prevState).toBe("in-progress"); // remembers where to return (slice C restores it)
+  });
+
+  test("NORMALIZE: moving a blocked card to a flow lane strips the stale block (no blocked+other-lane lie)", () => {
+    const t = addTask({ company: "k252b", title: "solo", by: "x", assignee: "p" });
+    blockTask("k252b", t.id, "eq3", { kind: "needs_input", for: "tony" });
+    const blocked = readTask("k252b", t.id)!;
+    expect(blocked.state).toBe("blocked");
+    expect(blocked.block?.kind).toBe("needs_input");
+    expect(blocked.prevState).toBe("todo"); // remembered the flow lane
+    // human moves it out of blocked → the write-path normalizes away the stale block context
+    moveTask("k252b", t.id, "in-progress", "tony");
+    const moved = readTask("k252b", t.id)!;
+    expect(moved.state).toBe("in-progress");
+    expect(moved.block).toBeUndefined(); // stale block gone — the record is ONE truth
+    expect(moved.prevState).toBeUndefined(); // block context (return-lane) cleared too
+  });
+
+  test("REJECT: persisting state=blocked with no block {kind} is refused at the write-path", () => {
+    const t = addTask({ company: "k252c", title: "solo", by: "x", assignee: "p" }); // todo, no block
+    // a bare move into the blocked lane (no kind) — the CLI routes blocked via `block`,
+    // so this kindless blocked write is a board-lie the store rejects.
+    expect(() => moveTask("k252c", t.id, "blocked", "tony")).toThrow(/block \{kind\}/);
+    expect(readTask("k252c", t.id)!.state).toBe("todo"); // untouched — the reject left the card as-is
+  });
+
+  test("a legitimately blocked card (block present) persists fine — the invariant only bites the lie", () => {
+    const t = addTask({ company: "k252d", title: "solo", by: "x", assignee: "p" });
+    expect(() => blockTask("k252d", t.id, "eq3", { kind: "transient", reason: "flaky CI" })).not.toThrow();
+    expect(readTask("k252d", t.id)!.block?.kind).toBe("transient");
   });
 });
 

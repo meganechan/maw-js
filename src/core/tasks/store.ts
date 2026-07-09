@@ -168,10 +168,42 @@ function nowIso(): string {
 }
 
 /**
+ * kobo-252 (state-machine core, slice A) — the Board Truth mutual-exclusion INVARIANT,
+ * enforced at the SINGLE store write-path so EVERY mutation is airtight (not each of the
+ * ~two-dozen mutators). A card is EITHER blocked OR in a flow lane, never both:
+ *   state === "blocked"  ⟺  a `block` {kind} describing WHY it's off-flow.
+ *
+ * Two directions, two dispositions:
+ *  - NORMALIZE the benign lie: a card in a FLOW lane (state !== "blocked") that still
+ *    carries a `block`/`prevState` — e.g. `moveTask` moved it out of blocked but left
+ *    the block context behind. The block is stale; strip it (+ the prevState, whose only
+ *    job is "where to return on unblock"). The persisted record is then one truth.
+ *  - REJECT the ambiguous lie: state === "blocked" with NO `block`. A blocked card must
+ *    declare its kind (dependency/needs_input/…); a kindless block is "blocked AND not
+ *    really" — we refuse to persist it (throw) so a buggy caller surfaces loudly. The
+ *    blessed way into the blocked lane is `blockTask` (explicit) or the dependency
+ *    reconcile — both set a block; a bare `move --state blocked` is not a path (the CLI
+ *    already routes blocked via `block`).
+ * Mutates `task` in place (the caller holds the same reference it emits from).
+ */
+function enforceBlockInvariant(task: TaskRecord): void {
+  if (task.state !== "blocked") {
+    delete task.block; // flow lane carries no block context
+    delete task.prevState;
+    return;
+  }
+  if (!task.block) {
+    throw new Error(`task ${task.id}: state="blocked" requires a block {kind} — use blockTask or a dependency (kobo-252 invariant)`);
+  }
+}
+
+/**
  * Overwrite an EXISTING card atomically — temp file in the same dir, then rename
  * over the target. Used by updates (claim/complete) where the id already exists.
+ * The block↔state invariant (kobo-252) is enforced here — the single write-path.
  */
 function writeTaskRecord(task: TaskRecord): void {
+  enforceBlockInvariant(task);
   const path = taskFilePath(task.company, task.id);
   mkdirSync(tasksDir(task.company), { recursive: true });
   const tmp = `${path}.${process.pid}.tmp`;
@@ -187,6 +219,7 @@ function writeTaskRecord(task: TaskRecord): void {
  * two adds can compute the same id before either writes.
  */
 export function tryCreateTaskRecord(task: TaskRecord): boolean {
+  enforceBlockInvariant(task); // kobo-252: born-blocked ⟺ block, same invariant as updates
   const path = taskFilePath(task.company, task.id);
   mkdirSync(tasksDir(task.company), { recursive: true });
   try {

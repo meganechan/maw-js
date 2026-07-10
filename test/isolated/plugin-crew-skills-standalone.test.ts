@@ -75,6 +75,10 @@ describe("crew-skills global asset contract", () => {
     expect(hook).toContain("lead-handoff.md"); // eq3 fix + warroom special name
     expect(hook).toContain("ψ/active/crew"); // seats the crew layout too (patchwork dogfood)
     expect(hook).toContain("exit 0"); // solo-safe guards (no dir / no role → silent)
+    // kobo-268 fix: the case globs are case-sensitive, but labels are capitalized
+    // ("🎼 Conductor") — the stem MUST be lowercased or Conductor never matches conduct*.
+    expect(hook).toContain("tr '[:upper:]' '[:lower:]'");
+    expect(hook).toContain("conduct*"); // the capitalized-label role this fix rescues
   });
 
   // kobo-174/200 — the lead card-gate hook ships as an executable global asset so an

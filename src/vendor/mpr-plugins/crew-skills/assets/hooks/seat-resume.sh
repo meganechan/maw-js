@@ -34,8 +34,10 @@ ROLE="${CREW_ROLE:-}"
 [ -n "$ROLE" ] || ROLE="$(tmux display-message -t "${TMUX_PANE:-}" -p '#{@role}' 2>/dev/null || true)"
 # Bare role token out of any decoration/glyph/quoting (e.g. "⚒ worker-1" or "⚒ worker-'1'"
 # → "worker-1"). Strip quotes first so a stray-quoted @role still resolves the numbered file.
+# LOWERCASE the token: labels are capitalized ("🎼 Conductor") but the case globs below are
+# case-sensitive — without this, Conductor never matched conduct* and exited silent (kobo-268).
 ROLE="$(printf '%s' "$ROLE" | tr -d "\"'")"
-STEM="$(printf '%s' "$ROLE" | grep -oiE 'worker-[0-9]+|reviewer|conduct[a-z]*|worker|lead|comm|coord' | head -1)"
+STEM="$(printf '%s' "$ROLE" | grep -oiE 'worker-[0-9]+|reviewer|conduct[a-z]*|worker|lead|comm|coord' | head -1 | tr '[:upper:]' '[:lower:]')"
 [ -n "$STEM" ] || exit 0   # unknown/empty role → don't guess, stay silent.
 
 # File candidates by role — first that exists wins. Covers crew's role-named files

@@ -49,7 +49,7 @@ export const TASK_STATES: TaskState[] = [
 
 // Linear flow columns. Both `need-answer` (kobo-218) and `blocked` are OFF-flow
 // Tony/dependency detours — surfaced as their own lanes, never a progression step.
-export const TASK_FLOW: TaskState[] = ["backlog", "todo", "ready", "in-progress", "review", "approve", "done"];
+export const TASK_FLOW: TaskState[] = ["backlog", "todo", "ready", "in-progress", "review", "approve", "wait-for-deploy", "done"];
 
 // Terminal dispositions — a finished card. Derived off-flow signals (a still-pending
 // dependency, needs-owner) must NOT re-surface it: a done/rejected card doesn't care

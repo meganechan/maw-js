@@ -2022,6 +2022,17 @@ describe("completeOrParkMergedTask — merge flip routes deploy-required → wai
     expect(completeOrParkMergedTask("pgw", t.id, "pr-watch")!.state).toBe("done");
   });
 
+  test("already-parked card → idempotent no-op (no updatedTs bump, no re-emit)", () => {
+    const t = addTask({ company: "pgw", title: "ships", by: "eq3", assignee: "patchwork" });
+    setTaskPr("pgw", t.id, 504, "patchwork");
+    const parked = completeOrParkMergedTask("pgw", t.id, "pr-watch")!;
+    expect(parked.state).toBe("wait-for-deploy");
+    const stamp = readTask("pgw", t.id)!.updatedTs;
+    const again = completeOrParkMergedTask("pgw", t.id, "pr-watch")!; // second call — guard hits
+    expect(again.state).toBe("wait-for-deploy");
+    expect(readTask("pgw", t.id)!.updatedTs).toBe(stamp); // no bump → no churn
+  });
+
   test("missing card → null (no throw)", () => {
     expect(completeOrParkMergedTask("pgw", "pgw-999", "x")).toBeNull();
   });

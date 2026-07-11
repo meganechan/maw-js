@@ -815,6 +815,7 @@ export function completeTask(company: string, id: string, by: string): TaskRecor
 export function completeOrParkMergedTask(company: string, id: string, by: string): TaskRecord | null {
   const task = readTask(company, id);
   if (!task) return null;
+  if (task.state === "wait-for-deploy") return task; // kobo-274 — already parked: idempotent no-op (no re-write/emit), mirroring completeTask's done-guard
   const deployRequired = task.deployRequired ?? task.pr != null;
   if (!deployRequired) return completeTask(company, id, by); // non-deploy → done (unchanged)
   task.state = "wait-for-deploy";
@@ -1292,11 +1293,13 @@ export function archiveOldDone(
  * the pr-watch heal (kobo-80) backfills it on the flip.
  */
 export function findTasksByPr(company: string, pr: number, repo?: string): TaskRecord[] {
-  // Skip BOTH terminal states: a done OR rejected card must never be resurrected
-  // by a later PR-merge poll. Rejected = "closed, not accepted" — flipping it to
-  // done on merge would be the kobo-99 resurrection bug in a new guise (kobo-101).
+  // Skip states pr-watch has ALREADY settled, so a later merge poll never re-processes
+  // them: done + rejected are terminal (kobo-99/101 resurrection guard), and
+  // wait-for-deploy is the merge-park (kobo-274) — re-returning it would re-park every
+  // reconcile poll (updatedTs bump + duplicate "parked" event = board thrash). Slice C
+  // drains it to done via a different path, not another merge flip.
   return listTasks(company).filter(
-    (t) => t.pr === pr && t.state !== "done" && t.state !== "rejected" && (!repo || !t.repo || t.repo === repo),
+    (t) => t.pr === pr && t.state !== "done" && t.state !== "rejected" && t.state !== "wait-for-deploy" && (!repo || !t.repo || t.repo === repo),
   );
 }
 

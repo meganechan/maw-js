@@ -240,4 +240,17 @@ describe("reconcileMergedCards — swallowed merge-edge recovery (kobo-228)", ()
     expect(flipped).toEqual(["docs-1"]);
     expect(readTask("kobo", "docs-1")?.state).toBe("done"); // override → no park
   });
+
+  it("parking is IDEMPOTENT — a second reconcile poll does NOT re-process a wait-for-deploy card (kobo-274)", async () => {
+    const { reconcileMergedCards } = await import("./pr-watch.ts?recon-idem-park");
+    const { readTask } = await import("../tasks/store.ts?recon-idem-park");
+    card("kobo", "parked-1", { state: "review", pr: 54, repo: "meganechan/maw-js", assignee: "p" });
+    const run1 = reconcileMergedCards(54, "meganechan/maw-js", "pr-watch");
+    expect(run1).toEqual(["parked-1"]); // first poll parks it
+    expect(readTask("kobo", "parked-1")?.state).toBe("wait-for-deploy");
+    const stamp1 = readTask("kobo", "parked-1")!.updatedTs;
+    const run2 = reconcileMergedCards(54, "meganechan/maw-js", "pr-watch");
+    expect(run2).toEqual([]); // second poll must NOT re-flip — no churn/event spam
+    expect(readTask("kobo", "parked-1")!.updatedTs).toBe(stamp1); // and no updatedTs bump
+  });
 });

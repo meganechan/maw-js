@@ -164,6 +164,8 @@ maw hey "$ADDR" "<งาน 1 บรรทัด + ชี้ card>"
 >
 > **🚫 ห้าม `run_in_background`** — ทุกอย่างรันใน pane นี้ให้มองเห็น. งานรอ (CI, poll) = foreground (`gh pr checks --watch`). งานใหญ่/ขนาน → **offload เป็น CC Task sub-agent** (ข้างล่าง) ไม่ใช่ spawn worker pane เพิ่ม (worker = single pane)
 >
+> **⚠️ test: scope ให้ card เท่านั้น** (เจาะไฟล์ที่แก้, foreground) — **ห้ามยิง full suite / whole-dir** (`bun test test/isolated/`) ใน bg poll-loop รอ marker. hung test ใบอื่น (ไม่เกี่ยวงานนี้) = worker รอไม่จบ + block cell (kobo-319 บทเรียน: full isolated dir ค้างที่ serve-debug — scoped test 59ms เขียว). coverage-gate ระดับ CI จับ dir ทั้งก้อนให้แล้ว
+>
 > **heavy exec = offload ผ่าน CC Task sub-agent → คืน distilled** (kobo-317): งานหนัก/ยาว/ขนานได้ (สแกนหลายไฟล์, grep กว้าง, รัน test suite, สืบ multi-file, edit เยอะๆ) → **spawn Task sub-agent** (`subagent_type` เช่น general-purpose หรือ Explore, model sonnet, **ยิงหลายตัวขนานได้ใน turn เดียว** = parallel โดยไม่เพิ่ม pane) ให้มันลุยดิบ แล้วคุณ **คืน distilled result** (ข้อสรุป + path + verdict — **ไม่ raw dump**). pane นี้ = มือที่ orchestrate + distill ไม่ใช่ที่ exec ดิบ → durable tier (eq3 head → patchwork crew) อยู่เบา. **exec เบา** (1-2 ไฟล์, คำสั่งเดียว, อ่านสั้น) ทำใน pane ได้เลย ไม่ต้อง offload
 >
 > **comm**: คุยผ่าน `maw hey <addr>` เท่านั้น (ไม่มี SendMessage). ข้อความมี tag `[<host>:<oracle>]` นำหน้า — อ่านข้าม tag. ไม่มี auto-idle-notif → **ping เอง** (Stop hook เสริม signal ให้ แต่เนื้อ = ไฟล์). **⚠️ submit ทุก turn ให้ input box ว่าง** — box ค้าง = `maw hey` deferred. backtick ใน hey string → quote ธรรมดา

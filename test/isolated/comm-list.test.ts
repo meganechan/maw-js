@@ -906,7 +906,9 @@ describe("cmdSend — local target (happy path + error branches)", () => {
     expect(emitFeedCalls[0]).toMatchObject({
       event: "MessageSend", oracle: "test-oracle", node: "white", port: 4000,
     });
-    expect(outs.some((o) => o.includes("delivered") && o.includes("08-mawjs:0: [white:test-oracle] ping"))).toBe(true);
+    // kobo-368: default is compact (target + char-count), not the full echoed
+    // message — the captured tail-line (small, already-truncated) stays visible.
+    expect(outs.some((o) => o.includes("delivered") && o.includes("08-mawjs:0"))).toBe(true);
     expect(outs.some((o) => o.includes("⤷ hello back"))).toBe(true);
   });
 
@@ -1019,7 +1021,8 @@ describe("cmdSend — peer target (federation)", () => {
     expect(runHookCalls.some((h) => h.event === "after_send")).toBe(true);
     expect(logMessageCalls[0]).toMatchObject({ from: "test-oracle", to: "mba:mawjs", route: "peer:mba" });
     expect(emitFeedCalls[0]).toMatchObject({ event: "MessageSend", node: "white", port: 5000 });
-    expect(outs.some((o) => o.includes("delivered") && o.includes("mba") && o.includes("mawjs: [white:test-oracle] ping"))).toBe(true);
+    // kobo-368: default is compact (target + char-count), not the full echoed message.
+    expect(outs.some((o) => o.includes("delivered") && o.includes("mba") && o.includes("mawjs"))).toBe(true);
     expect(outs.some((o) => o.includes("⤷ peer saw it"))).toBe(true);
   });
 

@@ -740,6 +740,22 @@ describe("kobo-393 — wait-for-deploy counts as a satisfied parent state (kobo-
     completeTask("pgw", doneParent.id, "x"); // → done, triggers promoteReadyChildren
     expect(readTask("pgw", child.id)!.state).toBe("ready"); // both parents now count satisfied
   });
+
+  // Mixed case (kobo-394 coexistence guard): a wait-for-deploy parent must NOT hide
+  // a genuinely still-pending parent — the card stays blocked, and the reason names
+  // ONLY the real blocker. If the wfd parent leaked into the reason, that would be a
+  // fresh 394-class board-lie (reason claiming something not actually blocking).
+  test("mixed parents: wait-for-deploy parent satisfied + still-pending parent blocks — reason names ONLY the real blocker", () => {
+    const wfdParent = addTask({ company: "pgw", title: "wfd-parent", by: "x" });
+    setTaskPr("pgw", wfdParent.id, 300, "x");
+    completeOrParkMergedTask("pgw", wfdParent.id, "pr-watch"); // → wait-for-deploy, satisfied
+    const pendingParent = addTask({ company: "pgw", title: "pending-parent", by: "x" }); // stays todo, NOT satisfied
+    const child = addTask({ company: "pgw", title: "child", by: "x", assignee: "p", parentIds: [wfdParent.id, pendingParent.id] });
+    const result = setTaskPr("pgw", child.id, 301, "x");
+    expect(result!.state).toBe("blocked"); // still blocked — pendingParent alone is enough
+    expect(result!.block?.reason).toContain(pendingParent.id);
+    expect(result!.block?.reason).not.toContain(wfdParent.id); // wfd parent correctly excluded — no coexistence lie with kobo-394's reason
+  });
 });
 
 describe("ready state + auto-promote (kobo-133 — Hermes-style: state machine, not view)", () => {

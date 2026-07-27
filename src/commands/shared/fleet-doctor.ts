@@ -34,10 +34,12 @@ export { checkDoubledGhqPaths, canonicalGhqPath } from "./fleet-doctor-checks-gh
 export { checkStalePeers } from "./fleet-doctor-stale-peers";
 export { autoFix } from "./fleet-doctor-fixer";
 export { checkRebootReadiness } from "./fleet-doctor-reboot";
+export { checkBackupStaleness } from "./fleet-doctor-checks-backup";
 
-import { join } from "path";
+import { join, dirname } from "path";
 import { loadConfig } from "../../config";
 import { getGhqRoot } from "../../config/ghq-root";
+import { mawDataDir } from "../../core/xdg";
 import { listSessions } from "../../sdk";
 import { ghqList } from "../../core/ghq";
 import { loadFleetEntries } from "./fleet-load";
@@ -52,6 +54,7 @@ import {
 import { checkMissingRepos } from "./fleet-doctor-checks-repo";
 import { checkDoubledGhqPaths } from "./fleet-doctor-checks-ghq";
 import { checkStalePeers } from "./fleet-doctor-stale-peers";
+import { checkBackupStaleness } from "./fleet-doctor-checks-backup";
 import { autoFix, C, colorFor, iconFor } from "./fleet-doctor-fixer";
 import type { DoctorFinding, Level } from "./fleet-doctor-checks";
 import { checkRebootReadiness } from "./fleet-doctor-reboot";
@@ -138,6 +141,11 @@ export async function cmdFleetDoctor(opts: DoctorOptions = {}): Promise<void> {
     peerAgents[id.node] = id.agents;
   }
   findings.push(...checkMissingAgents(agents, peerAgents));
+
+  // kobo-427 check 8 — sibling of ~/.maw by default, same as maw-home-backup.ts's own
+  // default, overridable via the SAME MAW_BACKUP_DIR env var the backup script reads.
+  const backupDir = process.env.MAW_BACKUP_DIR || join(dirname(mawDataDir()), ".maw-backups");
+  findings.push(...checkBackupStaleness(join(backupDir, "status.json"), Date.now()));
 
   if (opts.json) {
     console.log(JSON.stringify({ node: localNode, findings }, null, 2));

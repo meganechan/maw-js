@@ -1,4 +1,7 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import {
   checkCollisions,
   checkMissingAgents,
@@ -8,6 +11,7 @@ import {
   checkMissingRepos,
   checkDoubledGhqPaths,
   canonicalGhqPath,
+  checkBackupStaleness,
   autoFix,
   type DoctorFinding,
 } from "../src/commands/shared/fleet-doctor";
@@ -350,5 +354,57 @@ describe("checkDoubledGhqPaths (#2578) — report-only doubled github.com paths"
     const out = checkDoubledGhqPaths([doubled, doubled, second], () => false);
     expect(out).toHaveLength(2);
     expect(out.map((f) => f.detail!.doubled)).toEqual([doubled, second]);
+  });
+});
+
+// kobo-427 check 8 — a dead backup job must not look healthy. `nowMs` is injected so these
+// never depend on the real clock.
+describe("checkBackupStaleness (kobo-427)", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "maw-doctor-backup-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  const statusPath = () => join(dir, "status.json");
+  const NOW = 1_800_000_000_000; // fixed reference instant
+
+  test("no status.json at all — error, not silent", () => {
+    const out = checkBackupStaleness(statusPath(), NOW);
+    expect(out).toHaveLength(1);
+    expect(out[0].level).toBe("error");
+    expect(out[0].message).toContain("no ~/.maw backup has ever run");
+  });
+
+  test("a status.json with only a failed attempt, never a success — error", () => {
+    writeFileSync(statusPath(), JSON.stringify({ lastAttemptTs: NOW - 1000, lastError: "disk full" }));
+    const out = checkBackupStaleness(statusPath(), NOW);
+    expect(out).toHaveLength(1);
+    expect(out[0].level).toBe("error");
+    expect(out[0].message).toContain("never succeeded");
+  });
+
+  test("last success within the grace window, no error since — clean, no finding", () => {
+    writeFileSync(statusPath(), JSON.stringify({ lastAttemptTs: NOW - 3600_000, lastSuccessTs: NOW - 3600_000 }));
+    expect(checkBackupStaleness(statusPath(), NOW)).toHaveLength(0);
+  });
+
+  test("last success older than the 26h grace window — error", () => {
+    const twentyEightHoursAgo = NOW - 28 * 3600_000;
+    writeFileSync(statusPath(), JSON.stringify({ lastAttemptTs: twentyEightHoursAgo, lastSuccessTs: twentyEightHoursAgo }));
+    const out = checkBackupStaleness(statusPath(), NOW);
+    expect(out).toHaveLength(1);
+    expect(out[0].level).toBe("error");
+    expect(out[0].message).toContain("grace");
+  });
+
+  test("a NEWER failed attempt after an old-but-still-in-window success — warn, not silent", () => {
+    writeFileSync(statusPath(), JSON.stringify({
+      lastSuccessTs: NOW - 3600_000,
+      lastAttemptTs: NOW - 100, // most recent run was AFTER the last success, and it failed
+      lastError: "sqlite3 not found",
+    }));
+    const out = checkBackupStaleness(statusPath(), NOW);
+    expect(out).toHaveLength(1);
+    expect(out[0].level).toBe("warn");
+    expect(out[0].message).toContain("most recent attempt failed");
   });
 });

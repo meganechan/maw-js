@@ -29,7 +29,7 @@ import {
   describe, test, expect, mock, beforeEach, afterEach, afterAll,
 } from "bun:test";
 import { join } from "path";
-import { mkdtempSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 
 // ─── #820 sandbox: route MAW_HOME at a tmpdir BEFORE any state-touching import.
@@ -39,6 +39,14 @@ import { tmpdir } from "os";
 const SANDBOX = mkdtempSync(join(tmpdir(), "maw-test-fleet-doctor-"));
 process.env.MAW_HOME = SANDBOX;
 process.env.MAW_TEST_MODE = "1";
+
+// kobo-427 check 8 (checkBackupStaleness) reads MAW_BACKUP_DIR/status.json — this file's
+// tests are about the OTHER 7 checks, so seed a healthy status here once rather than have
+// a brand-new "no backup has ever run" finding change every pre-existing exit-code/finding-
+// count assertion below.
+const BACKUP_SANDBOX = mkdtempSync(join(tmpdir(), "maw-test-fleet-doctor-backup-"));
+process.env.MAW_BACKUP_DIR = BACKUP_SANDBOX;
+writeFileSync(join(BACKUP_SANDBOX, "status.json"), JSON.stringify({ lastSuccessTs: Date.now() }));
 
 // ─── Gate ───────────────────────────────────────────────────────────────────
 

@@ -208,3 +208,40 @@ describe("paginateRoomMessages (kobo-322 — default-cap room reads)", () => {
     });
   });
 });
+
+// kobo-430 — the card's binding AC, and the reviewer's own measurement on PR #317's sha:
+// 2 processes writing the SAME room concurrently, 40 messages each, 40/80 lost, counter
+// stalled at 66 after 80 mints. Cause: appendRoomMessage's read-modify-write was
+// last-writer-wins with no lock anywhere. Card explicitly forbids photographing today's
+// single-process behaviour and calling it a test — a same-process simulation cannot
+// reproduce this (JS run-to-completion already proven immune, see kobo-415's own
+// sequential-mint tests), so this uses REAL separate OS processes, same measurement
+// technique the reviewer used.
+describe("appendRoomMessage concurrency (kobo-430 — real cross-process writers)", () => {
+  let dir: string;
+  const prevDataDir = process.env.MAW_DATA_DIR;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "maw-room-concurrency-")); process.env.MAW_DATA_DIR = dir; });
+  afterEach(() => { if (prevDataDir === undefined) delete process.env.MAW_DATA_DIR; else process.env.MAW_DATA_DIR = prevDataDir; rmSync(dir, { recursive: true, force: true }); });
+
+  test("two real OS processes appending 40 messages each to the SAME room concurrently — all 80 messages present, none lost, after both finish", async () => {
+    openRoom("kobo", "concurrent-room", "topic");
+    const fixture = new URL("./__fixtures__/append-worker.ts", import.meta.url).pathname;
+    const env = { ...process.env, MAW_TEST_MODE: "1" };
+
+    const t0 = performance.now();
+    const procA = Bun.spawn(["bun", "run", fixture, "kobo", "concurrent-room", "A", "40"], { env, stderr: "pipe" });
+    const procB = Bun.spawn(["bun", "run", fixture, "kobo", "concurrent-room", "B", "40"], { env, stderr: "pipe" });
+    const [exitA, exitB] = await Promise.all([procA.exited, procB.exited]);
+    const elapsed = performance.now() - t0;
+    if (exitA !== 0) throw new Error(`worker A failed: ${await new Response(procA.stderr).text()}`);
+    if (exitB !== 0) throw new Error(`worker B failed: ${await new Response(procB.stderr).text()}`);
+
+    const room = readRoom("kobo", "concurrent-room")!;
+    const ids = new Set(room.messages.map((m) => m.id));
+    // AC: every message from BOTH sides present — the exact clause, not a proxy for it.
+    expect(room.messages.length).toBe(80);
+    expect(ids.size).toBe(80); // no id silently overwritten either
+    for (let i = 0; i < 40; i++) { expect(ids.has(`A-${i}`)).toBe(true); expect(ids.has(`B-${i}`)).toBe(true); }
+    console.log(`kobo-430: 2 concurrent OS processes, 80 total appends, wall time ${elapsed.toFixed(0)}ms (lock-contention cost, room-file-scoped only)`);
+  }, 20_000);
+});

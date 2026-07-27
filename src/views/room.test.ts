@@ -513,7 +513,7 @@ describe("Brainstorm Room 2-pane chat view (kobo-258)", () => {
     };
   }
 
-  test("kobo-422 L1: all 3 modal-close paths (close button, backdrop/self click, Escape keydown) are wired to the REAL listener, not just present in markup", () => {
+  test("kobo-422 L1: all 4 modal-close paths (close button, self click, backdrop click, Escape keydown) are wired to the REAL listener, not just present in markup", () => {
     const content = { children: [] as any[], replaceChildren(...nodes: any[]) { this.children = nodes; } };
     const mermaidModal = fakeTarget({ style: { display: "none" } });
     const mmdModalClose = fakeTarget();
@@ -531,11 +531,20 @@ describe("Brainstorm Room 2-pane chat view (kobo-258)", () => {
     assertClosed();
 
     reset();
-    mermaidModal.fire("click", { target: { id: "mermaidModal", classList: { contains: () => false } } }); // path 2: click on the modal/backdrop itself
+    mermaidModal.fire("click", { target: { id: "mermaidModal", classList: { contains: () => false } } }); // path 2: click on the modal itself (id match)
+    assertClosed();
+
+    // path 3: click on the backdrop — the real .mmd-modal-backdrop div has NO
+    // id (it's position:absolute; inset:0 over the whole overlay), so a real
+    // click here always has target.id === "" and only the classList branch
+    // saves it. A prior version of this test only ever exercised the id
+    // branch, so a deleted classList.contains(...) clause stayed green.
+    reset();
+    mermaidModal.fire("click", { target: { id: "", classList: { contains: (c: string) => c === "mmd-modal-backdrop" } } });
     assertClosed();
 
     reset();
-    doc.fire("keydown", { key: "Escape" }); // path 3: Escape key
+    doc.fire("keydown", { key: "Escape" }); // path 4: Escape key
     assertClosed();
   });
 

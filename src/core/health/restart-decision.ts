@@ -38,7 +38,23 @@ function trailingRunLength(history: ProbeResult[], status: ProbeResult["status"]
 }
 
 export function shouldRestart(history: ProbeResult[], opts: RestartDecisionOpts = {}): RestartDecision {
-  const threshold = opts.consecutiveDeadThreshold ?? DEFAULT_CONSECUTIVE_DEAD_THRESHOLD;
+  // %5 review at ccac44d: an unguarded threshold of 0 (or negative) makes
+  // `consecutiveDead >= threshold` true unconditionally — an all-healthy
+  // history would restart a server with zero evidence it was ever down.
+  // Clamped, not thrown: this is a pure decision function a caller might
+  // build `opts` for dynamically, and a bad config value should degrade to
+  // the safest usable threshold (1 — a single dead result still restarts,
+  // never zero evidence).
+  const rawThreshold = opts.consecutiveDeadThreshold ?? DEFAULT_CONSECUTIVE_DEAD_THRESHOLD;
+  const threshold = rawThreshold < 1 ? 1 : rawThreshold;
+
+  // F3 (front review): a dead WATCHER (one that never runs a probe at all)
+  // produces the exact same empty history as a genuinely fresh one — the two
+  // are indistinguishable from history alone, so this must never read as
+  // "healthy" in a log a human checks during the incident it can't detect.
+  if (history.length === 0) {
+    return { restart: false, reason: "no observations yet — a watcher that never ran would look identical, do not read this as confirmed healthy" };
+  }
 
   const consecutiveDead = trailingRunLength(history, "dead");
   if (consecutiveDead >= threshold) {

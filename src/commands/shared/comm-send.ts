@@ -531,16 +531,19 @@ export async function detectPermissionMenu(
 
 /**
  * kobo-508 — answers the question this card exists to force an answer to:
- * should detectPermissionMenu also gate SENDING, not just notify? Yes. Before
- * this, the only real send-gate was checkPaneIdle (dispatch-engine's own
- * detectMenu call is notify-only — see checkStall). checkPaneIdle's ghost-strip
- * deletes a whole reverse-video span; detectPermissionMenu strips only ANSI
- * codes and never a whole attribute span, so its numbered-cursor + modal-footer
- * signal survives a shape that would fool checkPaneIdle alone (a menu row drawn
- * in reverse instead of colour — not observed yet, but no longer able to slip
- * through silently if it happens). This is the single place both signals are
- * combined; callers should use this instead of checkPaneIdle directly when the
- * result gates an actual injection.
+ * should detectPermissionMenu also gate SENDING, not just notify? Yes. On the
+ * two paths this fix touches — cmdSend's direct injection below, and the
+ * DispatchEngine sweep via server.ts's sweepPaneIdleCheck — checkPaneIdle used
+ * to be the only send-gate (dispatch-engine's own detectMenu call is
+ * notify-only — see checkStall). checkPaneIdle's ghost-strip deletes a whole
+ * reverse-video span; detectPermissionMenu strips only ANSI codes and never a
+ * whole attribute span, so its numbered-cursor + modal-footer signal survives a
+ * shape that would fool checkPaneIdle alone (a menu row drawn in reverse
+ * instead of colour — not observed yet, but no longer able to slip through
+ * silently on these two paths if it happens). This does NOT claim every send
+ * path in the codebase is gated this way — see kobo-508's card note for the
+ * enumeration of paths that are and aren't. Callers should use this instead of
+ * checkPaneIdle directly when the result gates an actual injection.
  */
 export async function isSafeToInject(
   target: string,

@@ -402,15 +402,24 @@ export async function getInboxStatus(oracleArg?: string, nowMs = Date.now()): Pr
   return status;
 }
 
+/** kobo-470 c7: exported so the ranking rule is directly testable — pulled out of
+ * getAllInboxStatuses (which hits real fleet/fs resolution) rather than proven only
+ * by constructing a whole fleet on disk. A disabled-writer entry has no `level`
+ * verdict at all, so it must never be ranked alongside red/green as though its
+ * `unread` count were real evidence. Surfaces first, ahead of red — "we don't know"
+ * needs eyes on it before "we know it's bad." */
+export function compareInboxStatusForList(a: InboxStatus, b: InboxStatus): number {
+  if (a.writerEnabled !== b.writerEnabled) return a.writerEnabled ? 1 : -1;
+  if (a.level !== b.level) return a.level === "red" ? -1 : 1;
+  return a.oracle.localeCompare(b.oracle);
+}
+
 export async function getAllInboxStatuses(nowMs = Date.now()): Promise<InboxStatus[]> {
   const targets = await resolveFleetInboxStatusTargets();
   const cursor = readCursorStore();
   const statuses = targets.map(target => buildInboxStatus(target, nowMs, cursor));
   writeCursorStore(cursor);
-  return statuses.sort((a, b) => {
-    if (a.level !== b.level) return a.level === "red" ? -1 : 1;
-    return a.oracle.localeCompare(b.oracle);
-  });
+  return statuses.sort(compareInboxStatusForList);
 }
 
 function formatDuration(seconds: number | null): string {
@@ -449,6 +458,12 @@ export function formatInboxStatus(status: InboxStatus): string {
 export function formatInboxStatusList(statuses: InboxStatus[]): string {
   if (!statuses.length) return "no local fleet inboxes found";
   return statuses.map((status) => {
+    // kobo-470 c7: same defect as the single-status formatter, in its sibling —
+    // this is the renderer `status --all`/`ls` actually use, and it was rendering
+    // a disabled-writer entry as a healthy 🟢 with a plain unread count.
+    if (!status.writerEnabled) {
+      return `⚪ ${status.oracle}: WRITER DISABLED — unread ${status.unread} is NOT evidence of no work. Check manually, or re-enable the writer.`;
+    }
     const symbol = status.level === "red" ? "🔴" : "🟢";
     const oldest = status.oldest_age_seconds === null ? "none" : formatDuration(status.oldest_age_seconds);
     const archive = status.last_archive_age_seconds === null ? "never" : `${formatDuration(status.last_archive_age_seconds)} ago`;

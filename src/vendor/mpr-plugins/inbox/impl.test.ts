@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { buildInboxStatus, formatInboxStatus, type InboxStatus } from "./impl";
+import { buildInboxStatus, formatInboxStatus, formatInboxStatusList, compareInboxStatusForList, type InboxStatus } from "./impl";
 
 // %11 c4's trap: MAW_TEST_MODE is BOTH the suite's own env AND the fallback that
 // disables the writer (receiver-inbox.ts:66, `env.MAW_TEST_MODE !== "1"`). Any
@@ -91,5 +91,29 @@ describe("kobo-470 — writer-disabled status must be structurally distinct from
     const disabledSymbol = disabledLine.trim()[0];
     const enabledSymbol = enabledLine.trim()[0];
     expect(disabledSymbol).not.toBe(enabledSymbol);
+  });
+});
+
+describe("kobo-470 c7 — the SIBLING renderer (formatInboxStatusList / `status --all`, `ls`) had the identical defect, unpatched in round one", () => {
+  it("formatInboxStatusList: a writer-disabled entry renders unmistakably, not as a healthy 🟢 with a plain count", () => {
+    const disabled = buildInboxStatus(emptyTarget("list-d1"), Date.now(), {}, { writerEnabled: () => false });
+    const enabled = buildInboxStatus(emptyTarget("list-e1"), Date.now(), {}, { writerEnabled: () => true });
+    const [disabledLine, enabledLine] = formatInboxStatusList([disabled]).split("\n").concat(formatInboxStatusList([enabled]));
+    expect(disabledLine).not.toContain("🟢");
+    expect(disabledLine).not.toContain("🔴");
+    expect(disabledLine).toContain("WRITER DISABLED");
+    expect(disabledLine.trim()[0]).not.toBe(enabledLine.trim()[0]);
+  });
+
+  it("compareInboxStatusForList: a disabled-writer entry sorts ahead of BOTH red and green — never ranked as though its count were evidence", () => {
+    const red = buildInboxStatus(targetWithOneUnread("sort-red"), Date.now(), {}, { writerEnabled: () => true });
+    red.reasons = ["unread>50"]; red.level = "red"; // force red without needing 51 real fixture files
+    const green = buildInboxStatus(emptyTarget("sort-green"), Date.now(), {}, { writerEnabled: () => true });
+    const disabled = buildInboxStatus(emptyTarget("sort-disabled"), Date.now(), {}, { writerEnabled: () => false });
+
+    const sorted = [green, red, disabled].sort(compareInboxStatusForList);
+    expect(sorted[0]).toBe(disabled); // ahead of red, not just ahead of green
+    expect(sorted[1]).toBe(red);
+    expect(sorted[2]).toBe(green);
   });
 });

@@ -564,6 +564,122 @@ describe("Brainstorm Room 2-pane chat view (kobo-258)", () => {
     assertClosed();
   });
 
+  // kobo-438: closed/merged rooms hide by default (Tony reversed kobo-379's
+  // "show it, just gray it out"); a toggle button is the only way back. Extract
+  // the real client-side state + renderRoomList/statusClass/statusDot the same
+  // way loadMermaidModal does above — a fake `document` backs `el()`/`$()` (both
+  // called by the real source), and a fake `location` covers the module-scope
+  // `new URLSearchParams(location.search)` read at load time (unused here —
+  // setRooms/setShowClosed below override the initial state directly).
+  function fakeRoomListEl() {
+    return {
+      className: "", textContent: "", tabIndex: 0,
+      children: [] as any[],
+      classList: { toggle(_cls: string, _on: boolean) {} },
+      appendChild(child: any) { this.children.push(child); },
+      addEventListener() {},
+    };
+  }
+  function loadRoomList() {
+    const box = { children: [] as any[], replaceChildren(...nodes: any[]) { this.children = nodes; }, appendChild(n: any) { this.children.push(n); } };
+    const toggle = { textContent: "", classList: { active: false, toggle(cls: string, on: boolean) { if (cls === "active") this.active = on; } } };
+    const doc = {
+      getElementById: (id: string) => (id === "roomlist" ? box : id === "roomFilterToggle" ? toggle : fakeRoomListEl()),
+      createElement: (tag: string) => ({ tag, className: "", textContent: "", children: [] as any[], appendChild(c: any) { this.children.push(c); }, addEventListener() {} }),
+    };
+    const start = html.indexOf("const $ = (id) =>");
+    const end = html.indexOf("function selectRoom");
+    const src = html.slice(start, end);
+    const api = new Function(
+      "document", "location", "newTopic",
+      `${src}
+      return {
+        renderRoomList, statusClass, statusDot,
+        setRooms: (v) => { rooms = v; },
+        setShowClosed: (v) => { showClosed = v; },
+      };`,
+    )(doc, { search: "" }, () => {});
+    return { ...api, box, toggle };
+  }
+  const room = (id: string, status: string) => ({ id, topic: id, status });
+
+  test("kobo-438: the room list shows ONLY open rooms by default (closed/merged hidden)", () => {
+    const { renderRoomList, setRooms, box } = loadRoomList();
+    setRooms([room("a", "open"), room("b", "closed"), room("c", "merged"), room("d", "open")]);
+    renderRoomList();
+    expect(box.children.length).toBe(2);
+  });
+
+  test("kobo-438: toggling reveals BOTH closed and merged rooms, and toggling back hides them again", () => {
+    const { renderRoomList, setRooms, setShowClosed, box } = loadRoomList();
+    setRooms([room("a", "open"), room("b", "closed"), room("c", "merged")]);
+    renderRoomList();
+    expect(box.children.length).toBe(1);
+    setShowClosed(true);
+    renderRoomList();
+    expect(box.children.length).toBe(3);
+    setShowClosed(false);
+    renderRoomList();
+    expect(box.children.length).toBe(1);
+  });
+
+  test("kobo-438: the toggle button's count is closed+merged together and EXACTLY matches how many rows toggling reveals — never just `closed`", () => {
+    const { renderRoomList, setRooms, setShowClosed, box, toggle } = loadRoomList();
+    setRooms([room("a", "open"), room("b", "closed"), room("c", "closed"), room("d", "merged")]);
+    renderRoomList();
+    expect(toggle.textContent).toContain("(3)"); // 2 closed + 1 merged, not just the 2 closed
+    const hiddenCountShown = Number(toggle.textContent.match(/\((\d+)\)/)![1]);
+    setShowClosed(true);
+    renderRoomList();
+    const revealedCount = box.children.length - 1; // minus the 1 open room
+    expect(revealedCount).toBe(hiddenCountShown);
+  });
+
+  test("kobo-438: the toggle label names BOTH states it hides, never just \"closed\" (a merged-room hunter won't click a button that says only closed)", () => {
+    const { renderRoomList, setRooms, toggle } = loadRoomList();
+    setRooms([room("a", "open"), room("b", "merged")]);
+    renderRoomList();
+    expect(toggle.textContent).toContain("ปิด");
+    expect(toggle.textContent).toContain("รวมแล้ว");
+  });
+
+  test("kobo-438: with zero closed/merged rooms, the toggle still states its count (0) — it never disappears or goes blank", () => {
+    const { renderRoomList, setRooms, toggle } = loadRoomList();
+    setRooms([room("a", "open")]);
+    renderRoomList();
+    expect(toggle.textContent.length).toBeGreaterThan(0);
+    expect(toggle.textContent).toContain("(0)");
+  });
+
+  test("kobo-438: a room that gets closed re-renders out of the open list on the very next render — no manual refresh needed", () => {
+    const { renderRoomList, setRooms, box } = loadRoomList();
+    setRooms([room("a", "open"), room("b", "open")]);
+    renderRoomList();
+    expect(box.children.length).toBe(2);
+    setRooms([room("a", "open"), room("b", "closed")]); // "b" just got closed
+    renderRoomList();
+    expect(box.children.length).toBe(1);
+  });
+
+  test("kobo-438: all rooms hidden by the filter (rooms exist, none open) shows a distinct message — never the \"no rooms yet, start one\" empty state", () => {
+    const { renderRoomList, setRooms, box } = loadRoomList();
+    setRooms([room("a", "closed")]);
+    renderRoomList();
+    expect(box.children.length).toBe(1);
+    const emptyText = box.children[0].children.map((c: any) => c.textContent).join("");
+    expect(emptyText).not.toContain("เปิดหัวข้อแรก"); // the truly-empty-company message
+  });
+
+  test("kobo-438: the toggle button sits directly between the topics header and the room list — never nested in a menu/dropdown a user has to open first", () => {
+    const headIdx = html.indexOf('id="topicsHead"');
+    const toggleIdx = html.indexOf('id="roomFilterToggle"');
+    const listIdx = html.indexOf('id="roomlist"');
+    expect(headIdx).toBeGreaterThan(-1);
+    expect(toggleIdx).toBeGreaterThan(headIdx);
+    expect(listIdx).toBeGreaterThan(toggleIdx);
+    expect(html).toContain("#roomFilterToggle { display:block"); // always rendered, never display:none by default
+  });
+
   test("kobo-380: isSafeUrl allowlists http/https only", () => {
     const { isSafeUrl } = loadLinkify();
     expect(isSafeUrl("http://example.com")).toBe(true);

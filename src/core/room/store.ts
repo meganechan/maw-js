@@ -173,10 +173,20 @@ const SEND_DEDUP_WINDOW_MS = 120_000; // send-write ↔ its lagging delivery fee
  * seq counter (a separate file, separate lock scope, separate card; that race is still
  * open and explicitly out of scope here).
  */
+/**
+ * kobo-430: the lock KEY, factored out so a test (and the fixture it spawns) can go
+ * through the SAME function production code uses — a mutation here that broke the
+ * per-room scope (e.g. returning one constant regardless of args) is then visible to
+ * both sides of the scope test, not just the half that happens to call this directly.
+ */
+export function roomLockPath(company: string, id: string): string {
+  return roomFilePath(company, id);
+}
+
 export function appendRoomMessage(company: string, id: string, msg: RoomMessage): RoomArtifact | null {
   const path = roomFilePath(company, id);
   if (!existsSync(path)) return null; // stray traffic to a never-opened room — no lock, no directory touched, same as before
-  return withPeersLock(path, () => {
+  return withPeersLock(roomLockPath(company, id), () => {
     const room = readRoom(company, id);
     if (!room) return null;
     if (room.messages.some((m) => m.id === msg.id)) return room; // dedup — same lifecycle id

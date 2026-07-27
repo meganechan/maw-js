@@ -9,7 +9,7 @@
  * (eq3-014). Never throws.
  */
 
-import { listCompanies, loadCompany } from "../../vendor/mpr-plugins/company/company-helpers";
+import { listCompanies, loadCompany, companyLead } from "../../vendor/mpr-plugins/company/company-helpers";
 
 export interface OracleScope {
   company: string;
@@ -177,6 +177,21 @@ export function crossCompanyDeliveryRefusal(senderOracle: string, targetOracle: 
     return null; // ambiguous target company — can't confirm a mismatch, allow (see KNOWN GAP above)
   }
   if (!targetCompany) return null; // unregistered/unscoped target — see KNOWN GAP above
+  // kobo-495 — Tony's ruling: cross-company traffic gets exactly one open lane,
+  // straight to the target company's head/lead (not any other member). The
+  // room nudge's `web:web` sender is the concrete case, but the carve-out is
+  // sender-agnostic by design — any outside sender reaching this company's
+  // head is the intended door, the same door a human already has.
+  //
+  // `companyLead(targetCompany)` can legitimately return null (a registered
+  // company with no resolvable manager/dept-lead) — a DIFFERENT state from
+  // "has a head, target just isn't them." Both fall through to the existing
+  // membership check below and refuse the same way (correct — there is no
+  // head to hand-wave a pass to), but the two states are kept distinguishable
+  // in the tests (not just collapsed into one accidental `false`) — the same
+  // discipline kobo-471/474 T3 applied to isPaneAway/identityResolved.
+  const head = companyLead(targetCompany);
+  if (head !== null && target === head) return null;
   return companyScopeViolation(targetCompany, senderOracle);
 }
 

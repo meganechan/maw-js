@@ -14,6 +14,7 @@ import {
   COMPANIES_DIR,
   _setCompaniesDir,
   saveCompany,
+  companyLead,
   type Company,
 } from "../../vendor/mpr-plugins/company/company-helpers";
 import { scopeOfOracle, companyOfOracle, companiesOfOracle, companyOfOracleStrict, companyRoster, companyOracles, crossCompanyDeliveryRefusal, _clearScopeCache } from "./company-scope";
@@ -269,5 +270,45 @@ describe("crossCompanyDeliveryRefusal (kobo-431, Defect A — delivery-side, not
   it("empty/blank target → allow (nothing to scope)", () => {
     saveCompany(pgw());
     expect(crossCompanyDeliveryRefusal("nai", "")).toBeNull();
+  });
+
+  // kobo-495 — Tony's ruling: cross-company traffic gets exactly one open
+  // lane, straight to the target company's head/lead. Every other member
+  // stays refused exactly as before (kobo-341/474 unchanged).
+  describe("head/lead carve-out (kobo-495)", () => {
+    it("an outside sender reaching the target company's head/lead — allowed", () => {
+      saveCompany(pgw()); // manager (head) = thawanban
+      expect(crossCompanyDeliveryRefusal("web", "thawanban")).toBeNull();
+    });
+
+    it("an outside sender reaching any OTHER member (not the head) — still refused, unchanged", () => {
+      saveCompany(pgw()); // head = thawanban; nai is a member but NOT the head
+      const violation = crossCompanyDeliveryRefusal("web", "nai");
+      expect(violation).toContain("cross-company dispatch is blocked");
+    });
+
+    it("head resolves via a dept lead when there is no company-level manager — still allowed", () => {
+      saveCompany(zeta()); // no manager; core.lead = lek → companyLead("zeta") = "lek"
+      expect(crossCompanyDeliveryRefusal("web", "lek")).toBeNull();
+    });
+
+    // The two "no" cases below must NOT collapse into the same code path by
+    // accident (kobo-471/474 T3 discipline) — a company with genuinely NO
+    // resolvable head is a different state from "has a head, wrong target."
+    // Both refuse (there's no head to hand a pass to either way), but they
+    // are pinned as SEPARATE tests so a future change to the head-check
+    // can't silently break one without a red on the other.
+    it("company has a resolvable head, target is a real member but not that head — refused (state: wrong target)", () => {
+      saveCompany(pgw());
+      expect(companyLead("pgw")).toBe("thawanban"); // sanity: head resolves
+      expect(crossCompanyDeliveryRefusal("web", "nai")).not.toBeNull();
+    });
+
+    it("company has NO resolvable head at all — refused (state: no head to carve out for)", () => {
+      saveCompany({ name: "headless", teams: { core: { members: [{ oracle: "solo", role: "dev" }] } } });
+      expect(companyLead("headless")).toBeNull(); // sanity: genuinely no head
+      const violation = crossCompanyDeliveryRefusal("web", "solo");
+      expect(violation).toContain("cross-company dispatch is blocked");
+    });
   });
 });

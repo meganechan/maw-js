@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { roomTag, messageInRoom, roomNudgeArgs, handleRoomSendRequest, handleRoomOpenRequest, handleRoomCloseRequest, handleRoomReopenRequest, handleRoomThreadRequest, handleRoomDistillRequest, handleRoomMergeRequest, handleRoomActivityRequest, handleRoomsListRequest, handleRoomReplyRequest, handleRoomInviteRequest } from "./route";
+import { roomTag, messageInRoom, roomNudgeArgs, handleRoomSendRequest, handleRoomOpenRequest, handleRoomCloseRequest, handleRoomReopenRequest, handleRoomThreadRequest, handleRoomDistillRequest, handleRoomMergeRequest, handleRoomActivityRequest, handleRoomsListRequest, handleRoomReplyRequest, handleRoomInviteRequest, defaultSpawn } from "./route";
 import { appendRoomMessage, readRoom } from "./store";
 import { readTask } from "../tasks/store";
 import { _setCompaniesDir, saveCompany, COMPANIES_DIR } from "../../vendor/mpr-plugins/company/company-helpers";
@@ -641,5 +641,43 @@ describe("kobo-390: narrow @tag scope to room participants + idempotent invite �
     expect(((await r3.json()) as { to: string | null }).to).toBeNull();
     expect(v3.calls).toHaveLength(0);
     expect(v3.calls.flat()).not.toContain("tony");
+  });
+});
+
+// kobo-495 — defaultSpawn (the real `maw` subprocess path every test above bypasses
+// via an injected fake) must surface a real failure, not swallow it. Exercised with a
+// REAL local `maw` subprocess and a REAL non-zero exit (an unrecognized verb — this
+// never reaches delivery/dispatch, no fleet traffic, safe) rather than asserting on
+// source text or "the option was passed" (front's explicit acceptance bar for this card).
+describe("defaultSpawn surfaces a real subprocess failure (kobo-495, sibling of kobo-481)", () => {
+  let errSpy: { calls: unknown[][]; restore: () => void };
+  function spyConsoleError() {
+    const calls: unknown[][] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => { calls.push(args); };
+    return { calls, restore: () => { console.error = original; } };
+  }
+  beforeEach(() => { errSpy = spyConsoleError(); });
+  afterEach(() => { errSpy.restore(); });
+
+  test("a real failing `maw` invocation gets logged with real captured stderr", async () => {
+    const proc = defaultSpawn(["nonexistent-verb-kobo-495"]);
+    const code = await proc.exited;
+    expect(code).not.toBe(0);
+    // watchHeySpawnForFailure is fire-and-forget (`void`) — give its own await-chain
+    // a tick to finish logging after the same exit the test just observed.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(errSpy.calls).toHaveLength(1);
+    const printed = String(errSpy.calls[0][0]);
+    expect(printed).toContain("nonexistent-verb-kobo-495");
+    expect(printed).toContain("unknown command");
+  });
+
+  test("a real successful `maw` invocation adds no noise", async () => {
+    const proc = defaultSpawn(["--version"]);
+    const code = await proc.exited;
+    expect(code).toBe(0);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(errSpy.calls).toHaveLength(0);
   });
 });

@@ -120,16 +120,25 @@ describe("autoCreateFromDispatch", () => {
 });
 
 describe("autoCaptureCardMentions", () => {
-  const existing = new Set(["kobo-1", "kobo-2", "kob-payment-5", "eq3-11"]);
+  // per-id state, default "in-progress" (open) so existing tests keep behaving unchanged
+  const defaultCardState = (): Map<string, string> => new Map([
+    ["kobo-1", "in-progress"],
+    ["kobo-2", "in-progress"],
+    ["kob-payment-5", "in-progress"],
+    ["eq3-11", "in-progress"],
+  ]);
+  let cardState = defaultCardState();
   const noted: { company: string; id: string; by: string; text: string; captured?: boolean }[] = [];
+  let scopeViolationReturns: string | null = null; // kobo-424 (D) — null = sender is a member, allow
   const deps = {
-    readCard: (_c: string, id: string) => (existing.has(id) ? ({ id } as never) : null),
+    readCard: (_c: string, id: string) => (cardState.has(id) ? ({ id, state: cardState.get(id) } as never) : null),
     note: (company: string, id: string, by: string, text: string, opts?: { captured?: boolean }) => {
       noted.push({ company, id, by, text, captured: opts?.captured });
       return {} as never;
     },
+    scopeViolation: (_company: string, _sender: string) => scopeViolationReturns,
   };
-  beforeEach(() => { noted.length = 0; });
+  beforeEach(() => { noted.length = 0; scopeViolationReturns = null; cardState = defaultCardState(); });
 
   const cap = (msg: string, target = "m5:patchwork", sender: string | null = "eq3") =>
     autoCaptureCardMentions(msg, target, () => sender, deps);
@@ -170,5 +179,53 @@ describe("autoCaptureCardMentions", () => {
   test("echo guard: a message already tagged [via hey] is never re-captured", () => {
     expect(cap("[via hey→patchwork] pls look at kobo-1")).toEqual([]);
     expect(noted).toEqual([]);
+  });
+
+  // kobo-424 (A) — 92.3% of auto-notes were landing on already-closed cards;
+  // isOnBoard-style state check at the write point, not just existence.
+  describe("(A) closed cards don't collect auto-notes", () => {
+    test("skips a done card", () => {
+      cardState.set("kobo-1", "done");
+      expect(cap("pls look at kobo-1")).toEqual([]);
+      expect(noted).toEqual([]);
+    });
+    test("skips a rejected card", () => {
+      cardState.set("kobo-1", "rejected");
+      expect(cap("pls look at kobo-1")).toEqual([]);
+      expect(noted).toEqual([]);
+    });
+    test("still captures an open card — no regression (backlog/todo/in-progress/review/etc)", () => {
+      cardState.set("kobo-1", "review");
+      expect(cap("pls look at kobo-1")).toEqual(["kobo-1"]);
+      expect(noted).toHaveLength(1);
+    });
+    test("reopened card (state flipped back off-terminal) accepts notes again — not a permanent stamp", () => {
+      cardState.set("kobo-1", "done");
+      expect(cap("pls look at kobo-1")).toEqual([]);
+      cardState.set("kobo-1", "todo"); // reopened
+      expect(cap("pls look at kobo-1 again")).toEqual(["kobo-1"]);
+    });
+    test("mixed message: closed card filtered per-ref, open card in the same message still captured", () => {
+      cardState.set("kobo-1", "done");
+      expect(cap("kobo-1 is closed but kobo-2 needs kobo-2")).toEqual(["kobo-2"]);
+      expect(noted).toHaveLength(1);
+      expect(noted[0].id).toBe("kobo-2");
+    });
+  });
+
+  // kobo-424 (D) — sender must be a member of the mentioned card's own company;
+  // 70 real cross-company auto-notes landed because company came from a bare
+  // regex match on the message with no membership check against the sender.
+  describe("(D) no cross-company auto-note", () => {
+    test("refuses when sender is not a member of the card's company", () => {
+      scopeViolationReturns = 'refuse: "eq3" is not in company "kobo" — cross-company dispatch is blocked (kobo-341).';
+      expect(cap("look at kobo-1", "m5:patchwork", "eq3")).toEqual([]);
+      expect(noted).toEqual([]);
+    });
+    test("still captures when sender IS a member (no regression)", () => {
+      scopeViolationReturns = null;
+      expect(cap("look at kobo-1", "m5:patchwork", "eq3")).toEqual(["kobo-1"]);
+      expect(noted).toHaveLength(1);
+    });
   });
 });

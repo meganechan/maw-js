@@ -12,9 +12,9 @@ import {
   updatePending,
   hostExec,
   tmuxCmd,
+  receiverInboxAutoWriteEnabled,
   type PendingMessage,
 } from "maw-js/sdk";
-import { receiverInboxAutoWriteEnabled } from "../../../commands/shared/receiver-inbox";
 
 // Re-export queue-store helpers so callers can import from one place.
 export {

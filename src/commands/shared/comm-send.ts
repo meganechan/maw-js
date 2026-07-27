@@ -428,6 +428,14 @@ export function stripGhostText(line: string): string {
           if (n === 0) { dim = false; reverse = false; }
           else if (n === 2) dim = true;
           else if (n === 22) dim = false;
+          // kobo-508: this treats ANY reverse span as ghost and deletes it whole —
+          // including, hypothetically, a permission-menu selected row, IF Claude
+          // Code ever draws it in reverse instead of today's colour (38;5;153).
+          // That would make checkPaneIdle alone read the pane as idle while a
+          // confirm dialog sits open. It's safe today only because of that colour
+          // choice, not because this function knows what a menu is — see
+          // isSafeToInject below, which is the actual second gate that closes
+          // this regardless of which way the TUI happens to render it.
           else if (n === 7) reverse = true;
           else if (n === 27) reverse = false;
         }
@@ -519,6 +527,31 @@ export async function detectPermissionMenu(
   } catch {
     return false;
   }
+}
+
+/**
+ * kobo-508 — answers the question this card exists to force an answer to:
+ * should detectPermissionMenu also gate SENDING, not just notify? Yes. Before
+ * this, the only real send-gate was checkPaneIdle (dispatch-engine's own
+ * detectMenu call is notify-only — see checkStall). checkPaneIdle's ghost-strip
+ * deletes a whole reverse-video span; detectPermissionMenu strips only ANSI
+ * codes and never a whole attribute span, so its numbered-cursor + modal-footer
+ * signal survives a shape that would fool checkPaneIdle alone (a menu row drawn
+ * in reverse instead of colour — not observed yet, but no longer able to slip
+ * through silently if it happens). This is the single place both signals are
+ * combined; callers should use this instead of checkPaneIdle directly when the
+ * result gates an actual injection.
+ */
+export async function isSafeToInject(
+  target: string,
+  host?: string,
+  deps: { captureFn?: typeof capture } = {},
+): Promise<{ safe: boolean; reason?: "typing" | "menu"; lastInput: string }> {
+  const pane = await checkPaneIdle(target, host, deps);
+  if (!pane.idle) return { safe: false, reason: "typing", lastInput: pane.lastInput };
+  const menuOpen = await detectPermissionMenu(target, host, deps);
+  if (menuOpen) return { safe: false, reason: "menu", lastInput: pane.lastInput };
+  return { safe: true, lastInput: pane.lastInput };
 }
 
 /**
@@ -1401,16 +1434,23 @@ export async function cmdSend(
     // Read off the already-loaded config (not a new barrel helper) so the wide
     // set of modules that mock `src/config` inline don't all need a new export.
     if (config.inputGuard?.enabled ?? true) {
-      const pane = await checkPaneIdle(target);
-      if (!pane.idle) {
+      // kobo-508: checkPaneIdle alone was the only real send-gate (detectPermissionMenu
+      // used to be notify-only). isSafeToInject combines both so a menu drawn in a
+      // shape that fools checkPaneIdle's ghost-strip still defers instead of typing
+      // over an open confirm dialog.
+      const safe = await isSafeToInject(target);
+      if (!safe.safe) {
         queueForDispatch({ from: `${config.node ?? "local"}:${senderName}`, to: query, target, message: outboundMessage });
         const inbox = await writeReceiverInbox(target);
-        const reason = `operator input in progress on '${guard.oracle}'; queued — auto-delivers when the pane clears`;
+        const reason = safe.reason === "menu"
+          ? `a permission/confirm menu is open on '${guard.oracle}'; queued — auto-delivers when it clears`
+          : `operator input in progress on '${guard.oracle}'; queued — auto-delivers when the pane clears`;
         if (logQueuedInbox(inbox, target, reason)) {
           await notifyQueuedInbox(inbox, target, reason);
           return;
         }
-        console.log(`\x1b[33mqueued\x1b[0m '${guard.oracle}' has operator input mid-edit — will auto-deliver when the pane clears \x1b[90m(📬)\x1b[0m`);
+        const label = safe.reason === "menu" ? "has a permission menu open" : "has operator input mid-edit";
+        console.log(`\x1b[33mqueued\x1b[0m '${guard.oracle}' ${label} — will auto-deliver when the pane clears \x1b[90m(📬)\x1b[0m`);
         return;
       }
     }

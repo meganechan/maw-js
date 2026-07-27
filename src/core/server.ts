@@ -332,9 +332,13 @@ export async function startBunGatewayServer(
     startDispatchEngine(sendKeys, {
       // Dynamic imports keep comm-send / tmux-class out of server.ts's static
       // link graph (they pull heavy deps that some serve-boot tests mock partially).
+      // kobo-508: this gate is what actually delivers a queued message on the
+      // sweep/auto-deliver path (dispatch-engine.ts's own paneIdle re-check),
+      // same as cmdSend's direct-send path — both real injection points need
+      // the combined signal, not just checkPaneIdle alone.
       paneIdle: async (target) => {
-        const { checkPaneIdle } = await import("../commands/shared/comm-send");
-        return (await checkPaneIdle(target)).idle;
+        const { isSafeToInject } = await import("../commands/shared/comm-send");
+        return (await isSafeToInject(target)).safe;
       },
       // eq3-004 — permission-modal detector (separate from the typing guard) so a
       // pane stuck on a confirm prompt notifies the sender immediately.

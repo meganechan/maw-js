@@ -21,6 +21,7 @@ import { roomActivity, bareName } from "./activity";
 import { readWorklog } from "../worklog/store";
 import { readPresenceRows } from "../presence/route";
 import { listCompanies, companyExists, companyLead, companyOracles } from "../../vendor/mpr-plugins/company/company-helpers";
+import { watchHeySpawnForFailure } from "../tasks/hey-spawn-failure-log";
 
 /** The tag that scopes a message to a room (both directions carry it). */
 export function roomTag(room: string): string {
@@ -62,7 +63,18 @@ export function roomNudgeArgs(room: string, to: string, from = "web"): string[] 
 
 export type SpawnFn = (argv: string[]) => { exited: Promise<number> };
 
-const defaultSpawn: SpawnFn = (argv) => Bun.spawn(["maw", ...argv], { stdout: "ignore", stderr: "ignore" });
+// kobo-495 (lifted from %10's closed PR #334, credited in kobo-506's PR body) — this
+// spawn was fire-and-forget with stderr:"ignore" and no exit-code check, the exact
+// sibling kobo-481 fixed in hey-spawn.ts's spawnHeyProcess but missed here (this call
+// bypasses that file entirely — it shells out to the `maw` CLI directly). A refusal
+// (cross-company gate, kobo-341/495) vanished with zero trace. Same fix pattern reused
+// verbatim rather than a third copy. Exported so the test can exercise the real wiring
+// rather than asserting on source text.
+export const defaultSpawn: SpawnFn = (argv) => {
+  const proc = Bun.spawn(["maw", ...argv], { stdout: "ignore", stderr: "pipe" });
+  void watchHeySpawnForFailure(proc, argv);
+  return proc;
+};
 
 // kobo-385: @handle-in-text → hey-target override. Word-anchored so `a@b.com` / mid-word `@`
 // never match. Hard-deny is caller-independent (roomRepliers harvests every `m.from` that has
@@ -155,8 +167,21 @@ export async function handleRoomSendRequest(request: Request, spawn: SpawnFn = d
     // kobo-260: nudge the lead with a PLAIN/UNTAGGED hey (no [room:<id>]) → the listener
     // does NOT re-capture it → no self-echo (finding #4 dissolves at the root; no dedup
     // needed). The turn is already persisted above; the lead replies via /api/room/reply.
+    //
+    // kobo-506: `void proc.exited` used to discard the exit code entirely, so the
+    // response said ok:true even when the nudge never left the machine (e.g. kobo-495's
+    // cross-company gate refusal). This awaits the SAME exited promise defaultSpawn's own
+    // watchHeySpawnForFailure watcher already consumes (kobo-481/495, lifted above) — no
+    // second stderr read, just observing the exit code the caller-facing response needs.
+    // Deliberately NOT `ok:false`: the turn is already durably persisted (kobo-249 —
+    // persist is decoupled from delivery), so this is "saved but the lead wasn't told",
+    // not "nothing happened." Flipping `ok` would make the web client's existing
+    // `if (!j.ok) throw` retry path re-send the same text and duplicate the turn.
     const proc = spawn(roomNudgeArgs(room, target, from));
-    void proc.exited;
+    const nudgeExitCode = await proc.exited;
+    if (nudgeExitCode !== 0) {
+      return Response.json({ ok: true, room, to: target, notified: false, notifyError: `nudge exited ${nudgeExitCode}` });
+    }
     return Response.json({ ok: true, room, to: target });
   } catch (e) {
     return Response.json({ ok: false, error: e instanceof Error ? e.message : "send failed" }, { status: 500 });

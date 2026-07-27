@@ -107,6 +107,20 @@ describe("Brainstorm Room 2-pane chat view (kobo-258)", () => {
     expect(html).toContain("window.mermaid.initialize({ securityLevel: 'strict', startOnLoad: false, theme: 'base', themeVariables: MERMAID_THEME_VARIABLES })");
   });
 
+  // kobo-422 review (eq3 F1): MERMAID_ASSET_URL's ?v= was only kept in sync with
+  // package.json's mermaid pin by a code comment ("bump alongside package.json's
+  // exact pin") — nothing enforced it. assets.ts now serves this file with
+  // cache-control: immutable, max-age=1yr, so a forgotten bump strands a browser
+  // that already fetched the old asset on it for up to a year. Read the ACTUAL
+  // installed version from package.json at test time (never hardcode it on
+  // either side) so drift in EITHER direction — room.ts falling behind a
+  // mermaid bump, or a package.json edit outpacing room.ts — fails CI.
+  test("kobo-422 F1: MERMAID_ASSET_URL's ?v= is pinned to package.json's real mermaid version, not just a comment", () => {
+    const pkg = require("../../package.json");
+    const installedMermaidVersion = pkg.dependencies.mermaid;
+    expect(html).toContain(`/assets/vendor/mermaid.js?v=${installedMermaidVersion}`);
+  });
+
   // kobo-398 — extract the mermaid loader/renderer straight from the served client
   // script (same technique as loadLinkify above) and run it against stub
   // document/window objects so lazy-by-absence, load-once, and per-block
@@ -470,6 +484,59 @@ describe("Brainstorm Room 2-pane chat view (kobo-258)", () => {
     const target = { closest: () => thumb };
     onThreadClick({ target });
     expect(content.children).toEqual([]);
+  });
+
+  // kobo-422 review (eq3 L1): the markup test above only proves the close
+  // button / backdrop / dialog role EXIST — it never proved anything is
+  // actually wired to them. loadMermaidModal (above) deliberately stops
+  // BEFORE "// ── wire", so calling closeMermaidModal directly (as the two
+  // tests above do) would stay green even if all 3 real addEventListener
+  // registrations were deleted. This helper instead slices in the modal
+  // functions PLUS the exact 4 "// ── wire" lines that bind them (#thread
+  // click, #mmdModalClose click, #mermaidModal click, document keydown), then
+  // the test below fires each stub element's OWN registered handler — never
+  // calling closeMermaidModal by hand — so a removed wiring line fails here.
+  function loadMermaidWiring(elements: Record<string, any>, doc: { addEventListener(ev: string, cb: (ev: any) => void): void }) {
+    const fnStart = html.indexOf("function openMermaidModal");
+    const fnEnd = html.indexOf("// ── wire", fnStart);
+    const wireStart = html.indexOf("$('thread').addEventListener('click', onThreadClick)", fnEnd);
+    const wireEnd = html.indexOf("$('back').addEventListener", wireStart);
+    const src = html.slice(fnStart, fnEnd) + html.slice(wireStart, wireEnd);
+    new Function("$", "document", src)((id: string) => elements[id], doc);
+  }
+  function fakeTarget(extra: Record<string, any> = {}) {
+    const listeners: Record<string, ((ev: any) => void)[]> = {};
+    return {
+      ...extra,
+      addEventListener(ev: string, cb: (ev: any) => void) { (listeners[ev] ||= []).push(cb); },
+      fire(ev: string, arg: any = {}) { (listeners[ev] || []).forEach((cb) => cb(arg)); },
+    };
+  }
+
+  test("kobo-422 L1: all 3 modal-close paths (close button, backdrop/self click, Escape keydown) are wired to the REAL listener, not just present in markup", () => {
+    const content = { children: [] as any[], replaceChildren(...nodes: any[]) { this.children = nodes; } };
+    const mermaidModal = fakeTarget({ style: { display: "none" } });
+    const mmdModalClose = fakeTarget();
+    const doc = fakeTarget();
+    loadMermaidWiring({ mmdModalContent: content, mermaidModal, mmdModalClose, thread: fakeTarget() }, doc);
+
+    const reset = () => { mermaidModal.style.display = ""; content.children = ["x" as any]; };
+    const assertClosed = () => {
+      expect(mermaidModal.style.display).toBe("none");
+      expect(content.children).toEqual([]);
+    };
+
+    reset();
+    mmdModalClose.fire("click"); // path 1: the close button
+    assertClosed();
+
+    reset();
+    mermaidModal.fire("click", { target: { id: "mermaidModal", classList: { contains: () => false } } }); // path 2: click on the modal/backdrop itself
+    assertClosed();
+
+    reset();
+    doc.fire("keydown", { key: "Escape" }); // path 3: Escape key
+    assertClosed();
   });
 
   test("kobo-380: isSafeUrl allowlists http/https only", () => {

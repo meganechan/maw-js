@@ -115,3 +115,50 @@ genuinely blank machine.
 - **error** — last success is older than 26h (daily job + 2h grace)
 - **warn** — the most recent attempt failed, even though an older success is still
   technically within the grace window (the job is failing again right now)
+
+## Installing the daily job (launchd) — what it is, how to remove it
+
+`scripts/com.mawjs.backup.plist` installs a **user LaunchAgent** (runs as `tony`, no root/sudo)
+that fires `runBackup()` once a day at 03:00 local time. This is the ONE thing on this card
+that changes the real machine rather than a project file — Tony's explicit go-ahead required
+before loading, per kobo-427 card notes.
+
+**What gets installed:**
+- Label `com.mawjs.backup`, a copy of `scripts/com.mawjs.backup.plist` placed at
+  `~/Library/LaunchAgents/com.mawjs.backup.plist` (launchd only reads plists from this
+  directory for user agents — the copy in `maw-js/scripts/` is the source template, not itself
+  read by launchd).
+- Runs `/Users/tony/.bun/bin/bun /Users/tony/maw-js/scripts/maw-home-backup.ts` daily at 3:00am
+  — **this path is the LIVE checkout, not any worktree** (same convention as every other
+  deploy in this repo, see `reference_maw_dev_in_worktree_not_live` — a worktree is dev-only,
+  `~/maw-js` on `alpha` is what actually runs).
+- Writes stdout/stderr to `~/.maw-backups/launchd-out.log` / `launchd-err.log` (sibling of the
+  backup snapshots themselves, per the "never inside `~/.maw`" rule above).
+- No network access, no new listening port, no elevated privileges — it does exactly what
+  running `bun scripts/maw-home-backup.ts` by hand does, on a timer.
+
+**PREREQUISITE — do not load yet:** as of this writing (2026-07-27) the live checkout
+(`/Users/tony/maw-js` on `alpha`) does **not** have `scripts/maw-home-backup.ts` — kobo-427
+hasn't merged. Loading the plist before deploy schedules a job against a path that doesn't
+exist yet; it will fail silently every night into `launchd-err.log` until someone notices.
+Load it only **after** this branch has merged to `alpha` and the live checkout has pulled it
+(`ls /Users/tony/maw-js/scripts/maw-home-backup.ts` must exist first).
+
+**Install (run once, after the prerequisite above is met):**
+```bash
+plutil -lint /Users/tony/maw-js/scripts/com.mawjs.backup.plist   # validate before touching launchd
+cp /Users/tony/maw-js/scripts/com.mawjs.backup.plist ~/Library/LaunchAgents/com.mawjs.backup.plist
+launchctl load ~/Library/LaunchAgents/com.mawjs.backup.plist
+launchctl list | grep com.mawjs.backup   # confirm it's loaded — should print a PID or "-" and the label
+```
+
+**Remove (exact reverse, safe at any time, does not touch `~/.maw` or `~/.maw-backups`):**
+```bash
+launchctl unload ~/Library/LaunchAgents/com.mawjs.backup.plist
+rm ~/Library/LaunchAgents/com.mawjs.backup.plist
+launchctl list | grep com.mawjs.backup   # confirm gone — should print nothing
+```
+
+Removing the job does **not** delete any existing snapshots in `~/.maw-backups/` — it only
+stops future runs. To also remove past snapshots, `rm -rf ~/.maw-backups` separately (not part
+of job removal, a deliberate separate step).

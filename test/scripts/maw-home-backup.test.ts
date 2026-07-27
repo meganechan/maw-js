@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { execFileSync, spawnSync } from "child_process";
 import {
   findSqliteFiles,
   findTextFiles,
@@ -90,6 +91,55 @@ describe("maw-home-backup helpers (kobo-427)", () => {
       expect(parsed.note).toContain("in a README");
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  // kobo-427 CLOSING AC (front+lead ruling on the blanket-scan approval) — proof at the
+  // PRODUCED ARTIFACT, not belief that the file-type sweep was thorough. Runs the real script
+  // as the launchd job would invoke it (subprocess, not an in-process import — MAW_HOME/
+  // MAW_BACKUP_DIR are module-level consts captured at import time, so only a fresh process
+  // picks up a per-test override) against a SYNTHETIC fixture with a fabricated credential-
+  // shaped value — never the real ~/.maw. This codebase's own rule, now cell policy: verify a
+  // redaction gap against a synthetic reproduction, never the real failing artifact.
+  test("kobo-427 closing AC — grep the PRODUCED ARCHIVE for a fabricated secret, find none; source file untouched", () => {
+    const home = mkdtempSync(join(tmpdir(), "maw-archive-fixture-"));
+    const backupDir = mkdtempSync(join(tmpdir(), "maw-archive-backup-"));
+    const extractDir = mkdtempSync(join(tmpdir(), "maw-archive-extract-"));
+    try {
+      mkdirSync(join(home, "companies", "acme", "tasks"), { recursive: true });
+      const fakePat = "ghp_" + "aB3dE5fG7hJ9kL1mN3oP5qR7sT9uV1wX"; // fabricated, never a real value
+      const taskFile = join(home, "companies", "acme", "tasks", "acme-1.json");
+      const originalContent = JSON.stringify({ id: "acme-1", note: `secret ${fakePat} pasted here` });
+      writeFileSync(taskFile, originalContent);
+
+      const scriptPath = join(import.meta.dir, "..", "..", "scripts", "maw-home-backup.ts");
+      execFileSync("bun", [scriptPath], {
+        env: { ...process.env, MAW_HOME: home, MAW_BACKUP_DIR: backupDir },
+      });
+
+      const status = readStatus(backupDir);
+      expect(status.snapshotFile).toBeTruthy();
+      execFileSync("tar", ["-xzf", status.snapshotFile!, "-C", extractDir]);
+
+      // grep exits 1 (no match) when clean — spawnSync so a non-zero exit doesn't throw.
+      const grepped = spawnSync("grep", ["-r", "-l", fakePat, extractDir], { encoding: "utf8" });
+      expect(grepped.status).toBe(1); // 1 = grep found NOTHING — secret is not in the archive
+      expect(grepped.stdout.trim()).toBe("");
+
+      // the marker IS present (proves the pass ran, not that it was skipped/no-oped) and the
+      // per-pattern count was recorded, not just believed.
+      const restoredFile = join(extractDir, ".maw", "companies", "acme", "tasks", "acme-1.json");
+      expect(readFileSync(restoredFile, "utf8")).toContain("[REDACTED-kobo427:github-pat]");
+      expect(status.secretRedactionCounts?.["github-pat"]).toBeGreaterThanOrEqual(1);
+
+      // never delete or modify SOURCE files — the original stays exactly as written; only
+      // the staged copy that went into the archive was redacted.
+      expect(readFileSync(taskFile, "utf8")).toBe(originalContent);
+      expect(readFileSync(taskFile, "utf8")).toContain(fakePat);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(backupDir, { recursive: true, force: true });
+      rmSync(extractDir, { recursive: true, force: true });
     }
   });
 });

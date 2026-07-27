@@ -700,8 +700,8 @@ describe("kobo-506: a failed nudge reaches the HTTP caller, not just the server 
   afterEach(() => { if (prev === undefined) delete process.env.MAW_DATA_DIR; else process.env.MAW_DATA_DIR = prev; _setCompaniesDir(origCompaniesDir); rmSync(dir, { recursive: true, force: true }); });
 
   const openR = (b: unknown) => handleRoomOpenRequest(new Request("http://x/api/room/open", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }));
-  const send = (b: unknown, spawn: (a: string[]) => { exited: Promise<number> }) =>
-    handleRoomSendRequest(new Request("http://x/api/room/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }), spawn);
+  const send = (b: unknown, spawn: (a: string[]) => { exited: Promise<number> }, nudgeTimeoutMs?: number) =>
+    handleRoomSendRequest(new Request("http://x/api/room/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }), spawn, nudgeTimeoutMs);
 
   test("nudge exits non-zero → response carries notified:false + the exit code, ok stays true", async () => {
     await openR({ company: "kobo", room: "r", topic: "t" });
@@ -743,5 +743,33 @@ describe("kobo-506: a failed nudge reaches the HTTP caller, not just the server 
     expect(body.ok).toBe(false);
     expect(body.error).toContain("spawn itself failed");
     expect(body.notified).toBeUndefined(); // the new field never appears on this path
+  });
+
+  // kobo-506 request-change (%11, verified real hands-on: a real never-exiting spawn
+  // left the response PENDING at 1500ms, disabled 'send' with no error on screen — the
+  // exact silent-failure shape this card exists to kill, arriving through the new door
+  // this fix itself opened). A hung spawn must not drag the HTTP response with it —
+  // race against a ceiling and answer notified:false rather than hang forever.
+  test("nudge that NEVER exits → response returns within the ceiling with notified:false, not a hang", async () => {
+    await openR({ company: "kobo", room: "r", topic: "t" });
+    const hangingSpawn = () => ({ exited: new Promise<number>(() => { /* never resolves */ }) });
+    const start = Date.now();
+    const res = await send({ room: "r", to: "eq3", text: "hangs forever", from: "web" }, hangingSpawn, 20); // 20ms ceiling — real default is 5000ms, injected small so this test stays fast
+    const elapsedMs = Date.now() - start;
+    expect(elapsedMs).toBeLessThan(500); // returned promptly, not hung on the never-resolving promise
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; notified?: boolean; notifyError?: string };
+    expect(body.ok).toBe(true); // turn still saved
+    expect(body.notified).toBe(false);
+    expect(body.notifyError).toContain("20ms");
+  });
+
+  test("nudge that NEVER exits → the turn is STILL persisted (same guarantee as the exit-1 case)", async () => {
+    await openR({ company: "kobo", room: "r", topic: "t" });
+    const hangingSpawn = () => ({ exited: new Promise<number>(() => { /* never resolves */ }) });
+    await send({ room: "r", to: "eq3", text: "hangs but saved", from: "web" }, hangingSpawn, 20);
+    const room = readRoom("kobo", "r")!;
+    expect(room.messages).toHaveLength(1);
+    expect(room.messages[0]).toMatchObject({ from: "web", text: "hangs but saved" });
   });
 });

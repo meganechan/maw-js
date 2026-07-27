@@ -109,8 +109,12 @@ function resolveRoomTag(text: string, company: string | null, artifact: RoomArti
  * path verifies it; a raw POST could pick any string and have it render as an impersonated
  * teammate). The typed name still reaches the outbound hey's `--from` stamp for notification
  * cosmetics only. `spawn` is injectable for unit tests.
+ *
+ * kobo-506: `nudgeTimeoutMs` bounds how long this waits on the nudge subprocess before
+ * answering with `notified:false` anyway (default below) — injectable so a test can
+ * exercise the timeout path in milliseconds instead of the real ceiling.
  */
-export async function handleRoomSendRequest(request: Request, spawn: SpawnFn = defaultSpawn): Promise<Response> {
+export async function handleRoomSendRequest(request: Request, spawn: SpawnFn = defaultSpawn, nudgeTimeoutMs = 5000): Promise<Response> {
   let body: { room?: unknown; to?: unknown; text?: unknown; from?: unknown };
   try {
     body = (await request.json()) as { room?: unknown; to?: unknown; text?: unknown; from?: unknown };
@@ -177,10 +181,32 @@ export async function handleRoomSendRequest(request: Request, spawn: SpawnFn = d
     // persist is decoupled from delivery), so this is "saved but the lead wasn't told",
     // not "nothing happened." Flipping `ok` would make the web client's existing
     // `if (!j.ok) throw` retry path re-send the same text and duplicate the turn.
+    // kobo-506 request-change (%5/%11) — the naive `await proc.exited` above had no
+    // time ceiling: a spawn that never exits (a truly hung `maw` process, not just a
+    // refusal) drags this HTTP request with it forever. That's the exact silent-failure
+    // shape this card exists to kill, arriving through the new door this fix itself
+    // opened — the compose box shows nothing wrong (send stays disabled, no error) while
+    // the request just never returns. Race against a ceiling instead: on timeout, answer
+    // with the same notified:false shape a real failure gets (the turn is ALREADY
+    // persisted above `appendRoomMessage`, before this spawn ever runs, so there's
+    // nothing left to lose by answering early) — never let this route hang the HTTP
+    // response on a subprocess it doesn't control. Local `maw` invocations on this
+    // machine finish in 118-241ms; 5s is generous headroom for the normal path while
+    // still bounding the worst case to "slow", never "forever" (the deliberate
+    // trade-off, not something discovered later: a hung nudge now degrades to a
+    // ~5s-late notified:false, not a lossy or indefinitely-hanging response).
     const proc = spawn(roomNudgeArgs(room, target, from));
-    const nudgeExitCode = await proc.exited;
-    if (nudgeExitCode !== 0) {
-      return Response.json({ ok: true, room, to: target, notified: false, notifyError: `nudge exited ${nudgeExitCode}` });
+    let nudgeTimer: ReturnType<typeof setTimeout> | undefined;
+    const nudgeResult = await Promise.race<number | "timeout">([
+      proc.exited,
+      new Promise<"timeout">((resolve) => { nudgeTimer = setTimeout(() => resolve("timeout"), nudgeTimeoutMs); }),
+    ]);
+    clearTimeout(nudgeTimer); // whichever side won, the other must not keep a timer alive
+    if (nudgeResult === "timeout") {
+      return Response.json({ ok: true, room, to: target, notified: false, notifyError: `nudge did not exit within ${nudgeTimeoutMs}ms — may still be running` });
+    }
+    if (nudgeResult !== 0) {
+      return Response.json({ ok: true, room, to: target, notified: false, notifyError: `nudge exited ${nudgeResult}` });
     }
     return Response.json({ ok: true, room, to: target });
   } catch (e) {

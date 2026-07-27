@@ -50,6 +50,7 @@ describe("md.ts — shared escape-first markdown renderer (kobo-396)", () => {
     expect(out).toContain("one");
     expect(out).toContain("two");
     expect(out).toContain("three");
+    expect(out).toContain("<br>"); // merged lines are separated, not silently run together
   });
 
   test("kobo-425: a blank line between `>` groups starts a NEW box — 2 boxes, not 1", () => {
@@ -75,6 +76,37 @@ describe("md.ts — shared escape-first markdown renderer (kobo-396)", () => {
   test("kobo-425: a non-blockquote line (heading) closes an open blockquote instead of absorbing into it", () => {
     const out = mdToHtml("> quoted\n# heading");
     expect(out).toBe("<blockquote>\nquoted\n</blockquote>\n<h1>heading</h1>");
+  });
+
+  // kobo-425 review (eq3 c-follow-up): closeBQ() is called at 8 separate exit
+  // points (blank line, heading, and — the 5 below — fence/hr/ul/ol/paragraph,
+  // plus end-of-input). Only blank-line and heading had a test; the other 5
+  // could each silently lose their closeBQ() call and every test still passed
+  // — the open box would swallow the rest of the message (and on the board,
+  // the rest of the CARD, since md.ts is the shared renderer).
+  test("kobo-425: an open blockquote closes before a FENCE starts, never swallowing the code block", () => {
+    const out = mdToHtml("> a\n```\ncode\n```");
+    expect(out).toBe("<blockquote>\na\n</blockquote>\n<pre><code>\ncode\n</code></pre>");
+  });
+
+  test("kobo-425: an open blockquote closes before an HR, never swallowing it", () => {
+    const out = mdToHtml("> a\n---");
+    expect(out).toBe("<blockquote>\na\n</blockquote>\n<hr/>");
+  });
+
+  test("kobo-425: an open blockquote closes before a UL starts, never swallowing the list", () => {
+    const out = mdToHtml("> a\n- item");
+    expect(out).toBe("<blockquote>\na\n</blockquote>\n<ul>\n<li>item</li>\n</ul>");
+  });
+
+  test("kobo-425: an open blockquote closes before an OL starts, never swallowing the list", () => {
+    const out = mdToHtml("> a\n1. item");
+    expect(out).toBe("<blockquote>\na\n</blockquote>\n<ol>\n<li>item</li>\n</ol>");
+  });
+
+  test("kobo-425: an open blockquote closes before a plain paragraph, never swallowing it", () => {
+    const out = mdToHtml("> a\nplain text");
+    expect(out).toBe("<blockquote>\na\n</blockquote>\n<p>plain text</p>");
   });
 
   test("XSS: a <script> payload inside a `>` line still escapes (blockquote content is not a new sink)", () => {

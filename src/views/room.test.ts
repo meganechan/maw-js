@@ -580,16 +580,29 @@ describe("Brainstorm Room 2-pane chat view (kobo-258)", () => {
       addEventListener() {},
     };
   }
+  // kobo-438 review (eq3 M6): the toggle stub also captures addEventListener,
+  // and the extracted source is concatenated with the REAL "// ── wire" line
+  // that binds it — so a test can fire toggle.fire('click') and prove the
+  // actual wiring works, the same way kobo-422's L1 fires a stub instead of
+  // calling closeMermaidModal directly (calling the handler by hand would
+  // stay green even if the addEventListener call itself were deleted).
   function loadRoomList() {
     const box = { children: [] as any[], replaceChildren(...nodes: any[]) { this.children = nodes; }, appendChild(n: any) { this.children.push(n); } };
-    const toggle = { textContent: "", classList: { active: false, toggle(cls: string, on: boolean) { if (cls === "active") this.active = on; } } };
+    const toggleListeners: Record<string, ((ev: any) => void)[]> = {};
+    const toggle = {
+      textContent: "", classList: { active: false, toggle(cls: string, on: boolean) { if (cls === "active") this.active = on; } },
+      addEventListener(ev: string, cb: (ev: any) => void) { (toggleListeners[ev] ||= []).push(cb); },
+      fire(ev: string, arg: any = {}) { (toggleListeners[ev] || []).forEach((cb) => cb(arg)); },
+    };
     const doc = {
       getElementById: (id: string) => (id === "roomlist" ? box : id === "roomFilterToggle" ? toggle : fakeRoomListEl()),
       createElement: (tag: string) => ({ tag, className: "", textContent: "", children: [] as any[], appendChild(c: any) { this.children.push(c); }, addEventListener() {} }),
     };
-    const start = html.indexOf("const $ = (id) =>");
-    const end = html.indexOf("function selectRoom");
-    const src = html.slice(start, end);
+    const fnStart = html.indexOf("const $ = (id) =>");
+    const fnEnd = html.indexOf("function selectRoom");
+    const wireStart = html.indexOf("$('roomFilterToggle').addEventListener('click'", fnEnd);
+    const wireEnd = html.indexOf("$('send').addEventListener", wireStart);
+    const src = html.slice(fnStart, fnEnd) + html.slice(wireStart, wireEnd);
     const api = new Function(
       "document", "location", "newTopic",
       `${src}
@@ -667,7 +680,24 @@ describe("Brainstorm Room 2-pane chat view (kobo-258)", () => {
     renderRoomList();
     expect(box.children.length).toBe(1);
     const emptyText = box.children[0].children.map((c: any) => c.textContent).join("");
+    expect(emptyText).toContain("กดปุ่มด้านบน"); // the guiding message must actually be there, not just "not the other one"
     expect(emptyText).not.toContain("เปิดหัวข้อแรก"); // the truly-empty-company message
+  });
+
+  // kobo-438 review (eq3 M6): calling setShowClosed/renderRoomList directly (as
+  // the tests above do) proves the FILTER logic but never proves the button is
+  // actually wired to it — a deleted "// ── wire" addEventListener call would
+  // leave every test above green. Firing the stub's own registered handler
+  // (never touching setShowClosed) closes that gap.
+  test("kobo-438 M6: clicking the toggle button (the REAL wire, never the setShowClosed helper) reveals then re-hides closed/merged rooms", () => {
+    const { renderRoomList, setRooms, box, toggle } = loadRoomList();
+    setRooms([room("a", "open"), room("b", "closed"), room("c", "merged")]);
+    renderRoomList();
+    expect(box.children.length).toBe(1); // default: open only
+    toggle.fire("click");
+    expect(box.children.length).toBe(3); // click revealed closed + merged
+    toggle.fire("click");
+    expect(box.children.length).toBe(1); // click again hides them
   });
 
   test("kobo-438: the toggle button sits directly between the topics header and the room list — never nested in a menu/dropdown a user has to open first", () => {

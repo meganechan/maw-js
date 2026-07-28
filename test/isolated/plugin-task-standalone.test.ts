@@ -297,4 +297,45 @@ describe("task command plugin standalone boundary", () => {
     expect(laneOrderLine).toContain("TASK_FLOW");
     expect(laneOrderLine).toContain('"need-answer"');
   });
+
+  // kobo-581 — the top-level usage string silently drifted from the real dispatch
+  // chain: 7 real verbs (sign, merge, deployed, approve, need-answer, reject,
+  // next-ready — the merge-gate family) had no handler entry in it at all. A
+  // pgw reviewer read "sign" as missing from usage, concluded the verb didn't
+  // exist, and downgraded a merge-gate safety check on that false premise before
+  // anyone caught it. AC's core requirement: this test must DERIVE both lists
+  // from source, never hardcode a second static verb list — a hardcoded list
+  // here would just become a THIRD source of truth that can drift on its own.
+  test("usage string lists every subcmd the dispatcher actually handles, nothing more (kobo-581)", () => {
+    const src = readFileSync(
+      join(import.meta.dir, "../../src/vendor/mpr-plugins/task/index.ts"),
+      "utf8",
+    );
+    // every real dispatch branch: `if (subcmd === "x")` / `} else if (subcmd === "x")`
+    // — anchored on the `(subcmd === "x")` call shape, not just the bare
+    // fragment, so a comment merely mentioning subcmd can't false-match.
+    const handled = [...new Set([...src.matchAll(/if \(subcmd === "([^"]+)"\)/g)].map((m) => m[1]))];
+    expect(handled.length).toBeGreaterThan(20); // sanity: the regex actually found the dispatch chain, not an empty file
+    const usageMatch = src.match(/usage: maw company task <([^>]+)>/);
+    expect(usageMatch).not.toBeNull();
+    const usageVerbs = usageMatch![1].split("|");
+    const missingFromUsage = handled.filter((v) => !usageVerbs.includes(v));
+    const extraInUsage = usageVerbs.filter((v) => !handled.includes(v));
+    expect(missingFromUsage).toEqual([]); // every real verb is documented
+    expect(extraInUsage).toEqual([]); // usage never claims a verb that doesn't exist
+  });
+
+  // kobo-581 — `maw task sign` (missing `company`) used to read as "the command
+  // doesn't exist" (a headless plugin's generic no-CLI-command message, with no
+  // pointer anywhere to `maw company task`). Same failure class: a person reads
+  // an incomplete message and concludes a real feature is missing.
+  test("a headless plugin's manifest.description (the pointer to its real surface) reaches the CLI's error message (kobo-581)", () => {
+    const dispatchSrc = readFileSync(join(import.meta.dir, "../../src/cli/dispatch.ts"), "utf8");
+    const headlessBlock = dispatchSrc.slice(dispatchSrc.indexOf("if (headlessPlugin)"));
+    expect(headlessBlock).toContain("headlessPlugin.manifest.description");
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/task/plugin.json"), "utf8"),
+    );
+    expect(manifest.description).toContain("maw company task"); // task's own description names the real command
+  });
 });

@@ -1366,7 +1366,10 @@ export async function runTask(
         console.log(`  \x1b[90m${o.company}/${o.id}\x1b[0m ${o.from}→${o.to} \x1b[90m(${o.action})\x1b[0m`);
       }
     } else {
-      return { ok: false, error: "usage: maw company task <add|ls|start|move|claim|assign|ask|mentions|comment|comments|migrate-comments|migrate-lanes|review|hold|pr|done|note|edit|epic|dep|decompose|archive|block|unblock> — see maw task for flags" };
+      // kobo-581: this list must match every dispatch branch above — pinned by
+      // test/isolated/plugin-task-standalone.test.ts, which derives the real
+      // verb list from THIS source file rather than hardcoding a second copy.
+      return { ok: false, error: "usage: maw company task <add|ls|next-ready|start|move|claim|assign|done|deployed|reject|review|hold|approve|need-answer|pr|sign|merge|archive|block|unblock|note|edit|epic|dep|decompose|ask|mentions|comment|comments|migrate-comments|migrate-lanes> — see maw task for flags" };
     }
 
     return { ok: true };

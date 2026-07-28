@@ -145,6 +145,7 @@ export function roomHtml(): string {
     .card-ref-modal-body pre code { background:none; border:0; padding:0; }
     .card-ref-modal-body blockquote { border-left:4px solid var(--danger); background:rgba(239,68,68,.12); color:var(--fg); margin:6px 0; padding:6px 12px; border-radius:0 6px 6px 0; }
     .card-ref-modal-err { color:var(--danger); }
+    .card-ref-modal-loading { color:var(--dim); font-style:italic; } /* kobo-538 — shown immediately, before the fetch resolves */
     .bubble .body a { color:var(--human); text-decoration:underline; }
     .bubble .body .note-img-link { display:inline-block; margin:4px 0; }
     .bubble .body .note-img { display:block; max-width:100%; max-height:320px; height:auto; border:1px solid var(--border); border-radius:9px; }
@@ -489,22 +490,40 @@ function cardLinkifyDom(root) {
     textNode.replaceWith(frag);
   }
 }
+// kobo-538: which card-ref modal fetch is currently in flight, if any. Two
+// problems this fixes together: (1) the modal used to show NOTHING until the
+// fetch resolved — on a slow server (kobo-526 measured ~1.1s) a reader sees no
+// feedback and clicks again, firing a second identical fetch; (2) that repeat
+// fetch used to re-download the card's FULL notes/comments (kobo-446 has 434
+// notes → 1.5MB) even though this modal only ever renders id/title/state/
+// assignee/body — ?notes=0 (core/tasks/route.ts) drops them server-side instead
+// of fetching-then-discarding client-side.
+let cardModalInFlightId = null;
 async function openCardModal(id) {
+  if (cardModalInFlightId === id) return; // already loading this exact card — a repeat click is a no-op, not a second fetch
+  cardModalInFlightId = id;
   const box = el('div', 'card-ref-modal');
-  const { body } = await getJson('/api/tasks/detail?company=' + encodeURIComponent(company) + '&id=' + encodeURIComponent(id));
-  const t = body && body.ok ? body.task : null;
-  if (!t) {
-    box.appendChild(el('div', 'card-ref-modal-err', 'card not found: ' + id));
-  } else {
-    box.appendChild(el('div', 'card-ref-modal-title', t.id + ' · ' + (t.title || '')));
-    box.appendChild(el('div', 'card-ref-modal-meta', 'state: ' + t.state + (t.assignee ? ' · assignee: ' + t.assignee : '')));
-    if (t.body) {
-      const bodyDiv = el('div', 'card-ref-modal-body body md');
-      bodyDiv.innerHTML = renderNoteBody(t.body); // same escape-first renderer as message bodies — same XSS guarantee
-      box.appendChild(bodyDiv);
+  box.appendChild(el('div', 'card-ref-modal-loading', 'loading ' + id + '…'));
+  openMermaidModal(box); // show the modal (with the loading state) BEFORE the fetch, not after
+  try {
+    const { body } = await getJson('/api/tasks/detail?company=' + encodeURIComponent(company) + '&id=' + encodeURIComponent(id) + '&notes=0');
+    if (cardModalInFlightId !== id) return; // a different card was opened while this fetch was in flight — drop the stale response, don't clobber it
+    box.replaceChildren();
+    const t = body && body.ok ? body.task : null;
+    if (!t) {
+      box.appendChild(el('div', 'card-ref-modal-err', 'card not found: ' + id));
+    } else {
+      box.appendChild(el('div', 'card-ref-modal-title', t.id + ' · ' + (t.title || '')));
+      box.appendChild(el('div', 'card-ref-modal-meta', 'state: ' + t.state + (t.assignee ? ' · assignee: ' + t.assignee : '')));
+      if (t.body) {
+        const bodyDiv = el('div', 'card-ref-modal-body body md');
+        bodyDiv.innerHTML = renderNoteBody(t.body); // same escape-first renderer as message bodies — same XSS guarantee
+        box.appendChild(bodyDiv);
+      }
     }
+  } finally {
+    if (cardModalInFlightId === id) cardModalInFlightId = null;
   }
-  openMermaidModal(box);
 }
 
 // kobo-398 — mermaid, lazy-loaded ONLY when a mermaid-fenced code block is

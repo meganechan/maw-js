@@ -120,6 +120,19 @@ describe("taskNextAction — every state answers 'what next + who'", () => {
       expect(next).toContain("gh ด้วยมือ"); // still carries the manual-verify caveat — UNKNOWN is still not confirmed ready
     });
 
+    // kobo-594 review round 3 (reviewer's own undeclared mutation): prMergeable
+    // === "UNKNOWN" with NO checked timestamp can't happen via the real write
+    // path today (setTaskPrMergeState always sets both together) — but this
+    // guard is what stops it from lying "checked" with a NaN-age if a future
+    // second writer, migration, or legacy record ever sets one without the
+    // other. Removing `&& task.prMergeCheckedTs` makes this test go red.
+    test("UNKNOWN with NO checked timestamp (malformed/future-writer record) never claims 'checked' with a NaN age", () => {
+      const next = taskNextAction(mk({ state: "review", pr: 53, prMergeable: "UNKNOWN", prMergeStateStatus: "UNKNOWN" })); // no prMergeCheckedTs
+      expect(next).not.toContain("NaN");
+      expect(next).not.toContain("เช็คแล้วแต่"); // must NOT take the "checked, still unknown" branch without a real timestamp
+      expect(next).toContain("ยังไม่เคยเช็คสถานะ"); // falls back to the honest "never checked" claim instead
+    });
+
     test("genuinely never checked (prMergeable absent entirely) → says never-checked, distinct from the checked-but-UNKNOWN case above", () => {
       const next = taskNextAction(mk({ state: "review", pr: 53 }));
       expect(next).toContain("ยังไม่เคยเช็คสถานะ");

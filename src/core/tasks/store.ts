@@ -1829,6 +1829,20 @@ function prMergeNextAction(task: TaskRecord): string {
   // task.prMergeCheckedTs is the ONLY thing that tells them apart: absent =
   // genuinely never checked; present + prMergeable === "UNKNOWN" = a real
   // check ran and GitHub's own lazy-compute hadn't resolved yet.
+  //
+  // kobo-594 review round 3 (undeclared mutation, caught by the reviewer):
+  // `&& task.prMergeCheckedTs` is NOT redundant, even though setTaskPrMergeState
+  // — the only writer today — always sets prMergeable and prMergeCheckedTs
+  // together, so a prMergeable==="UNKNOWN" with no timestamp can't happen via
+  // the real write path right now. That's an invariant held by "there happens
+  // to be exactly one writer," not by anything this function itself enforces
+  // — a future second writer (a migration, a manual repair script, a legacy
+  // record) could set one field without the other with zero warning here. Without
+  // this guard, minutesAgo(undefined) computes `Date.now() - undefined` = NaN,
+  // silently printing "NaN นาทีที่แล้ว" while still claiming "เช็คแล้ว" (checked)
+  // — the exact "system reports something it can't verify" defect this card
+  // exists to close, just moved one field over. Do not delete this guard as
+  // "dead code" without re-deriving why it's here.
   if (task.prMergeable === "UNKNOWN" && task.prMergeCheckedTs) {
     return `รอ merge PR #${pr} → done (เช็คแล้วแต่ GitHub ยังไม่สรุปสถานะ conflict — เช็คล่าสุด ${minutesAgo(task.prMergeCheckedTs)} นาทีที่แล้ว, อย่ากด merge โดยไม่เช็ค gh ด้วยมือ)`;
   }

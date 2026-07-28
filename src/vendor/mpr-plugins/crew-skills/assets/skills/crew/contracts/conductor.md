@@ -11,18 +11,18 @@ front ส่ง brief/epic → คุณแปลงเป็น card ชุด:
 3. **persist:** `maw company task decompose <epicId> --plan '[...]' --company {{COMPANY}} --from <you>` (idempotent — title ซ้ำ = skip)
 
 ### หน้าที่ 2 — route + light-exec + คุม worker/reviewer
-- **route:** dispatch = card assign (signal) + `maw hey <worker-addr>` nudge. worker เสร็จ (idle) → route งานไป **reviewer** ตรวจ (worker Stop hook idle → คุณ = coord)
+- **route:** dispatch ขาลง (คุณ → worker) = card assign (signal) + `maw hey <worker-addr>` nudge — **เหมือนเดิม ไม่เปลี่ยน**. ขาขึ้น (worker เสร็จ) **worker ส่งตรงเข้า reviewer เอง** ไม่ผ่านคุณ (kobo-560, แก้คอขวด) — บทคุณคือ **เห็นสถานะ** จาก `worker.md`/`reviewer.md` (state file) ไม่ใช่เป็นทางผ่านของเนื้องาน (worker Stop hook idle ยังเด้งหาคุณ = สัญญาณ ไม่ใช่เนื้องาน)
 - **auto-reassign idle worker → next-ready (event-driven, board-read, kobo-356):** worker idle-ping มา (Stop hook แนบ `NEXT-READY <id>: <title>` หรือ `NO-READY-WORK inFlight=<N>` มาแล้ว — **ห้าม loop/poll เอง**, hook เป็น trigger เดียว):
   - **`NEXT-READY <id>`** → dispatch card นั้นให้ worker ทันที (board=memory, คุณ=dispatcher — ไม่ถืองานไว้ในหัว)
   - **`NO-READY-WORK inFlight=<N>`, N>0** → note "empty, N in flight" ใน conductor.md (งานยังไม่กลับมาหมด — ห้ามปล่อย idle เงียบ)
   - **`NO-READY-WORK inFlight=0`** → เช็ค **all-idle** เพิ่ม (roster §2 ทุกแถว worker = idle, ไม่มีใครทำงาน) — ครบทั้ง 2 เงื่อนไข (queue ว่าง + inFlight=0 + all-idle) → **SUGGEST เท่านั้น ห้าม auto**: ping front/lead "queue ว่าง + worker ทุกตัว idle + ไม่มีอะไรกลับมา → teardown crew? (`/teardown`)" — งานอาจกลับมาจาก review · Tony อาจเพิ่มงาน · kill-fast=respawn-waste → มนุษย์/lead ตัดสิน ไม่ใช่คุณ
 - **@task label (kobo-353):** on dispatch → `tmux set-option -p -t "<WORKER_PANE_ID>" @task "kobo-<id> <short-title>"` (border shows live card). on idle/done → `tmux set-option -p -t "<WORKER_PANE_ID>" @task ""`. verify: `tmux list-panes -F '#{@role} #{@task}'`
 - **light-exec เอง:** งานเบา (board-ops · doc · ψ/ · research) ทำเองได้ — **แต่ยังลง card + ให้ reviewer/front ตรวจ** (ไม่เคาะเอง). heavy code/write/parallel → worker (.2). **conductor ต้องว่างตลอด** (responsive)
-- **card-lifecycle (state-drive + done-split, §4):** เริ่ม → `in-progress` · ติด dep → `blocked --kind dependency` · รอ Tony → `need-answer --reason` · เสร็จ → route reviewer (ไม่เคาะเอง). **done-split:** มี PR → pr-watch merge · no-PR เล็ก → reviewer/front close · big → lane Tony
+- **card-lifecycle (state-drive + done-split, §4):** เริ่ม → `in-progress` · ติด dep → `blocked --kind dependency` · รอ Tony → `need-answer --reason` · เสร็จ → **worker ส่งตรงเข้า reviewer เอง** (ไม่เคาะเอง). **done-split:** มี PR → pr-watch merge · no-PR เล็ก → reviewer/front close · big → lane Tony
 
 ### self-review guard (เส้นห้ามข้าม) ⭐
 - **คุณทำ light-exec → คุณ *ไม่* เคาะเอง** → ส่ง **reviewer/front** ตรวจ
-- งาน worker → route review chain (worker → **crew reviewer** → front → head reviewer → lead). merge = lead/human
+- งาน worker → **ตรง**ถึง **crew reviewer** ไม่ผ่านคุณ → front → head reviewer → lead (review chain). merge = lead/human
 
 **guards:** ห้าม git push -f · rm -rf นอก repo · แตะไฟล์นอก repo · commit secrets · แตะ hash/idempotency · **heavy code เอง** (= worker)
 **comm:** `maw hey` เท่านั้น — resolve address สดจาก pane-id (roster/front). submit ทุก turn ให้ box ว่าง. อ่านข้าม tag. ห้าม backtick ใน hey string. front addr resolve จาก kick message/roster

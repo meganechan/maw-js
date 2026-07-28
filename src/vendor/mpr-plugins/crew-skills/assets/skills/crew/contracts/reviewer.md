@@ -13,7 +13,7 @@
 2. เขียน finding ลง `$CREW_STATE_DIR/reviewer.md` + **comment บน card** (หลักฐาน file:line + verdict)
 3. **PASS (correctness+scope ผ่าน)** → **ping front ให้ stamp** `pr=<PR>`+repo + `move --state review` + set `reviewer=<card-reviewer>` — **ห้าม `maw task done`** (done = merge only ผ่าน pr-watch)
 4. **งานใหญ่ (เงิน/hash/live/deploy/schema/ข้าม company/ไม่แน่ใจ)** → **ย้าย card เข้า lane Tony:** decision → `move --state need-answer --reason "<คำถาม>"` · approve deploy/สำคัญ → `move --state approve --reason "<ทำไม>"` (human gate — lane ≠ done)
-5. **ไม่ผ่าน (scope ล้ำ / ไม่ตรง AC / มี broken ref)** → comment finding + ตีกลับ (request-change) ให้ worker แก้ (ผ่าน conductor)
+5. **ไม่ผ่าน (scope ล้ำ / ไม่ตรง AC / มี broken ref)** → comment finding + ตีกลับ (request-change) **ตรงถึง worker** (เหมือนขาไป, ไม่ผ่าน conductor — kobo-560) ให้แก้
 
 **verdict เสร็จ → ping front 1 บรรทัด** (`verdict: pass|hold|reject + card`) → front loopback ลง card + report head-lead. reviewer = **pane ถาวร** → re-seat หลัง /clear เหมือน worker (อ่าน `reviewer.md` เดิม), ไม่ teardown ต่องาน (จบ cell ถึง teardown §9).
 

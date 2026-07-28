@@ -342,6 +342,13 @@ describe("task command plugin standalone boundary", () => {
     // fragment, so a comment merely mentioning subcmd can't false-match.
     const handled = [...new Set([...src.matchAll(/if \(subcmd === "([^"]+)"\)/g)].map((m) => m[1]))];
     expect(handled.length).toBeGreaterThan(20); // sanity: the regex actually found the dispatch chain, not an empty file
+    // reviewer's future-proofing (kobo-581 review round 1): the strict `if (subcmd
+    // === "x")` count must equal a LOOSE bare-fragment count too — a future branch
+    // written as `subcmd === "a" || subcmd === "b"` or a switch/case would add a
+    // bare match the strict regex misses, and 30 verbs is still > 20 so the sanity
+    // check above wouldn't catch a single verb silently falling out of the count.
+    const looseCount = new Set(src.match(/subcmd === "[^"]+"/g)).size;
+    expect(handled.length).toBe(looseCount);
     const usageMatch = src.match(/usage: maw company task <([^>]+)>/);
     expect(usageMatch).not.toBeNull();
     const usageVerbs = usageMatch![1].split("|");

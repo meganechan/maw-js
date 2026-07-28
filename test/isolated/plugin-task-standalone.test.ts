@@ -291,4 +291,50 @@ describe("task command plugin standalone boundary", () => {
     expect(lsBlock).toContain("renderBoard(tasks"); // --full path
     expect(lsBlock).toContain("renderBoardCompact(tasks"); // default path
   });
+
+  // kobo-569 — need-answer (kobo-218) was missing from BOTH renderBoard's per-lane
+  // loop and renderBoardCompact's laneOrder; a card parked there never rendered.
+  // Behavioral coverage (real board output) lives in plugin-task-cli.test.ts; this
+  // is the content-assert companion this standalone file's own convention expects.
+  test("renderBoard has a dedicated need-answer branch, renderBoardCompact's laneOrder carries it (kobo-569)", () => {
+    const src = readFileSync(
+      join(import.meta.dir, "../../src/vendor/mpr-plugins/task/index.ts"),
+      "utf8",
+    );
+    const boardStart = src.indexOf("function renderBoard(");
+    const compactStart = src.indexOf("function renderBoardCompact(");
+    const boardBlock = src.slice(boardStart, compactStart);
+    expect(boardBlock).toContain('t.state === "need-answer"');
+    const compactBlock = src.slice(compactStart);
+    expect(compactBlock).toContain('"need-answer"');
+    const laneOrderLine = compactBlock.split("\n").find((l) => l.includes("laneOrder"))!;
+    expect(laneOrderLine).toContain("TASK_FLOW");
+    expect(laneOrderLine).toContain('"need-answer"');
+  });
+
+  // kobo-570 — no-silent-caps: isOnBoard() (ADR 0002 P3) hides done/rejected cards
+  // older than the archive window before either render function sees the list.
+  // Both renderBoard and renderBoardCompact must say how many they hid, scoped to
+  // whatever the view (--mine) is already scoped to — not the whole board's count
+  // slapped on a filtered view (review round 1 finding, fixed in this same PR).
+  // Behavioral coverage lives in plugin-task-cli.test.ts; this is the content-assert
+  // companion this standalone file's own convention expects.
+  test("ls computes the hidden-count AFTER --mine scoping, both render fns take it (kobo-570)", () => {
+    const src = readFileSync(
+      join(import.meta.dir, "../../src/vendor/mpr-plugins/task/index.ts"),
+      "utf8",
+    );
+    expect(src).toContain("function hiddenSummaryLine");
+    const lsStart = src.indexOf('subcmd === "ls"');
+    const nextReadyStart = src.indexOf('subcmd === "next-ready"');
+    const lsBlock = src.slice(lsStart, nextReadyStart);
+    // `mine` filters allTasks BEFORE hiddenDone/hiddenRejected are derived from it —
+    // the ordering that keeps the count scoped to the view (kobo-570 review round 1).
+    const mineFilterIdx = lsBlock.indexOf("if (mine) allTasks = allTasks.filter");
+    const hiddenDoneIdx = lsBlock.indexOf("const hiddenDone =");
+    expect(mineFilterIdx).toBeGreaterThan(-1);
+    expect(mineFilterIdx).toBeLessThan(hiddenDoneIdx);
+    expect(lsBlock).toContain("renderBoard(tasks, company, mine, stale, hiddenDone, hiddenRejected)");
+    expect(lsBlock).toContain("renderBoardCompact(tasks, company, mine, hiddenDone, hiddenRejected)");
+  });
 });

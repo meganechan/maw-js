@@ -916,4 +916,28 @@ describe("maw company task runner (runTask)", () => {
     const r = await run(["next-ready", "--company", "acme"]);
     expect(r.output).toContain("NEXT-READY acme-2");
   });
+
+  // kobo-570 review round 1 (reviewer %107): hiddenDone/hiddenRejected used to be
+  // counted from the WHOLE board before the --mine filter ran, so `ls --mine`
+  // rendered a handful of your own cards next to a hidden-count drawn from
+  // everyone's aged-out done cards — misread as "N of MY done cards are hidden"
+  // when it was really the board total. Scope the count to `mine` same as the view.
+  test("ls --mine's hidden-count is scoped to mine, not the whole board (kobo-570)", async () => {
+    await run(["add", "mine, recent", "--company", "pgw", "--assignee", "patchwork"]); // pgw-1
+    await run(["done", "pgw-1", "--company", "pgw"]);
+    await run(["add", "mine, stale", "--company", "pgw", "--assignee", "patchwork"]); // pgw-2
+    await run(["done", "pgw-2", "--company", "pgw"]);
+    backdateOutsideWindow("pgw", "pgw-2");
+    // someone else's aged-out done card — must NOT count toward --mine's hidden total
+    await run(["add", "not mine, stale", "--company", "pgw", "--assignee", "eq3"]); // pgw-3
+    await run(["done", "pgw-3", "--company", "pgw"]);
+    backdateOutsideWindow("pgw", "pgw-3");
+
+    const mine = (await run(["ls", "--company", "pgw", "--mine", "--from", "patchwork"])).output;
+    expect(mine).toContain("+1 done hidden"); // only pgw-2, not pgw-3 too
+    expect(mine).not.toContain("+2 done hidden");
+
+    const whole = (await run(["ls", "--company", "pgw"])).output;
+    expect(whole).toContain("+2 done hidden"); // unscoped view still sees both
+  });
 });

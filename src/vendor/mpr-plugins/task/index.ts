@@ -519,13 +519,16 @@ export async function runTask(
       const mine = args.includes("--mine") ? me : null;
       // Board shows done only within the window (ADR 0002 P3) — old done ages
       // off here even before the archive sweep physically moves it.
-      const allTasks = listTasks(company);
+      let allTasks = listTasks(company);
+      if (mine) allTasks = allTasks.filter((t) => t.assignee === mine);
       let tasks = allTasks.filter((t) => isOnBoard(t));
       // kobo-570: no-silent-caps — count what the window above just hid so the
       // render can say so, instead of a done/rejected lane silently looking complete.
+      // Scoped to `mine` FIRST (kobo-570 review round 1) so the count matches what
+      // the view itself is scoped to — otherwise --mine renders a handful of your
+      // own cards next to a hidden-count drawn from the WHOLE board.
       const hiddenDone = allTasks.filter((t) => t.state === "done" && !isOnBoard(t)).length;
       const hiddenRejected = allTasks.filter((t) => t.state === "rejected" && !isOnBoard(t)).length;
-      if (mine) tasks = tasks.filter((t) => t.assignee === mine);
       // --for <who> → the decision queue: blocked cards waiting on that person (ADR 0003 B)
       if (flags["--for"]) tasks = tasks.filter((t) => t.state === "blocked" && t.block?.for === flags["--for"]);
       // kobo-368 — default compact (lane counts); --full/--verbose = full per-card render.

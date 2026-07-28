@@ -89,6 +89,9 @@ describe("taskNextAction — every state answers 'what next + who'", () => {
   test("review: reviewer vs PR", () => {
     expect(taskNextAction(mk({ state: "review", reviewer: "eq3" }))).toBe("รอ eq3 ตรวจ");
     expect(taskNextAction(mk({ state: "review" }))).toBe("รอ ใครก็ได้ ตรวจ");
+    // kobo-576: stale-signature check takes priority over the PR-mergeable check
+    // below (kobo-594) — a person must re-sign regardless of the PR's own state.
+    expect(taskNextAction(mk({ state: "review", pr: 53, crewGate: true, crewSignedSha: "sha-A", headSignedSha: "sha-B" }))).toContain("เซ็นคนละ commit");
   });
 
   // kobo-594 — a card with all signs in + a PR link used to read as "just needs a

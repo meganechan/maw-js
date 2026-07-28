@@ -452,9 +452,12 @@ export function stripGhostText(line: string): string {
  * kobo-508 — the single declared source for how many rows the send-gate
  * captures. checkPaneIdle and detectPermissionMenu both read the input box
  * above its divider+footer and MUST request the same depth: widen this once
- * to catch a taller menu and both see it; if they ever drift apart it's a
- * silent hole (one gate reads a shorter/taller pane than the other), not a
- * red test — see the mutation test in check-pane-idle-real-captures.test.ts.
+ * to catch a taller menu and both see it. If the two call sites ever drift
+ * apart, the two gates read a different depth of the same pane — a silent
+ * behavioral hole, which is exactly why check-pane-idle-real-captures.test.ts
+ * pins each call site against this constant and goes red on that drift. NOT
+ * covered: a call site re-hardcoding a literal that happens to equal this
+ * value — that class of regression is out of scope for that test.
  */
 export const SEND_GATE_SNAPSHOT_LINES = 12;
 

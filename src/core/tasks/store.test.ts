@@ -78,6 +78,10 @@ import {
   tasksDir,
   tryCreateTaskRecord,
   unblockTask,
+  requiredSignTiers,
+  missingSignTiers,
+  escalateCrewGate,
+  reclassifyAndEscalate,
   type ParentState,
   type TaskRecord,
 } from "./store";
@@ -411,32 +415,14 @@ describe("task store (file-per-card under Company Home)", () => {
     expect(openClaims("pgw").some((c) => c.oracle === "patchwork" && c.task === "pgw-1")).toBe(true);
   });
 
-  // kobo-229 — a CAPTURED note (auto-captured from a hey card-id mention) must NOT
-  // auto-advance, even when the author is the assignee: mention ≠ work (fixes the
-  // kobo-221 board-lie where a self-mention flipped an own todo/ready card).
-  test("noteTask captured=true by the assignee on a todo card does NOT auto-advance (mention ≠ work, kobo-229)", () => {
-    addTask({ company: "pgw", title: "t", by: "eq3", assignee: "patchwork" });
-    const n = noteTask("pgw", "pgw-1", "patchwork", "[via hey→eq3] kobo-... halt", { captured: true });
-    expect(n?.state).toBe("todo"); // NOT flipped
-    expect(readTask("pgw", "pgw-1")?.state).toBe("todo"); // persisted
-    expect(openClaims("pgw").some((c) => c.task === "pgw-1")).toBe(false); // no fake "started" claim
-    // the note IS stored (append-only audit) and flagged captured
-    expect(n?.notes?.at(-1)?.captured).toBe(true);
-    expect(n?.notes?.length).toBe(1);
-  });
+  // kobo-555: the two kobo-229 CAPTURED-note tests that lived here were removed
+  // along with the opts.captured mechanism itself (kobo-229's only producer,
+  // hey auto-capture kobo-165, is gone) — see plugin-task-*/auto-create removal.
 
-  test("noteTask captured=true on a ready card also does NOT advance (kobo-229, kobo-220 scenario)", () => {
-    addTask({ company: "pgw", title: "t", by: "eq3", assignee: "patchwork", state: "ready" });
-    const n = noteTask("pgw", "pgw-1", "patchwork", "[via hey→eq3] about pgw-1", { captured: true });
-    expect(n?.state).toBe("ready");
-  });
-
-  // A DELIBERATE note (real `note` verb, captured falsy) still advances — no regress on kobo-54.
-  test("noteTask without captured still auto-advances (deliberate note = work, no kobo-54 regress)", () => {
+  test("noteTask still auto-advances a deliberate note (kobo-54, no regress after kobo-555's captured-opt removal)", () => {
     addTask({ company: "pgw", title: "t", by: "eq3", assignee: "patchwork" });
     const n = noteTask("pgw", "pgw-1", "patchwork", "diagnosing the repro");
     expect(n?.state).toBe("in-progress");
-    expect(n?.notes?.at(-1)?.captured).toBeUndefined(); // not flagged
   });
 
   test("noteTask by a NON-assignee on a todo card keeps it todo (no lying)", () => {
@@ -2297,5 +2283,85 @@ describe("clearTaskPr (kobo-507 — unlink a stale/superseded PR)", () => {
     expect(entry).toBeTruthy();
     expect(String((entry as any).summary)).toContain("#42");
     expect(String((entry as any).summary)).toContain("superseded");
+  });
+});
+
+describe("escalateCrewGate (kobo-546) — the ONLY way crewGate turns true outside a crew sign/dispatch", () => {
+  test("a plain 1-tier card gets escalated to 2-tier, reason lands on the card's own notes", () => {
+    const t = addTask({ company: "kobo", title: "c", by: "eq3" });
+    expect(requiredSignTiers(t)).toEqual(["head"]);
+    const escalated = escalateCrewGate("kobo", t.id, "eq3", "touches sensitive path (route.ts): src/core/tasks/route.ts");
+    expect(escalated?.crewGate).toBe(true);
+    expect(requiredSignTiers(escalated!)).toEqual(["crew", "head"]);
+    expect(missingSignTiers(escalated!)).toEqual(["crew", "head"]);
+    const lastNote = escalated!.notes?.[escalated!.notes!.length - 1];
+    expect(lastNote?.text).toContain("escalated to 2-tier");
+    expect(lastNote?.text).toContain("route.ts");
+  });
+
+  test("ONE-WAY RATCHET: calling escalateCrewGate on an already-crewGate:true card is a no-op — no duplicate note, no re-write", () => {
+    const t = addTask({ company: "kobo", title: "c", by: "eq3", crewGate: true });
+    const notesBefore = t.notes?.length ?? 0;
+    const result = escalateCrewGate("kobo", t.id, "eq3", "should not fire");
+    expect(result?.crewGate).toBe(true);
+    expect(result?.notes?.length ?? 0).toBe(notesBefore); // no new note — already 2-tier, nothing to log again
+  });
+
+  test("unknown card → null, no throw", () => {
+    expect(escalateCrewGate("kobo", "kobo-does-not-exist", "eq3", "x")).toBeNull();
+  });
+
+  // kobo-546 rule 8: "การ์ดที่ 2 ชั้นเซ็นไปแล้ว ห้าม ถูกดาวน์เกรดเป็น 1 ชั้น ไม่ว่าด้วยกลไกใด" —
+  // this is a STRUCTURAL guarantee (no function in this file ever writes `crewGate =
+  // false`), not just a behavioral one. A source-string check pins it: if a future
+  // patch adds ANY downgrade path, this test catches it even if the new path's own
+  // tests happen to be green.
+  test("STRUCTURAL: no downgrade path exists anywhere in store.ts (crewGate is never set back to false)", () => {
+    const src = readFileSync(join(import.meta.dir, "store.ts"), "utf8");
+    // real assignment targets are always `<something>.crewGate = ...` — the leading
+    // dot keeps this from tripping on prose that mentions "crewGate = false" (this
+    // very file's own comment above escalateCrewGate does, explaining the invariant).
+    expect(src).not.toMatch(/\.crewGate\s*=\s*false/);
+    expect(src).not.toContain("delete task.crewGate");
+  });
+});
+
+describe("reclassifyAndEscalate (kobo-546) — merge-time wins over the PR-open stamp", () => {
+  test("Given a card stamped 1-tier at PR-open, When the CURRENT diff touches a sensitive path at merge-time, Then it escalates to 2-tier — the exact rebase-shaped gap kobo-544 closed for sha, same shape for tier-count", () => {
+    const t = addTask({ company: "kobo", title: "c", by: "eq3" }); // PR-open stamp: no sensitive path seen, stays 1-tier
+    expect(requiredSignTiers(t)).toEqual(["head"]);
+
+    const merged = reclassifyAndEscalate("kobo", t.id, "eq3", [{ path: "src/core/tasks/store.ts", additions: 1, deletions: 1 }], "merge-time");
+    expect(merged?.crewGate).toBe(true);
+    expect(requiredSignTiers(readTask("kobo", t.id)!)).toEqual(["crew", "head"]);
+  });
+
+  test("nothing to escalate when the diff stays safe — returns null, card stays 1-tier", () => {
+    const t = addTask({ company: "kobo", title: "c", by: "eq3" });
+    const result = reclassifyAndEscalate("kobo", t.id, "eq3", [{ path: "src/vendor/mpr-plugins/whoami/index.ts", additions: 1, deletions: 0 }], "merge-time");
+    expect(result).toBeNull();
+    expect(requiredSignTiers(readTask("kobo", t.id)!)).toEqual(["head"]);
+  });
+
+  test("fail-closed: an unreadable diff (null) at merge-time escalates too, not just at PR-open", () => {
+    const t = addTask({ company: "kobo", title: "c", by: "eq3" });
+    const merged = reclassifyAndEscalate("kobo", t.id, "eq3", null, "merge-time");
+    expect(merged?.crewGate).toBe(true);
+  });
+
+  // eq3 head review (PR#359 c1): this test proves reclassifyAndEscalate ITSELF
+  // performs a real store write, not just a return value — it calls the function
+  // directly. It does NOT prove the merge CLI's call site (task/index.ts:941,
+  // stage "merge-time") is ever reached: deleting that call site leaves this
+  // function fully intact and this test green either way. The bind-site proof
+  // — a behavioral test that goes through the actual `merge` command and would
+  // go red if the merge-time call were removed — lives in
+  // test/isolated/plugin-task-sign-merge.test.ts (kobo-546 REWORK, "merge-time
+  // reclassify is a CALL SITE, not just a function").
+  test("mutation-anchor: escalation must be a REAL store write, not just a return value — readTask from a fresh handle sees crewGate too", () => {
+    const t = addTask({ company: "kobo", title: "c", by: "eq3" });
+    reclassifyAndEscalate("kobo", t.id, "eq3", [{ path: ".github/workflows/ci.yml", additions: 1, deletions: 0 }], "pr-open");
+    const fresh = readTask("kobo", t.id)!; // separate read, not the in-memory object escalateCrewGate returned
+    expect(fresh.crewGate).toBe(true);
   });
 });

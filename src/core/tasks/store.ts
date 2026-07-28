@@ -19,6 +19,7 @@ import { mawDataPath } from "../xdg";
 import { appendWorklog, openClaims, readWorklog, worklogCacheProbe } from "../worklog/store";
 import type { WorklogEntry, WorklogKind } from "../worklog/types";
 import { notifyParentOfSubcardDone } from "./notify";
+import { classifySignTiers, type DiffFile } from "./sign-tier-classifier";
 
 export type TaskState =
   | "backlog"
@@ -87,7 +88,6 @@ export interface TaskNote {
   iso: string; // ISO-8601 timestamp
   by: string; // author (oracle / human)
   text: string; // note content (rendered escape-first on the web)
-  captured?: boolean; // kobo-229: auto-captured from a hey card-id mention (not deliberately authored) — shows on the card but never auto-advances state (mention ≠ work)
 }
 
 /**
@@ -817,6 +817,46 @@ export function missingSignTiers(task: TaskRecord): SignTier[] {
 }
 
 /**
+ * kobo-546 — the ONLY place `crewGate` gets set true outside an explicit crew
+ * sign/dispatch. ONE-WAY RATCHET: already `crewGate: true` is a no-op (no
+ * re-note, no re-emit) — this file has no function anywhere that clears
+ * `crewGate`, so a downgrade is structurally impossible, not just discouraged
+ * (pinned by a source-string test: `crewGate = false` must never appear here).
+ * `reason` lands on the card's own notes — a reviewer sees WHY a card became
+ * 2-tier, not just that it did (who/when/which-card come free from the note).
+ */
+export function escalateCrewGate(company: string, id: string, by: string, reason: string): TaskRecord | null {
+  const task = readTask(company, id);
+  if (!task) return null;
+  if (task.crewGate) return task; // ratchet is one-way — already 2-tier, nothing to do
+  task.crewGate = true;
+  const note: TaskNote = { ts: Date.now(), iso: nowIso(), by, text: `⬆ escalated to 2-tier (crew+head): ${reason}` };
+  task.notes = [...(task.notes ?? []), note];
+  task.updatedTs = note.ts;
+  writeTaskRecord(task);
+  emit(task, by, "task-updated", `⬆ ${task.id} escalated to 2-tier: ${reason}`);
+  return task;
+}
+
+/**
+ * kobo-546 — orchestrates classify+escalate given an ALREADY-FETCHED file list
+ * (never calls gh itself — that I/O lives in the CLI caller, same convention as
+ * kobo-400's sha-fetch: untestable subprocess call stays a thin wrapper, the
+ * LOGIC that consumes its result is what's unit-tested). `stage` labels the
+ * note/emit reason so a reviewer can tell a PR-open stamp from a merge-time
+ * reclassify (rule 7: merge-time wins over stamp — calling this again at merge
+ * time with a fresher `files` list is exactly how that AC is satisfied: the
+ * ratchet only ever adds a tier, so a merge-time escalation sticks even though
+ * PR-open already stamped 1-tier). Returns null when nothing needed escalating
+ * (already 1-tier-sufficient, or already crew-gated).
+ */
+export function reclassifyAndEscalate(company: string, id: string, by: string, files: DiffFile[] | null, stage: "pr-open" | "merge-time"): TaskRecord | null {
+  const classification = classifySignTiers(files);
+  if (!classification.tiers.includes("crew")) return null;
+  return escalateCrewGate(company, id, by, `${stage}: ${classification.reason}`);
+}
+
+/**
  * kobo-336: the oracle that signed BOTH tiers, if any. A crew card requires two
  * INDEPENDENT eyes (the executor≠reviewer principle, kobo-328) — one oracle filling
  * both the crew and head tier is a self-review bypass (found live in the kobo-329
@@ -1180,21 +1220,19 @@ export function rejectTask(company: string, id: string, by: string, reason: stri
  * question on the card) is NOT the doer working, so the card holds. An
  * unassigned card never auto-advances (fall back to explicit `task start`).
  *
- * kobo-229: a CAPTURED note (`opts.captured`) is one auto-captured from a hey that
- * merely mentioned this card-id in chatter — it is stored for the audit trail but
- * NEVER auto-advances (mention ≠ work). Only a deliberately authored note (the real
- * `note` verb, opts.captured falsy) carries the "I'm working on this" signal. This
- * fixes the board-lie where a self-mention flipped an assignee's own todo/ready card
- * to in-progress (kobo-221 finding).
+ * kobo-555: kobo-229 added a CAPTURED exception here (a note auto-captured from a
+ * hey mentioning this card-id never advanced state, mention ≠ work) — removed along
+ * with the auto-capture feature that was its only producer (kobo-165). Every note
+ * is now deliberately authored, so the plain assignee-on-todo/ready rule below is
+ * sufficient again.
  */
-export function noteTask(company: string, id: string, by: string, text: string, opts: { captured?: boolean } = {}): TaskRecord | null {
+export function noteTask(company: string, id: string, by: string, text: string): TaskRecord | null {
   const task = readTask(company, id);
   if (!task) return null;
-  const note: TaskNote = { ts: Date.now(), iso: nowIso(), by, text, ...(opts.captured ? { captured: true } : {}) };
+  const note: TaskNote = { ts: Date.now(), iso: nowIso(), by, text };
   task.notes = [...(task.notes ?? []), note]; // append-only — prior notes are untouched
   task.updatedTs = note.ts;
-  // A captured mention is never work — only a deliberately authored note advances (kobo-229).
-  const advance = !opts.captured && (task.state === "todo" || task.state === "ready") && !!task.assignee && task.assignee === by;
+  const advance = (task.state === "todo" || task.state === "ready") && !!task.assignee && task.assignee === by;
   if (advance) task.state = "in-progress"; // assignee working their own todo/ready card (kobo-54, kobo-133)
   writeTaskRecord(task);
   const oneLine = text.replace(/\s+/g, " ").trim();

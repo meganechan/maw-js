@@ -17,9 +17,24 @@ import { Hono } from "hono";
  * fix is having it also return the full per-oracle pending set (id/title/
  * state only — see pendingTasksByOracle in core/presence/held.ts) instead
  * of a second, heavier route computing the same thing. Measured on the real
- * kobo company (chrome-devtools network panel, this PR): /api/roster with
- * `pending` added is 32554 bytes — 26x smaller than the 848KB /api/tasks
- * response it replaces, and one shared file-scan instead of two.
+ * kobo company (chrome-devtools network panel, this PR, single measurement
+ * by me — not independently re-verified yet since the field wasn't live on
+ * any server at review time): /api/roster with `pending` added was 32554
+ * bytes, vs 848KB for /api/tasks.
+ *
+ * kobo-445 review round 2: two more real gaps caught —
+ *   1. the 5s poll never paused for a hidden/backgrounded tab, and never
+ *      checked for one still running when the next tick fired. Fixed below
+ *      (visibilitychange + loadInFlight guard) and the interval lengthened
+ *      to 15s — this is a status dashboard, not a live board, so 15s-stale
+ *      is an acceptable tradeoff for a much lower steady-state request rate.
+ *   2. handleRosterRequest was STILL calling listTasks(company) twice per
+ *      request (once inside heldWorkByOracle, once inside pendingTasksByOracle)
+ *      even after round 1 — the comment above claimed "one shared file-scan"
+ *      but the code didn't do that yet. Fixed in core/roster/route.ts: listTasks
+ *      is now called once and passed into both functions (see held.ts's updated
+ *      signatures + the mock-free test proving the param is actually honored,
+ *      not silently ignored).
  */
 export function companyStatusHtml(): string {
   return `<!doctype html>
@@ -124,7 +139,8 @@ async function getJson(url) {
 
 let loadInFlight = false;
 async function load() {
-  if (loadInFlight) return; // kobo-445 review: never overlap a poll tick with a still-running one
+  if (loadInFlight) return; // kobo-445 review round 1: never overlap a poll tick with a still-running one
+  if (document.hidden) return; // kobo-445 review round 2: a backgrounded tab doesn't need live data
   loadInFlight = true;
   try {
     const company = (companyInput.value || '').trim();
@@ -135,7 +151,7 @@ async function load() {
     statusEl.textContent = 'loading…';
     try {
       const [rosterRes, presenceRes, worklogRes] = await Promise.all([
-        getJson('/api/roster?company=' + encodeURIComponent(company)),
+        getJson('/api/roster?company=' + encodeURIComponent(company) + '&pending=1'), // opt into the pending field — see roster/route.ts
         getJson('/api/presence?company=' + encodeURIComponent(company)),
         getJson('/api/worklog/feed?company=' + encodeURIComponent(company) + '&limit=300'),
       ]);
@@ -283,8 +299,13 @@ function render(roster, held, pending, presence, worklog) {
 companyInput.value = companyFromUrl();
 companyInput.addEventListener('change', load);
 refreshBtn.addEventListener('click', load);
+// kobo-445 review round 2: refresh immediately on regaining visibility (don't make
+// the reader wait up to POLL_MS after switching back to this tab) — load() itself
+// still skips a hidden tab, so this is the only trigger while backgrounded.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
 load();
-setInterval(load, 5000);
+const POLL_MS = 15000; // kobo-445 review round 2: was 5000 — this is a status dashboard, not a live board
+setInterval(load, POLL_MS);
 </script>
 </body>
 </html>`;

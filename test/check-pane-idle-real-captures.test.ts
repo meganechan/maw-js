@@ -17,7 +17,12 @@
 import { describe, test, expect } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { checkPaneIdle, detectPermissionMenu, isSafeToInject } from "../src/commands/shared/comm-send";
+import {
+  checkPaneIdle,
+  detectPermissionMenu,
+  isSafeToInject,
+  SEND_GATE_SNAPSHOT_LINES,
+} from "../src/commands/shared/comm-send";
 
 const FX = join(import.meta.dir, "fixtures/pane-captures");
 const probe = (file: string) =>
@@ -150,6 +155,34 @@ describe("kobo-508 — permission-menu row drawn in reverse instead of colour (h
     });
     expect(r.safe).toBe(true);
     expect(r.reason).toBeUndefined();
+  });
+});
+
+/**
+ * kobo-508 — checkPaneIdle and detectPermissionMenu must request the SAME
+ * snapshot depth. Widening the window to catch a taller menu only works both
+ * places if there's one declared source; if the two ever drift apart, one
+ * gate reads a shorter (or taller) pane than the other and the hole this card
+ * exists to close reopens silently, with no red test to catch it. This spies
+ * on the raw captureFn args each function passes and pins both to the
+ * exported constant, not to each other, so a hardcoded second number at
+ * either call site fails here even if it happens to equal today's 12.
+ */
+describe("kobo-508 — send-gate snapshot depth is declared once, used by both", () => {
+  test("checkPaneIdle requests SEND_GATE_SNAPSHOT_LINES rows", async () => {
+    const seen: number[] = [];
+    await checkPaneIdle("pane:0.0", undefined, {
+      captureFn: async (_t, lines) => { seen.push(lines as number); return ""; },
+    });
+    expect(seen).toEqual([SEND_GATE_SNAPSHOT_LINES]);
+  });
+
+  test("detectPermissionMenu requests SEND_GATE_SNAPSHOT_LINES rows", async () => {
+    const seen: number[] = [];
+    await detectPermissionMenu("pane:0.0", undefined, {
+      captureFn: async (_t, lines) => { seen.push(lines as number); return ""; },
+    });
+    expect(seen).toEqual([SEND_GATE_SNAPSHOT_LINES]);
   });
 });
 

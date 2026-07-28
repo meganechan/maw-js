@@ -448,6 +448,16 @@ export function stripGhostText(line: string): string {
   return out;
 }
 
+/**
+ * kobo-508 — the single declared source for how many rows the send-gate
+ * captures. checkPaneIdle and detectPermissionMenu both read the input box
+ * above its divider+footer and MUST request the same depth: widen this once
+ * to catch a taller menu and both see it; if they ever drift apart it's a
+ * silent hole (one gate reads a shorter/taller pane than the other), not a
+ * red test — see the mutation test in check-pane-idle-real-captures.test.ts.
+ */
+export const SEND_GATE_SNAPSHOT_LINES = 12;
+
 export async function checkPaneIdle(
   target: string,
   host?: string,
@@ -456,7 +466,7 @@ export async function checkPaneIdle(
   const capturePane = deps.captureFn ?? capture;
   try {
     // Capture enough rows to see the TUI input box above its divider+footer.
-    const content = await capturePane(target, 12, host);
+    const content = await capturePane(target, SEND_GATE_SNAPSHOT_LINES, host);
     const lines = content
       .split("\n")
       .map(l => stripGhostText(l)
@@ -517,7 +527,7 @@ export async function detectPermissionMenu(
 ): Promise<boolean> {
   const capturePane = deps.captureFn ?? capture;
   try {
-    const text = (await capturePane(target, 12, host))
+    const text = (await capturePane(target, SEND_GATE_SNAPSHOT_LINES, host))
       .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
       .replace(/\x1b\[[0-9;]*[mGKHFJA-Z]/g, "")
       .replace(/\r/g, "");

@@ -72,6 +72,7 @@ import {
   setTaskPr,
   clearTaskPr,
   setTaskRepoIfMissing,
+  setTaskPrMergeState,
   startTask,
   taskFilePath,
   taskNextAction,
@@ -1448,6 +1449,27 @@ describe("pr-link repo binding (kobo-80 — enforce/backfill card.repo so pr-wat
     expect(setTaskRepoIfMissing("pgw", b.id, "other/nope")!.repo).toBe("acme/keep"); // unchanged
     expect(readTask("pgw", b.id)!.updatedTs).toBe(before); // no-op → no write
     expect(setTaskRepoIfMissing("pgw", "pgw-nope", "x/y")).toBeNull(); // absent card
+  });
+
+  // kobo-594 — pr-watch's only writer of the board's real merge-state signal.
+  test("setTaskPrMergeState writes mergeable + mergeStateStatus + a fresh checked timestamp; absent card → null", () => {
+    const a = addTask({ company: "pgw", title: "watch me", by: "eq3", pr: 53 });
+    const before = Date.now();
+    const t = setTaskPrMergeState("pgw", a.id, "CONFLICTING", "DIRTY")!;
+    expect(t.prMergeable).toBe("CONFLICTING");
+    expect(t.prMergeStateStatus).toBe("DIRTY");
+    expect(t.prMergeCheckedTs).toBeGreaterThanOrEqual(before);
+    expect(setTaskPrMergeState("pgw", "pgw-nope", "MERGEABLE", "CLEAN")).toBeNull(); // absent card
+  });
+
+  test("setTaskPrMergeState always overwrites the prior value + timestamp — the poll result is always fresher than the last one, never sticky", () => {
+    const a = addTask({ company: "pgw", title: "watch me", by: "eq3", pr: 53 });
+    setTaskPrMergeState("pgw", a.id, "CONFLICTING", "DIRTY");
+    const firstTs = readTask("pgw", a.id)!.prMergeCheckedTs!;
+    const t = setTaskPrMergeState("pgw", a.id, "MERGEABLE", "CLEAN")!; // conflict resolved on the next poll
+    expect(t.prMergeable).toBe("MERGEABLE"); // self-heals — no manual unset needed
+    expect(t.prMergeStateStatus).toBe("CLEAN");
+    expect(t.prMergeCheckedTs).toBeGreaterThanOrEqual(firstTs);
   });
 });
 

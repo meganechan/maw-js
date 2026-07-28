@@ -143,6 +143,19 @@ export interface TaskRecord {
   assignee: string | null; // who holds the work (SSoT for ownership)
   repo?: string;
   pr?: number;
+  // kobo-594: the board's ONLY source for whether the linked PR is actually mergeable
+  // on GitHub — before this, "all signs in" + a PR link read as "ready to merge" with
+  // NOTHING checking the PR's real state, so a card stayed silent through a real
+  // CONFLICTING PR (proven live: alpha absorbing sibling PRs flipped #371/#375
+  // CONFLICTING in the same minute, board still said "รอ merge"). Written by
+  // pr-watch's poll (setTaskPrMergeState) from `gh pr list --json mergeable,
+  // mergeStateStatus` — the SAME call pr-watch already makes for open/merged/closed
+  // detection, so this costs zero extra `gh` calls. Absent = never successfully
+  // checked; a failed/rate-limited `gh` call leaves these UNCHANGED (never writes a
+  // fake value) — absence must never be read as "mergeable" (the unhappy-path AC).
+  prMergeable?: string; // raw GitHub value: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" (GitHub's own lazy-compute-pending state, not this repo's "we never checked")
+  prMergeStateStatus?: string; // raw GitHub value: "CLEAN" | "DIRTY" | "BLOCKED" | "BEHIND" | "UNSTABLE" | "UNKNOWN" | "DRAFT" — richer detail than prMergeable alone
+  prMergeCheckedTs?: number; // epoch ms of the last SUCCESSFUL check — staleness must always be readable from this, never assumed fresh
   deployRequired?: boolean; // kobo-274 — when its PR merges, park in wait-for-deploy (merged≠live) instead of done. Unset → defaults to "has a PR" (Tony option a); set explicitly to override either way.
   block?: TaskBlock; // set when state = blocked (explicit block — ADR 0003 B)
   prevState?: TaskState; // flow state to return to on unblock
@@ -1033,6 +1046,25 @@ export function setTaskRepoIfMissing(company: string, id: string, repo: string):
 }
 
 /**
+ * kobo-594: record a SUCCESSFUL `gh` mergeable-state check — the caller (pr-watch)
+ * only calls this when it actually got a value back; a failed/rate-limited `gh`
+ * call must never call this at all, leaving the prior (possibly absent) state
+ * untouched rather than writing a guess. This is the ONLY writer of these 3
+ * fields — always called together so they can never desync (a status without
+ * its own timestamp would be unreadable as fresh-or-stale).
+ */
+export function setTaskPrMergeState(company: string, id: string, mergeable: string, mergeStateStatus: string): TaskRecord | null {
+  const task = readTask(company, id);
+  if (!task) return null;
+  task.prMergeable = mergeable;
+  task.prMergeStateStatus = mergeStateStatus;
+  task.prMergeCheckedTs = Date.now();
+  task.updatedTs = Date.now();
+  writeTaskRecord(task);
+  return task;
+}
+
+/**
  * PR opened → drive the linked card to review (eq3-011 kobo-13). Driven by PR-watch
  * off the card.pr link (the SAME link merge→done uses) so the board tracks the PR
  * (truth), not a manual step. Idempotent: a card already review-for-this-reviewer is
@@ -1704,6 +1736,37 @@ export function blockNextAction(task: TaskRecord): string {
   return `⚑ [${b.kind}]${who}${why}`;
 }
 
+/** Minutes since `ts`, floored — used only to label a cached check's staleness inline. */
+function minutesAgo(ts: number): number {
+  return Math.max(0, Math.floor((Date.now() - ts) / 60_000));
+}
+
+/**
+ * kobo-594: the review-state next-action's PR-linked branch used to read
+ * `task.pr` alone as "ready — just needs a merge click," with nothing checking
+ * whether the PR was ACTUALLY mergeable on GitHub. `task.prMergeable` (written by
+ * pr-watch, see setTaskPrMergeState) is the only real signal — absent means it
+ * was never successfully checked (a failed/rate-limited `gh` call leaves it
+ * untouched, never a guessed value), and that case must read as "don't know,"
+ * never silently as "ready" (the unhappy-path AC this card exists to close).
+ * Every branch that DOES have a value shows when it was checked so a stale
+ * cache reads as stale, not as fresh.
+ */
+function prMergeNextAction(task: TaskRecord): string {
+  const pr = task.pr;
+  if (task.prMergeable === "CONFLICTING") {
+    const checked = task.prMergeCheckedTs ? ` (เช็คล่าสุด ${minutesAgo(task.prMergeCheckedTs)} นาทีที่แล้ว)` : "";
+    return `⚠ PR #${pr} conflict — ต้องแก้ conflict ก่อน merge${checked}`;
+  }
+  if (task.prMergeable === "MERGEABLE") {
+    const checked = task.prMergeCheckedTs ? ` (เช็คล่าสุด ${minutesAgo(task.prMergeCheckedTs)} นาทีที่แล้ว)` : "";
+    return `รอ merge PR #${pr} → done${checked}`;
+  }
+  // absent, or GitHub's own "UNKNOWN" lazy-compute-pending state — both mean the
+  // same thing to a reader deciding whether to click merge: not confirmed ready.
+  return `รอ merge PR #${pr} → done (ยังไม่เคยเช็คสถานะ conflict — อย่ากด merge โดยไม่เช็ค gh ด้วยมือ)`;
+}
+
 /**
  * Next-action hint — the board's answer to "what happens next + who". Computed,
  * never stored. Every state returns a non-empty line so no card is ever a dead
@@ -1714,7 +1777,7 @@ export function taskNextAction(task: TaskRecord): string {
     case "blocked":
       return blockNextAction(task);
     case "review":
-      if (task.pr) return `รอ merge PR #${task.pr} → done`;
+      if (task.pr) return prMergeNextAction(task);
       return `รอ ${task.reviewer || "ใครก็ได้"} ตรวจ${task.reviewReason ? ` (${task.reviewReason})` : ""}`;
     case "approve":
       return "รอ Tony เคาะ (approve → done)"; // kobo-189 — human gate after worker review

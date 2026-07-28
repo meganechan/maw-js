@@ -89,7 +89,45 @@ describe("taskNextAction — every state answers 'what next + who'", () => {
   test("review: reviewer vs PR", () => {
     expect(taskNextAction(mk({ state: "review", reviewer: "eq3" }))).toBe("รอ eq3 ตรวจ");
     expect(taskNextAction(mk({ state: "review" }))).toBe("รอ ใครก็ได้ ตรวจ");
-    expect(taskNextAction(mk({ state: "review", pr: 53 }))).toBe("รอ merge PR #53 → done");
+  });
+
+  // kobo-594 — a card with all signs in + a PR link used to read as "just needs a
+  // merge click" with NOTHING checking whether the PR was actually mergeable on
+  // GitHub. Proven live: alpha absorbing sibling PRs flipped #371/#375 CONFLICTING
+  // in the same minute while their cards still said "รอ merge" — no field on the
+  // board represented real PR state at all.
+  describe("review + PR: mergeable state must be checked, never assumed (kobo-594)", () => {
+    test("prMergeable never set (never successfully checked) → must NOT read as ready", () => {
+      const next = taskNextAction(mk({ state: "review", pr: 53 }));
+      expect(next).toContain("PR #53");
+      expect(next).toContain("ยังไม่เคยเช็ค"); // explicit "not confirmed" caveat
+      expect(next).not.toBe("รอ merge PR #53 → done"); // the OLD bare claim must not survive unqualified
+    });
+
+    test("GitHub's own UNKNOWN (lazy-compute-pending) gets the same not-confirmed treatment as never-checked", () => {
+      const next = taskNextAction(mk({ state: "review", pr: 53, prMergeable: "UNKNOWN", prMergeStateStatus: "UNKNOWN", prMergeCheckedTs: Date.now() }));
+      expect(next).toContain("ยังไม่เคยเช็ค");
+    });
+
+    test("prMergeable CONFLICTING → explicit conflict warning, distinct from ready", () => {
+      const next = taskNextAction(mk({ state: "review", pr: 53, prMergeable: "CONFLICTING", prMergeStateStatus: "DIRTY", prMergeCheckedTs: Date.now() }));
+      expect(next).toContain("conflict");
+      expect(next).toContain("PR #53");
+      expect(next).not.toContain("รอ merge PR #53 → done");
+    });
+
+    test("prMergeable MERGEABLE → reads as ready, the original message", () => {
+      const next = taskNextAction(mk({ state: "review", pr: 53, prMergeable: "MERGEABLE", prMergeStateStatus: "CLEAN", prMergeCheckedTs: Date.now() }));
+      expect(next).toContain("รอ merge PR #53 → done");
+      expect(next).not.toContain("conflict");
+      expect(next).not.toContain("ยังไม่เคยเช็ค");
+    });
+
+    test("checked timestamp is readable in the message when present — staleness must not be silent", () => {
+      const tenMinAgo = Date.now() - 10 * 60_000;
+      const next = taskNextAction(mk({ state: "review", pr: 53, prMergeable: "MERGEABLE", prMergeStateStatus: "CLEAN", prMergeCheckedTs: tenMinAgo }));
+      expect(next).toContain("10 นาทีที่แล้ว");
+    });
   });
   test("blocked surfaces the kind + who-clears + why", () => {
     expect(taskNextAction(mk({ state: "blocked", block: { kind: "needs_input", for: "tony", reason: "approve" } }))).toBe("⚑ [needs_input] รอ tony: approve");

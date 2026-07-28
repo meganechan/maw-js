@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { handleTaskApproveRequest, handleTaskArchiveRequest, handleTaskAssignRequest, handleTaskCommentRequest, handleTaskCreateRequest, handleTaskDeployedRequest, handleTaskDetailRequest, handleTaskDoneRequest, handleTaskEditRequest, handleTaskEventsRequest, handleTaskNoteRequest, handleTaskRejectRequest, handleTasksRequest } from "./route";
-import { addTask, assignTask, claimTask, commentTask, completeTask, listArchivedTasks, listTasks, moveTask, noteTask, prOpenedReview, readTask, setTaskPr, signTask, taskFilePath } from "./store";
+import { addTask, assignTask, claimTask, commentTask, completeTask, listArchivedTasks, listTasks, moveTask, noteTask, prOpenedReview, readTask, setTaskPr, setTaskPrMergeState, signTask, taskFilePath } from "./store";
 
 const dir = mkdtempSync(join(tmpdir(), "maw-tasks-route-"));
 const prev = process.env.MAW_DATA_DIR;
@@ -68,6 +68,47 @@ describe("handleTasksRequest (real file-per-card store)", () => {
     expect(card.reviewer).toBe("eq3"); // kobo-144 addendum: creator reviews their PR (not hardcoded human)
     expect(card.pr).toBe(88);
     expect(card.nextAction).toContain("PR #88"); // "รอ merge PR #88 → done"
+    // kobo-594: no field represented real PR state before this — a card with a
+    // linked PR and no mergeable check yet must NOT read as "ready to merge".
+    expect(card.nextAction).toContain("ยังไม่เคยเช็ค");
+  });
+
+  // kobo-594 — before this, "รอ merge PR #N → done" was the ONLY signal on the
+  // board about a PR, regardless of whether GitHub actually considered it
+  // mergeable — proven live: sibling PRs merging into alpha flipped 2 OPEN PRs
+  // CONFLICTING in the same minute with their cards still reading "ready."
+  test("PR mergeable state ships on /api/tasks — absent when never checked, present + correct once pr-watch writes it", async () => {
+    process.env.MAW_DATA_DIR = dir;
+    const t = addTask({ company: "mergestate", title: "conflict-prone card", by: "eq3", assignee: "patchwork" });
+    setTaskPr("mergestate", t.id, 99, "patchwork");
+
+    const before = (await handleTasksRequest(new Request("http://x/api/tasks?company=mergestate")).json()) as {
+      tasks: Array<{ title: string; prMergeable?: string; nextAction: string }>;
+    };
+    const cardBefore = before.tasks.find((c) => c.title === "conflict-prone card")!;
+    expect(cardBefore.prMergeable).toBeUndefined(); // kobo-501-style discipline: absent stays absent, never defaulted
+    expect(cardBefore.nextAction).toContain("ยังไม่เคยเช็ค");
+
+    setTaskPrMergeState("mergestate", t.id, "CONFLICTING", "DIRTY");
+    const afterConflict = (await handleTasksRequest(new Request("http://x/api/tasks?company=mergestate")).json()) as {
+      tasks: Array<{ title: string; prMergeable?: string; prMergeStateStatus?: string; prMergeCheckedTs?: number; nextAction: string }>;
+    };
+    const cardConflict = afterConflict.tasks.find((c) => c.title === "conflict-prone card")!;
+    expect(cardConflict.prMergeable).toBe("CONFLICTING");
+    expect(cardConflict.prMergeStateStatus).toBe("DIRTY");
+    expect(typeof cardConflict.prMergeCheckedTs).toBe("number");
+    expect(cardConflict.nextAction).toContain("conflict");
+
+    // self-heals on the next poll — no manual unset needed (AC given/when/then #3)
+    setTaskPrMergeState("mergestate", t.id, "MERGEABLE", "CLEAN");
+    const afterFixed = (await handleTasksRequest(new Request("http://x/api/tasks?company=mergestate")).json()) as {
+      tasks: Array<{ title: string; prMergeable?: string; nextAction: string }>;
+    };
+    const cardFixed = afterFixed.tasks.find((c) => c.title === "conflict-prone card")!;
+    expect(cardFixed.prMergeable).toBe("MERGEABLE");
+    expect(cardFixed.nextAction).toContain("รอ merge PR #99 → done");
+    expect(cardFixed.nextAction).not.toContain("conflict");
+    expect(cardFixed.nextAction).not.toContain("ยังไม่เคยเช็ค");
   });
 
   // kobo-510 — crewSignedSha/headSignedSha (kobo-400) had never been copied into

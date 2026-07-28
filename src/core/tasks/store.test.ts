@@ -2367,11 +2367,15 @@ describe("reclassifyAndEscalate (kobo-546) — merge-time wins over the PR-open 
     expect(merged?.crewGate).toBe(true);
   });
 
-  // MUTATION PROOF, per the card's own instruction: write it BEFORE claiming the AC.
-  // Deleting the escalation call (simulating "someone removed the merge-time re-check")
-  // must be provable as a real behavior change — this test's failure mode IS that proof:
-  // if reclassifyAndEscalate is ever reduced to a no-op, requiredSignTiers stays ["head"]
-  // and the assertion above goes red by name, not silently.
+  // eq3 head review (PR#359 c1): this test proves reclassifyAndEscalate ITSELF
+  // performs a real store write, not just a return value — it calls the function
+  // directly. It does NOT prove the merge CLI's call site (task/index.ts:941,
+  // stage "merge-time") is ever reached: deleting that call site leaves this
+  // function fully intact and this test green either way. The bind-site proof
+  // — a behavioral test that goes through the actual `merge` command and would
+  // go red if the merge-time call were removed — lives in
+  // test/isolated/plugin-task-sign-merge.test.ts (kobo-546 REWORK, "merge-time
+  // reclassify is a CALL SITE, not just a function").
   test("mutation-anchor: escalation must be a REAL store write, not just a return value — readTask from a fresh handle sees crewGate too", () => {
     const t = addTask({ company: "kobo", title: "c", by: "eq3" });
     reclassifyAndEscalate("kobo", t.id, "eq3", [{ path: ".github/workflows/ci.yml", additions: 1, deletions: 0 }], "pr-open");

@@ -125,6 +125,18 @@ describe("classifySignTiers (kobo-546 REWORK) — %109's holes A + B", () => {
     const files: DiffFile[] = [{ path: "src/vendor/mpr-plugins/mcp/tools.ts", additions: 1, deletions: 1 }];
     expect(classifySignTiers(files).tiers).toEqual(["crew", "head"]);
   });
+
+  // eq3 head review (PR#359 c1): the classifier's OWN path was in SENSITIVE_PATHS'
+  // "sign/merge gate code itself" category with nothing pinning it directly — pulling
+  // ONLY this path's clause out (leaving store.ts/task/index.ts/mcp/tools.ts in place)
+  // left the whole suite green, because touching the brain of the gate classified as
+  // 1 tier while every other row still had its own dedicated test.
+  test("the classifier's OWN file (sign-tier-classifier.ts) is sensitive — closes the hole where removing just this path's clause stayed green", () => {
+    const files: DiffFile[] = [{ path: "src/core/tasks/sign-tier-classifier.ts", additions: 1, deletions: 1 }];
+    const r = classifySignTiers(files);
+    expect(r.tiers).toEqual(["crew", "head"]);
+    expect(r.reason).toContain("sign-tier-classifier.ts");
+  });
 });
 
 describe("classifySignTiers (kobo-546 REWORK) — the 300-line threshold (eq3 lead's starting number)", () => {

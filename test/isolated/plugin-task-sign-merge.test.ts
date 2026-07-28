@@ -188,6 +188,38 @@ describe("kobo-327 merge-gate: runTask sign/merge verbs", () => {
   });
 });
 
+// eq3 head review (PR#359 c1): store.test.ts's own "mutation-anchor" test calls
+// reclassifyAndEscalate DIRECTLY — it proves the function writes through, but it
+// never exercises the merge CLI's own call site (task/index.ts:941, stage
+// "merge-time"). Deleting that call site (or nulling its argument) leaves the
+// function itself fully intact, so that test stays green either way — the exact
+// hole eq3 found by mutating the real bind site and getting 323/323 green.
+// This test goes through the real `merge` command instead, so it can only pass
+// if the bind site actually ran.
+describe("kobo-546 REWORK — merge-time reclassify is a CALL SITE, not just a function (eq3 head review c1)", () => {
+  test("PR-open stamps 1-tier on a safe diff; the diff moves into a sensitive path before merge; merge REFUSES on a missing CREW sign, never on the unset-crewGate fail-closed message — the only way to tell task/index.ts:941 actually ran", async () => {
+    await task(["add", "c"]); // pr-open will see the safe README stub → stays 1-tier
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
+    await task(["sign", "kobo-1", "--role", "head"]);
+    expect(readTask("kobo", "kobo-1")!.crewGate).toBeFalsy(); // pre-condition: genuinely still 1-tier
+
+    __setPrDiffFetcherForTest(() => [{ path: "src/core/tasks/store.ts", additions: 1, deletions: 1 }]);
+    try {
+      const r = await task(["merge", "kobo-1"]);
+      expect(r.ok).toBe(false);
+      // If task/index.ts:941 were removed/no-op'd, crewGate would stay unset and
+      // this would instead read "crewGate is not set" (kobo-331 fail-closed) —
+      // a DIFFERENT error, from a different guard, that this assertion excludes.
+      expect(r.error).not.toContain("crewGate is not set");
+      expect(r.error).toContain("missing");
+      expect(r.error).toContain("crew");
+      expect(readTask("kobo", "kobo-1")!.crewGate).toBe(true); // escalation actually landed in the store
+    } finally {
+      __setPrDiffFetcherForTest(() => [{ path: "docs/README.md", additions: 1, deletions: 0 }]); // restore this file's safe default — never leak into later tests
+    }
+  });
+});
+
 // kobo-331: FAIL-CLOSED bootstrap gap — an unset crewGate is ambiguous (crew-cell
 // pre-sign vs genuine single-tier), so merge REFUSES rather than falling through to a
 // silent head-only merge (race #4, hit live on kobo-328). Two explicit escapes.

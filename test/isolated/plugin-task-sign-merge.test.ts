@@ -487,30 +487,28 @@ describe("kobo-557 sign-time SHA-bind refuse (A/B/C/D)", () => {
     }
   });
 
-  test("(C) sign REFUSES when the PR is linked but its head-commit fetch fails — a transient gh problem, not a card/SHA defect", async () => {
+  test("(C) sign ALLOWS through when the PR is linked but its head-commit fetch fails — Tony's ruling, kobo-404 posture (never block on this)", async () => {
     await task(["add", "c"]);
     await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
     __setHeadShaFetcherForTest(() => undefined); // simulates a gh failure — PR IS linked
     try {
       const r = await task(["sign", "kobo-1", "--role", "head"]);
-      expect(r.ok).toBe(false);
-      expect(r.error).toContain("TRANSIENT");
-      expect(r.error).toContain("gh"); // names the actual cause
-      expect(r.error).not.toContain("no PR linked"); // must NOT be confused with (A) — the PR IS linked here
-      expect(r.error).toContain("re-run"); // next-step guidance: wait and retry, not re-stamp or re-read
-      expect(readTask("kobo", "kobo-1")!.headSignedBy).toBeUndefined(); // never recorded
+      expect(r.ok).toBe(true); // transient external failure never blocks a sign (kobo-404)
+      expect(readTask("kobo", "kobo-1")!.headSignedBy).toBe("eq3"); // sign DID record
+      expect(readTask("kobo", "kobo-1")!.headSignedSha).toBeUndefined(); // just unbound
     } finally {
       __setHeadShaFetcherForTest(() => DEFAULT_TEST_HEAD_SHA);
     }
   });
 
-  test("(C) output line for a refused gh-fetch-failure never carries the bound-sha marker (distinct from B, reviewer pre-screen point 3)", async () => {
+  test("(C) output line says plainly no SHA bound, and is DISTINCT from a bound (B) sign (AC8, reviewer pre-screen point 3)", async () => {
     await task(["add", "c"]);
     await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
     __setHeadShaFetcherForTest(() => undefined);
     try {
       const r = await task(["sign", "kobo-1", "--role", "head"]);
-      expect(r.output).not.toContain("[sha "); // never a bound-sha line on a refuse
+      expect(r.output).toContain("NO SHA BOUND");
+      expect(r.output).not.toContain("[sha "); // distinct from the bound-case label, not just present
     } finally {
       __setHeadShaFetcherForTest(() => DEFAULT_TEST_HEAD_SHA);
     }

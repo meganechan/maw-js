@@ -154,12 +154,12 @@ describe("task command plugin standalone boundary", () => {
     expect(src).toContain("__setHeadShaFetcherForTest");
     expect(src).toContain("__resetHeadShaFetcherForTest");
     expect(src).toContain("someone pushed since you read it");
-    // kobo-557: "can't bind a SHA = don't sign" — REFUSE both ways a sign can fail to
-    // bind, with distinct messages so the operator fixes the right thing: no PR linked
-    // is a workflow gap (stamp it), a gh fetch failure with the PR linked is transient
-    // (wait and retry) — neither is confusable with the other or with a bound sign.
+    // kobo-557 — Tony's ruling (path 2): (A) no PR linked is a workflow gap → REFUSE
+    // (stamp it, fixable in 5 seconds). (C) a gh fetch failure with the PR linked is
+    // the network-dependency shape kobo-404 protects → ALLOW through, loud — the
+    // output line must say plainly no SHA bound, distinct from a genuine bind.
     expect(src).toContain("no PR linked yet");
-    expect(src).toContain("TRANSIENT gh problem");
+    expect(src).toContain("NO SHA BOUND");
     // kobo-501: a sign records WHAT justified it (diff-read vs a real test-run vs
     // mutation-verified), not just sha+pane — undeclared is the true default, never
     // silently upgraded to diff-read (the collapse-unknown-into-a-value defect class).

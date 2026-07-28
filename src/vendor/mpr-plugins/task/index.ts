@@ -849,30 +849,28 @@ export async function runTask(
       const evidenceLocus = flags["--evidence-locus"];
       const evidenceViol = evidenceScopeViolation(evidenceScope, evidenceLocus);
       if (evidenceViol) return { ok: false, error: `sign REFUSED for ${id}: ${evidenceViol}` };
-      // kobo-557: ONE rule — "can't bind a SHA = don't sign." Two distinct ways a sign
-      // can fail to bind, each REFUSED with its own message so the operator fixes the
-      // right thing (kobo-556 live incident: reviewer signed before the PR was
-      // stamped, got exit 0 with crewSignedSha=null, and merge later grandfathered
-      // that tier — the exact rule 921-926 in `merge` triggers ONLY on field-absence,
-      // which can't tell "legacy pre-kobo-400 sign" from "new sign that never bound" —
-      // ALLOWING the latter through would route brand-new signs into a door built for
-      // old ones, a bug not a tradeoff; splitting them is kobo-404's job, not this
-      // card's).
+      // kobo-557 — Tony's ruling (path 2, via lead 2026-07-28): (A) and (C) are NOT
+      // the same class. (A) no PR linked is a WORKFLOW gap — nothing here is a
+      // network dependency, fixable in 5 seconds (`maw company task pr ...`), so it
+      // REFUSES. (C) the head-commit fetch failing is the exact "network stuff
+      // blocking a sign" shape kobo-404 protects: its own AC forbids changing that
+      // posture to "refuse" — the real defect kobo-400 was fixing was SILENCE, not
+      // non-blocking (its own words: "ที่ผิดจริงไม่ใช่ไม่บล็อก แต่คือไม่บอก แก้ที่
+      // ข้อความ ไม่ใช่ที่ posture"). So (C) stays ALLOW, loud: it must say plainly
+      // that no SHA bound, distinct from a genuine bind (AC8), so the two states are
+      // never confused from the output line alone (kobo-556's exact confusion).
       //
       // (A) no PR linked at all — a WORKFLOW gap, fixable immediately.
       if (before && (!before.pr || !before.repo)) {
         return { ok: false, error: `sign REFUSED for ${id}: no PR linked yet — this sign can't be bound to a commit. Stamp the PR first: maw company task pr ${id} <n> --repo <owner/name>, then sign.` };
       }
       // (C) PR IS linked, but the head-commit fetch itself failed — a TRANSIENT gh
-      // problem (network/auth), not a defect in the card or its SHA. Message says so
-      // explicitly: re-stamping the PR or hunting for a different SHA fixes nothing
-      // here, only waiting and re-running sign does.
+      // problem (network/auth), not a defect in the card or its SHA. kobo-404's
+      // posture: never block a sign for this, only ever fail to tell the signer. The
+      // shaLabel below (AC8) is what tells them, on the SAME line as the success.
       let signedSha: string | undefined;
       if (before?.pr && before?.repo) {
         signedSha = headShaFetcher(before.pr, before.repo);
-        if (!signedSha) {
-          return { ok: false, error: `sign REFUSED for ${id}: could not read the PR's current head commit (gh fetch failed) — this is a TRANSIENT gh problem, not a problem with this card or its SHA. Wait a moment and re-run: maw company task sign ${id} --role ${role}.` };
-        }
       }
       // kobo-557: comparing crew-sha vs head-sha at MERGE time (kobo-400, below) only
       // proves the two tiers agree with EACH OTHER — it never proves either of them
@@ -883,12 +881,13 @@ export async function runTask(
       // would have passed clean. --sha makes the read explicit: the signer states which
       // commit they reviewed, and a head that moved since is refused, not silently
       // re-bound. Omitting --sha keeps today's best-effort auto-bind — this is a
-      // DIFFERENT gap from kobo-404 (which covers signs already recorded WITHOUT a
-      // SHA from before this mechanism existed — a sign that fails to bind today
-      // refuses instead, per (A)/(C) above, so no NEW legacy-shaped sign can be
-      // produced going forward). A sign that binds fine but was never told what the
-      // signer read has NO card holding it yet — eq3 has sent the question of whether
-      // --sha should become mandatory up to Tony; this card only closes the hole for a
+      // DIFFERENT gap from kobo-404 (which owns the field-absence class at merge
+      // time: a genuinely-legacy pre-kobo-400 sign and a (C)-path sign that allowed
+      // through unbound both end up with no *SignedSha, indistinguishable to merge's
+      // grandfather check — kobo-404's job, not this one, to eventually tell them
+      // apart or tighten). A sign that binds fine but was never told what the signer
+      // read has NO card holding it yet — eq3 has sent the question of whether --sha
+      // should become mandatory up to Tony; this card only closes the hole for a
       // signer who opts in by declaring what they read.
       const readSha = flags["--sha"];
       if (readSha && signedSha && readSha !== signedSha) {
@@ -897,12 +896,13 @@ export async function runTask(
       const t = signTask(company, id, me, role, signerPane, signedSha, evidenceScope, evidenceLocus);
       if (!t) return { ok: false, error: `task not found: ${id}` };
       const still = missingSignTiers(t);
-      // kobo-557 (AC8): a sign that reaches this line always bound a real SHA — both
-      // ways of failing to bind (A: no PR, C: gh fetch failed) refuse above and never
-      // arrive here. Print it so the bound commit is readable from THIS line, not from
-      // opening the card file (kobo-556's exact confusion: `still needs: head` printed
-      // identically whether or not a SHA had bound).
-      const shaLabel = ` \x1b[90m[sha ${signedSha}]\x1b[0m`;
+      // kobo-557 (AC8): (C) allows the sign through with an unbound SHA (Tony's
+      // ruling, kobo-404 posture) — so the two states must be told apart from THIS
+      // line, not by opening the card file (kobo-556's exact confusion: `still needs:
+      // head` printed identically whether or not a SHA had bound).
+      const shaLabel = signedSha
+        ? ` \x1b[90m[sha ${signedSha}]\x1b[0m`
+        : ` \x1b[31m[NO SHA BOUND — gh fetch failed, this tier is unverified]\x1b[0m`;
       console.log(`\x1b[32m✍ signed\x1b[0m ${t.id} \x1b[90m(${role})\x1b[0m: ${t.title} \x1b[90m[${formatSignEvidenceScope(evidenceScope)}]\x1b[0m${shaLabel}${still.length ? ` \x1b[90m— still needs: ${still.join(", ")}\x1b[0m` : ` \x1b[90m— all signs in (mergeable)\x1b[0m`}`);
     } else if (subcmd === "merge") {
       // kobo-327: the ONE path that merges a gated card. REFUSES until every required

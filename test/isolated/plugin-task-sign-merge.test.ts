@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { runTask, __setPrDiffFetcherForTest, __resetPrDiffFetcherForTest } from "../../src/vendor/mpr-plugins/task/index";
+import { runTask, __setPrDiffFetcherForTest, __resetPrDiffFetcherForTest, __setPatchIdFetcherForTest, __resetPatchIdFetcherForTest } from "../../src/vendor/mpr-plugins/task/index";
 import {
   addTask,
   readTask,
@@ -46,6 +46,19 @@ beforeAll(() => {
   // stub here would silently crew-gate every card in this suite. Do not "tidy"
   // this back to an empty array — that's the gate quietly dying, not a cleanup.
   __setPrDiffFetcherForTest(() => [{ path: "docs/README.md", additions: 1, deletions: 0 }]);
+  // kobo-578 review round 1: same reasoning as the prDiffFetcher stub above —
+  // ~22 calls in this file link a PR then sign via the CLI, so without an
+  // injected stub `sign`'s `signedPatchId = before?.pr && before?.repo ?
+  // patchIdFetcher(...) : undefined` shells to a REAL `gh pr diff` + `git
+  // patch-id` every time (measured: +~13s on a 3-file run). Worse than slow:
+  // if `gh` fails/rate-limits on a runner with no auth, the fetcher returns
+  // undefined → isSignDowngrade always false → the feature silently no-ops
+  // while tests stay green (the exact kobo-546 shape this file's own other
+  // stub exists to avoid). Fixed non-varying value — the dedicated kobo-578
+  // downgrade-detection tests call signTask() directly with explicit patchId
+  // args, bypassing this fetcher entirely, so no test here needs the stub to
+  // vary its return value.
+  __setPatchIdFetcherForTest(() => "test-patch-id-stub");
 });
 afterAll(() => {
   if (prev === undefined) delete process.env.MAW_DATA_DIR;
@@ -56,6 +69,7 @@ afterAll(() => {
   else process.env.MAW_TEST_MODE = prevTest;
   if (prevTmux === undefined) delete process.env.TMUX; else process.env.TMUX = prevTmux;
   __resetPrDiffFetcherForTest(); // kobo-546: undo the injected stub — never leak into another test file
+  __resetPatchIdFetcherForTest(); // kobo-578: same — never leak into another test file
   rmSync(dir, { recursive: true, force: true });
 });
 beforeEach(() => { rmSync(join(dir, "companies", "kobo", "tasks"), { recursive: true, force: true }); });
@@ -680,6 +694,21 @@ describe("kobo-578 signHistory + patch-id downgrade detection", () => {
     addTask({ company: "kobo", title: "c", by: "eq3" });
     signTask("kobo", "kobo-1", "patchwork", "head", null, "sha-1", "test-run+mutation", "loc-1"); // no patch-id fetched (gh failure, best-effort)
     signTask("kobo", "kobo-1", "eq3", "head", null, "sha-2", "diff-read"); // also no patch-id
+    const wl = readWorklog("kobo");
+    expect(wl.filter((e) => e.kind === "task-sign-downgrade" && e.task === "kobo-1").length).toBe(0);
+  });
+
+  // kobo-578 review round 1 — the false-positive direction, undeclared/untested
+  // until now: a re-sign with WEAKER evidence at a genuinely DIFFERENT patch-id
+  // (real code change — the 4-times-a-day shape this card explicitly protects,
+  // "re-signed because the code changed") must NOT be flagged, since the old
+  // evidence is simply moot, not replaced-by-something-worse. Reviewer's own
+  // undeclared mutation (removing the `prior.patchId !== newPatchId` early
+  // return) turned this exact case into a false DOWNGRADE — this pins it.
+  test("different patch-id (real content change) + weaker evidence → NOT a downgrade, evidence is just moot", () => {
+    addTask({ company: "kobo", title: "c", by: "eq3" });
+    signTask("kobo", "kobo-1", "patchwork", "head", null, "sha-1", "test-run+mutation", "loc-1", "patch-A");
+    signTask("kobo", "kobo-1", "eq3", "head", null, "sha-2", "diff-read", undefined, "patch-B"); // real code change, weaker claim on the NEW code
     const wl = readWorklog("kobo");
     expect(wl.filter((e) => e.kind === "task-sign-downgrade" && e.task === "kobo-1").length).toBe(0);
   });

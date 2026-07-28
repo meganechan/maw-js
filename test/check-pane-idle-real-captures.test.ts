@@ -165,8 +165,11 @@ describe("kobo-508 — permission-menu row drawn in reverse instead of colour (h
  * gate reads a shorter (or taller) pane than the other and the hole this card
  * exists to close reopens silently, with no red test to catch it. This spies
  * on the raw captureFn args each function passes and pins both to the
- * exported constant, not to each other, so a hardcoded second number at
- * either call site fails here even if it happens to equal today's 12.
+ * exported constant. It catches the two call sites DIVERGING (e.g. one left
+ * at 12, the other bumped to 40) — it does NOT prove either call site still
+ * references the constant rather than a re-hardcoded literal that happens to
+ * equal it; that class of regression is out of scope here (would need a
+ * source-scan, which is more than this AC asks for).
  */
 describe("kobo-508 — send-gate snapshot depth is declared once, used by both", () => {
   test("checkPaneIdle requests SEND_GATE_SNAPSHOT_LINES rows", async () => {

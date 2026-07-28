@@ -368,6 +368,16 @@ describe("task command plugin standalone boundary", () => {
     // GitHub-checks-freshness-at-merge caveat is now explicit in the message.
     expect(afterStale).toContain("all tiers signed the same commit");
     expect(afterStale).toContain("head freshness is checked by GitHub at merge time");
+    // reviewer round 2: pin the reword itself, not just its presence — reverting the
+    // success branch's RUNTIME string back to `— all signs in (mergeable)` must go red
+    // here. Scoped to the `statusSuffix = agreedSha ? ... : ...;` assignment itself
+    // (not the wider afterStale slice) — that slice also contains this card's own
+    // explanatory comments, which legitimately quote the old string in prose; a scan
+    // over prose would self-trip on its own history note (kobo-581's exact trap).
+    const successAssignIdx = afterStale.indexOf("statusSuffix = agreedSha");
+    expect(successAssignIdx).toBeGreaterThan(-1);
+    const successAssign = afterStale.slice(successAssignIdx, afterStale.indexOf(";", afterStale.indexOf(";", successAssignIdx) + 1) + 1);
+    expect(successAssign).not.toContain("(mergeable)");
   });
 
   // kobo-580 — pendingMentions() stopped gating on isOnBoard (rule 10: a comment

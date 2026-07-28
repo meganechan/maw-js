@@ -2350,13 +2350,13 @@ describe("taskNextAction — review state reflects a stale sign mismatch (kobo-5
     setTaskPr("kobo", t.id, 99, "eq3");
     signTask("kobo", t.id, "patchwork", "crew", null, "sha-SAME");
     signTask("kobo", t.id, "eq3", "head", null, "sha-SAME");
-    expect(taskNextAction(readTask("kobo", t.id)!)).toBe("รอ merge PR #99 → done");
+    expect(taskNextAction(readTask("kobo", t.id)!)).toBe("รอ merge PR #99 → done (freshness ของ head ตรวจที่ GitHub ตอน merge)");
   });
 
   test("review + PR linked + no signs at all → unchanged (nothing to compare)", () => {
     const t = addTask({ company: "kobo", title: "c", by: "eq3", state: "review" });
     setTaskPr("kobo", t.id, 99, "eq3");
-    expect(taskNextAction(readTask("kobo", t.id)!)).toBe("รอ merge PR #99 → done");
+    expect(taskNextAction(readTask("kobo", t.id)!)).toBe("รอ merge PR #99 → done (freshness ของ head ตรวจที่ GitHub ตอน merge)");
   });
 });
 

@@ -349,6 +349,10 @@ describe("task command plugin standalone boundary", () => {
     const afterStale = signBlock.slice(staleIdx);
     expect(afterStale).toContain("DIFFERENT commits");
     expect(afterStale).toContain("NOT mergeable");
-    expect(afterStale).toContain("all signs in (mergeable)"); // the real-complete case still exists, unchanged
+    // kobo-576 review round 1: "all signs in (mergeable)" claimed more than
+    // tier-vs-tier verifies — reworded to what was actually checked, and the
+    // GitHub-checks-freshness-at-merge caveat is now explicit in the message.
+    expect(afterStale).toContain("all tiers signed the same commit");
+    expect(afterStale).toContain("head freshness is checked by GitHub at merge time");
   });
 });

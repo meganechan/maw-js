@@ -964,7 +964,23 @@ export async function runTask(
       } else if (stale.length) {
         statusSuffix = ` \x1b[31m— signed at DIFFERENT commits (${stale.join(" + ")}) — NOT mergeable, re-sign the stale tier\x1b[0m`;
       } else {
-        statusSuffix = ` \x1b[90m— all signs in (mergeable)\x1b[0m`;
+        // kobo-576 review round 1: "all signs in (mergeable)" claimed more than this
+        // check verifies — it only compares tier-vs-tier, never against the CURRENT
+        // real head. Two tiers can both sign the SAME stale commit (crewSignedSha ===
+        // headSignedSha, staleSignTiers sees one distinct sha, "agrees") while the
+        // real PR head has moved past it twice since — kobo-557's exact shape on
+        // 2026-07-28 (crew+head both signed ae80e699, head moved to 36d7e5aa then
+        // 4a3548fb, no one did anything wrong). This does NOT catch that case — only
+        // `gh pr merge --match-head-commit`, at actual merge time, does. Say only
+        // what this check verified.
+        // kobo-404 legacy-grandfather: a pre-kobo-400 sign (or a test run with
+        // no real `gh` call, MAW_TEST_MODE=1) can leave both shas absent —
+        // out of this card's scope, so just drop the parenthetical rather
+        // than print an empty "()" placeholder.
+        const agreedSha = t.headSignedSha ?? t.crewSignedSha;
+        statusSuffix = agreedSha
+          ? ` \x1b[90m— all tiers signed the same commit (${agreedSha.slice(0, 8)}) — head freshness is checked by GitHub at merge time\x1b[0m`
+          : ` \x1b[90m— all tiers signed the same commit — head freshness is checked by GitHub at merge time\x1b[0m`;
       }
       console.log(`\x1b[32m✍ signed\x1b[0m ${t.id} \x1b[90m(${role})\x1b[0m: ${t.title} \x1b[90m[${formatSignEvidenceScope(evidenceScope)}]\x1b[0m${statusSuffix}`);
     } else if (subcmd === "merge") {

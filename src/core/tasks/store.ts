@@ -836,6 +836,16 @@ export function missingSignTiers(task: TaskRecord): SignTier[] {
  * warns against), for a check GitHub already performs for free at the one
  * moment it actually matters. This only catches tiers DISAGREEING WITH EACH
  * OTHER — the shape proven to matter live tonight (kobo-557).
+ *
+ * kobo-576 review round 1 — the gap this leaves, enumerated: both tiers
+ * signing the SAME stale commit is NOT caught here (crewSignedSha ===
+ * headSignedSha ⇒ `new Set(shas).size` is 1 ⇒ `[]`), even when the real PR
+ * head has since moved past that commit. This happened for real on
+ * 2026-07-28 (kobo-557): crew and head both signed `ae80e699`, no one did
+ * anything wrong, and the head still moved to `36d7e5aa` then `4a3548fb`
+ * because a sibling PR merged into alpha underneath it. The only thing that
+ * catches THAT shape is `--match-head-commit` at actual merge time — this
+ * function's claim is narrower than "ready to merge."
  */
 export function staleSignTiers(task: TaskRecord): SignTier[] {
   const required = requiredSignTiers(task);
@@ -1733,7 +1743,12 @@ export function taskNextAction(task: TaskRecord): string {
       // needs a merge click" for a card `merge` will actually reject.
       const stale = staleSignTiers(task);
       if (task.pr && stale.length) return `⚠ เซ็นคนละ commit (${stale.join(" + ")}) — merge จะปฏิเสธ ต้องเซ็นใหม่ก่อน`;
-      if (task.pr) return `รอ merge PR #${task.pr} → done`;
+      // kobo-576 review round 1 (AC3 — every surface must claim the same thing):
+      // this only means tiers agree with EACH OTHER (staleSignTiers above), never
+      // that the signed commit still matches the PR's real current head — same
+      // caveat as the CLI sign message right below. GitHub's own
+      // `--match-head-commit` is what actually verifies freshness, at merge time.
+      if (task.pr) return `รอ merge PR #${task.pr} → done (freshness ของ head ตรวจที่ GitHub ตอน merge)`;
       return `รอ ${task.reviewer || "ใครก็ได้"} ตรวจ${task.reviewReason ? ` (${task.reviewReason})` : ""}`;
     }
     case "approve":

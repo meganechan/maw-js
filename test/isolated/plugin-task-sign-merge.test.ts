@@ -26,6 +26,11 @@ const prev = process.env.MAW_DATA_DIR;
 const prevAgent = process.env.CLAUDE_AGENT_NAME; // kobo-335: --from authenticated against agent self
 const prevTest = process.env.MAW_TEST_MODE;
 const prevTmux = process.env.TMUX; // kobo-346: these 327/331/336 tests aren't pane-scoped
+// kobo-557: sign now REFUSES when a PR is linked but its head-commit fetch fails
+// (state C) — so the file's DEFAULT stub must return a real value (state B, the
+// normal path), or every one of this file's ~20 PR-linked sign calls would refuse.
+// Only the tests that specifically exercise state C override this locally.
+const DEFAULT_TEST_HEAD_SHA = "sha-default-stub";
 
 beforeAll(() => {
   process.env.MAW_DATA_DIR = dir;
@@ -38,11 +43,11 @@ beforeAll(() => {
     JSON.stringify({ name: "kobo", departments: { core: { members: [{ oracle: "eq3" }, { oracle: "patchwork" }], lead: "eq3" } } }),
   );
   // kobo-557: the sign-time SHA fetch now runs unconditionally (no MAW_TEST_MODE
-  // branch in the gate path) — default to "can't determine" so every existing
-  // sign-verb call in this file behaves exactly as before (signedSha stays
-  // undefined) unless a specific test injects a real value to exercise the new
-  // --sha compare/refuse.
-  __setHeadShaFetcherForTest(() => undefined);
+  // branch in the gate path) — default to a REAL bound value (state B) so every
+  // existing PR-linked sign-verb call in this file takes the normal path. Tests
+  // exercising state C (gh fetch failure) or the --sha compare override this
+  // locally and restore it in a finally/afterEach.
+  __setHeadShaFetcherForTest(() => DEFAULT_TEST_HEAD_SHA);
 });
 afterAll(() => {
   if (prev === undefined) delete process.env.MAW_DATA_DIR;
@@ -408,8 +413,8 @@ describe("kobo-400 signSha hard-bind", () => {
   test("sign-time SHA capture default is the REAL gh fetcher, not a leaked stub (kobo-557)", async () => {
     // kobo-557 removed the MAW_TEST_MODE branch from the gate path itself (kobo-546's
     // lesson: an env check wrapping the CALL means the call, and any mutation to it,
-    // never runs under test). This file's beforeAll stubs headShaFetcher to return
-    // undefined for every OTHER test — this one resets to the real fetcher and mocks
+    // never runs under test). This file's beforeAll stubs headShaFetcher to return a
+    // fixed value for every OTHER test — this one resets to the real fetcher and mocks
     // Bun.spawnSync (this file's existing convention for the real `gh` boundary,
     // used throughout the describe above) to prove __resetHeadShaFetcherForTest
     // genuinely wires back to a real `gh pr view` shape, not an inert no-op.
@@ -425,7 +430,7 @@ describe("kobo-400 signSha hard-bind", () => {
       await signAs("eq3", "kobo-1", "head");
       expect(readTask("kobo", "kobo-1")!.headSignedSha).toBe("sha-from-real-fetcher");
     } finally {
-      __setHeadShaFetcherForTest(() => undefined); // restore this file's safe default
+      __setHeadShaFetcherForTest(() => DEFAULT_TEST_HEAD_SHA); // restore this file's safe default
     }
   });
 });
@@ -437,8 +442,81 @@ describe("kobo-400 signSha hard-bind", () => {
 // BOTH tiers sign, crew+head agree on the new commit without either having read it, and
 // kobo-400's merge-time compare passes clean — merge succeeds with nobody having read
 // what was merged. --sha makes the read explicit and refuses instead of re-binding.
-describe("kobo-557 sign-time SHA-bind refuse (opt-in via --sha)", () => {
-  test("sign REFUSES when --sha disagrees with the CURRENT head, naming both", async () => {
+// kobo-557: ONE rule going forward — "can't bind a SHA = don't sign." Three ways a
+// sign can be refused (A: no PR linked, C: PR linked but the head fetch failed, D:
+// --sha disagrees with the current head) plus the one success path (B: bound fine).
+// The file's DEFAULT stub (beforeAll, top of file) returns a real value so every
+// OTHER test in this file — the ~20 that link a PR and sign without caring about
+// this card — takes path B and is unaffected; only the tests below override it.
+describe("kobo-557 sign-time SHA-bind refuse (A/B/C/D)", () => {
+  test("(A) sign REFUSES when no PR is linked yet — the kobo-556 shape (silent no-SHA success)", async () => {
+    await task(["add", "c"]);
+    const r = await task(["sign", "kobo-1", "--role", "head"]);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("no PR linked");
+    expect(r.error).toContain("maw company task pr"); // next-step guidance
+    expect(readTask("kobo", "kobo-1")!.headSignedBy).toBeUndefined(); // never recorded
+  });
+
+  // Reviewer pre-screen point 5 (rated most important): the refuse must happen
+  // BEFORE any store write, not just print the right message with the card already
+  // mutated underneath. Redundant with the assertion above by design — if someone
+  // moves the (A) check to after signTask, THIS is the assertion that catches it.
+  test("(A) refuse happens before any store write — no crewSignedBy left dangling even for the OTHER tier", async () => {
+    await task(["add", "c", "--crew-gate"]);
+    const r = await task(["sign", "kobo-1", "--role", "crew"]);
+    expect(r.ok).toBe(false);
+    const t = readTask("kobo", "kobo-1")!;
+    expect(t.crewSignedBy).toBeUndefined();
+    expect(t.headSignedBy).toBeUndefined();
+    expect(t.notes ?? []).toEqual([]); // nothing at all was recorded on this refuse
+  });
+
+  test("(B) a successful sign prints the bound SHA in its output line (kobo-557 AC8)", async () => {
+    await task(["add", "c"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
+    __setHeadShaFetcherForTest(() => "sha-visible-in-output");
+    try {
+      const r = await task(["sign", "kobo-1", "--role", "head"]);
+      expect(r.ok).toBe(true);
+      expect(r.output).toContain("sha-visible-in-output");
+      expect(r.output).not.toContain("NO SHA BOUND"); // must not carry state C's marker too (reviewer pre-screen point 3)
+      expect(readTask("kobo", "kobo-1")!.headSignedSha).toBe("sha-visible-in-output");
+    } finally {
+      __setHeadShaFetcherForTest(() => DEFAULT_TEST_HEAD_SHA);
+    }
+  });
+
+  test("(C) sign REFUSES when the PR is linked but its head-commit fetch fails — a transient gh problem, not a card/SHA defect", async () => {
+    await task(["add", "c"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
+    __setHeadShaFetcherForTest(() => undefined); // simulates a gh failure — PR IS linked
+    try {
+      const r = await task(["sign", "kobo-1", "--role", "head"]);
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain("TRANSIENT");
+      expect(r.error).toContain("gh"); // names the actual cause
+      expect(r.error).not.toContain("no PR linked"); // must NOT be confused with (A) — the PR IS linked here
+      expect(r.error).toContain("re-run"); // next-step guidance: wait and retry, not re-stamp or re-read
+      expect(readTask("kobo", "kobo-1")!.headSignedBy).toBeUndefined(); // never recorded
+    } finally {
+      __setHeadShaFetcherForTest(() => DEFAULT_TEST_HEAD_SHA);
+    }
+  });
+
+  test("(C) output line for a refused gh-fetch-failure never carries the bound-sha marker (distinct from B, reviewer pre-screen point 3)", async () => {
+    await task(["add", "c"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
+    __setHeadShaFetcherForTest(() => undefined);
+    try {
+      const r = await task(["sign", "kobo-1", "--role", "head"]);
+      expect(r.output).not.toContain("[sha "); // never a bound-sha line on a refuse
+    } finally {
+      __setHeadShaFetcherForTest(() => DEFAULT_TEST_HEAD_SHA);
+    }
+  });
+
+  test("(D) sign REFUSES when --sha disagrees with the CURRENT head, naming both", async () => {
     await task(["add", "c"]);
     await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
     __setHeadShaFetcherForTest(() => "sha-B-after-push"); // a push landed since the signer read sha-A
@@ -450,11 +528,30 @@ describe("kobo-557 sign-time SHA-bind refuse (opt-in via --sha)", () => {
       expect(r.error).toContain("re-review"); // next-step guidance, not just a bare refusal
       expect(readTask("kobo", "kobo-1")!.headSignedBy).toBeUndefined(); // never recorded
     } finally {
-      __setHeadShaFetcherForTest(() => undefined);
+      __setHeadShaFetcherForTest(() => DEFAULT_TEST_HEAD_SHA);
     }
   });
 
-  test("sign PASSES normally when --sha matches the current head — no push interleaved, no regression on the normal path", async () => {
+  // Reviewer pre-screen point 6: a compare weakened from strict equality to a
+  // prefix/startsWith check would still refuse two UNRELATED shas (no shared
+  // prefix) — this test forces the two values to share a prefix while remaining
+  // genuinely different commits, so a startsWith-style compare wrongly reads them
+  // as a match and this test goes red.
+  test("(D) sign REFUSES on a --sha/head mismatch even when one is a PREFIX of the other (guards against a weakened startsWith compare)", async () => {
+    await task(["add", "c"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
+    __setHeadShaFetcherForTest(() => "abc123extra"); // current head — NOT equal to what was read, though it starts with it
+    try {
+      const r = await task(["sign", "kobo-1", "--role", "head", "--sha", "abc123"]);
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain("abc123");
+      expect(r.error).toContain("abc123extra");
+    } finally {
+      __setHeadShaFetcherForTest(() => DEFAULT_TEST_HEAD_SHA);
+    }
+  });
+
+  test("(D) sign PASSES normally when --sha matches the current head — no push interleaved, no regression on the normal path", async () => {
     await task(["add", "c"]);
     await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
     __setHeadShaFetcherForTest(() => "sha-A");
@@ -464,11 +561,11 @@ describe("kobo-557 sign-time SHA-bind refuse (opt-in via --sha)", () => {
       expect(readTask("kobo", "kobo-1")!.headSignedBy).toBe("eq3");
       expect(readTask("kobo", "kobo-1")!.headSignedSha).toBe("sha-A");
     } finally {
-      __setHeadShaFetcherForTest(() => undefined);
+      __setHeadShaFetcherForTest(() => DEFAULT_TEST_HEAD_SHA);
     }
   });
 
-  test("push lands BEFORE either tier signs → BOTH crew and head are refused, not silently rebound (the card's core scenario — not inferred from a single-tier case)", async () => {
+  test("(D) push lands BEFORE either tier signs → BOTH crew and head are refused, not silently rebound (the card's core scenario — not inferred from a single-tier case)", async () => {
     await task(["add", "c", "--crew-gate"]);
     await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
     __setHeadShaFetcherForTest(() => "sha-B-after-push"); // by the time EITHER signs, head has already moved past what both read
@@ -490,11 +587,11 @@ describe("kobo-557 sign-time SHA-bind refuse (opt-in via --sha)", () => {
       expect(readTask("kobo", "kobo-1")!.crewSignedBy).toBeUndefined();
       expect(readTask("kobo", "kobo-1")!.headSignedBy).toBeUndefined();
     } finally {
-      __setHeadShaFetcherForTest(() => undefined);
+      __setHeadShaFetcherForTest(() => DEFAULT_TEST_HEAD_SHA);
     }
   });
 
-  test("omitting --sha keeps the legacy auto-bind path unchanged — no refuse, no regression for existing callers (kobo-404 owns eventually enforcing this)", async () => {
+  test("omitting --sha keeps the legacy auto-bind path unchanged — no refuse, no regression for existing callers (no card holds mandatory-`--sha` yet — eq3 sent that question to Tony)", async () => {
     await task(["add", "c"]);
     await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
     __setHeadShaFetcherForTest(() => "sha-current-head");
@@ -503,57 +600,8 @@ describe("kobo-557 sign-time SHA-bind refuse (opt-in via --sha)", () => {
       expect(r.ok).toBe(true);
       expect(readTask("kobo", "kobo-1")!.headSignedSha).toBe("sha-current-head"); // still auto-binds, just no compare/refuse
     } finally {
-      __setHeadShaFetcherForTest(() => undefined);
+      __setHeadShaFetcherForTest(() => DEFAULT_TEST_HEAD_SHA);
     }
-  });
-
-  test("a gh fetch failure (signedSha undetermined) never blocks sign, even with --sha declared — best-effort preserved", async () => {
-    await task(["add", "c"]);
-    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
-    __setHeadShaFetcherForTest(() => undefined); // simulates a gh failure — can't determine current head
-    const r = await task(["sign", "kobo-1", "--role", "head", "--sha", "sha-A-that-was-read"]);
-    expect(r.ok).toBe(true); // nothing to compare against → never refuses
-    expect(readTask("kobo", "kobo-1")!.headSignedSha).toBeUndefined();
-  });
-
-  // AC7 (kobo-556 live incident): reviewer signed BEFORE the PR was stamped — exit 0,
-  // crewSignedSha=null, and the kobo-400 comment on the fetch itself says merge will
-  // grandfather that tier. A workflow gap (fixable immediately, unlike a transient gh
-  // failure below) must REFUSE, not silently succeed with no SHA to bind to.
-  test("sign REFUSES when no PR is linked yet — the kobo-556 shape (silent no-SHA success)", async () => {
-    await task(["add", "c"]);
-    const r = await task(["sign", "kobo-1", "--role", "head"]);
-    expect(r.ok).toBe(false);
-    expect(r.error).toContain("no PR linked");
-    expect(r.error).toContain("maw company task pr"); // next-step guidance
-    expect(readTask("kobo", "kobo-1")!.headSignedBy).toBeUndefined(); // never recorded
-  });
-
-  // AC8: the bound/unbound state must be readable from the sign command's OWN output
-  // line — kobo-556's reviewer saw `still needs: head` whether or not a SHA bound,
-  // and had to open the card file to learn which. Two tests pin the two shapes as
-  // visibly DIFFERENT from each other, not just individually present.
-  test("a successful sign prints the bound SHA in its output line (kobo-557 AC8)", async () => {
-    await task(["add", "c"]);
-    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
-    __setHeadShaFetcherForTest(() => "sha-visible-in-output");
-    try {
-      const r = await task(["sign", "kobo-1", "--role", "head"]);
-      expect(r.ok).toBe(true);
-      expect(r.output).toContain("sha-visible-in-output");
-    } finally {
-      __setHeadShaFetcherForTest(() => undefined);
-    }
-  });
-
-  test("a sign whose SHA-bind fails (gh error, PR linked) prints a visibly DIFFERENT line than a bound sign (kobo-557 AC8)", async () => {
-    await task(["add", "c"]);
-    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
-    __setHeadShaFetcherForTest(() => undefined); // simulates a transient gh failure — PR IS linked
-    const r = await task(["sign", "kobo-1", "--role", "head"]);
-    expect(r.ok).toBe(true); // transient external failure, not a workflow gap → still passes
-    expect(r.output).toContain("NO SHA BOUND");
-    expect(r.output).not.toContain("[sha "); // distinct from the bound-case label, not just present
   });
 });
 

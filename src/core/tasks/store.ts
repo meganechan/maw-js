@@ -1490,20 +1490,28 @@ export interface PendingMention {
 }
 
 /**
- * Unanswered @mentions across the on-board cards (kobo-126 → repointed kobo-140).
- * Phase C moved the ask/answer channel from notes to COMMENTS (Board Truth rule
- * 10), so the queue reads every COMMENT that carries an @mention. kobo-237: the
- * resolve concept is gone — the queue no longer drops a comment when it's resolved
- * (nor reads the legacy `resolved` field); it's trimmed instead by the reader's
- * mark-as-read (kobo-238). `forWho` filters to one person's queue (canonicalized, so
- * --for tony also catches @human). Read-only derivation — never mutates; both CLI
- * `mentions` and the web queue read this one source.
+ * Unanswered @mentions across EVERY card (kobo-126 → repointed kobo-140). Phase C
+ * moved the ask/answer channel from notes to COMMENTS (Board Truth rule 10), so
+ * the queue reads every COMMENT that carries an @mention. kobo-237: the resolve
+ * concept is gone — the queue no longer drops a comment when it's resolved (nor
+ * reads the legacy `resolved` field); it's trimmed instead by the reader's
+ * mark-as-read (kobo-238). `forWho` filters to one person's queue (canonicalized,
+ * so --for tony also catches @human). Read-only derivation — never mutates.
+ *
+ * kobo-580: does NOT gate on isOnBoard (deliberately, caller-level fix — isOnBoard
+ * itself stays correct for its other callers). Rule 10 says a comment doesn't
+ * close because the card is done; gating this queue by the board's 7-day done
+ * window silently dropped unanswered @mentions once their card aged off (36
+ * cards / 96 comments measured live). Only this CLI-facing function is affected —
+ * the web mentions panel (company.ts pendingMentions) has computed its own
+ * client-side mirror from the already-unfiltered bulk list since kobo-401 and was
+ * never gated here at all; this docstring previously claimed otherwise (stale).
  */
 export function pendingMentions(company: string, forWho?: string): PendingMention[] {
   const want = forWho ? mentionKey(forWho) : null;
   const out: PendingMention[] = [];
   for (const t of listTasks(company)) {
-    if (!isOnBoard(t) || !t.comments?.length) continue;
+    if (!t.comments?.length) continue;
     for (const c of t.comments) {
       for (const who of parseMentions(c.text)) {
         if (want && who !== want) continue;

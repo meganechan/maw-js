@@ -531,19 +531,19 @@ async function openCardModal(id) {
     //
     // CORRECTED (kobo-588, superseding an earlier claim in this comment that
     // removing this line would leak an image request): stitch measured it
-    // (kobo-585) — a detached note-img (loading="lazy", md.ts) did NOT issue
-    // its `/api/files/...` request in EITHER of 2 rounds, with a positive
+    // (kobo-585) — a detached note-img (loading=lazy, md.ts) did NOT issue
+    // its /api/files/... request in EITHER of 2 rounds, with a positive
     // control (an attached image DID request) passing every round. Measured
     // on Chrome 150.0.7871.187, headed, no throttling, via a standalone
     // harness (not the live company board) — bounded to that config.
-    // `loading="lazy"` is a browser HINT, not a contract, so this is NOT "a
+    // loading=lazy is a browser HINT, not a contract, so this is NOT "a
     // detached lazy image never fetches" as a general rule — a different
     // browser/version/network condition could measure differently. Read it
     // as "measured, not found on this config," never as "impossible."
-    // (patchwork reviewer %107 registered a falsifiable prediction BEFORE the
+    // (patchwork reviewer registered a falsifiable prediction BEFORE the
     // measurement — "if no request shows up, I'm clearly wrong" — which is
     // what makes this result decisive rather than just another guess landing
-    // where the first one did.)
+    // where the first one did. kobo-585, credit: stitch.)
     //
     // This guard is kept anyway, for a reason that doesn't depend on the
     // measurement above: it's a structural guard for the day someone makes

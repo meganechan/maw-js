@@ -34,6 +34,24 @@ test("kobo-531 selftest: deliberate failure", () => {
 });
 EOF
 
+# kobo-531 round 2 (head review): the fixtures below used to be green-only, so
+# the MOCK LOOP's own `|| OVERALL_RC=$?` (test-default-safe.sh:345) was never
+# exercised — deleting it left this selftest green while the original bug came
+# straight back on that leg. This fixture is a RED mock, and it must sort
+# BEFORE the green ones: test-default-safe.sh derives MOCK_FILES through
+# `sort -u`, so ordering comes from the FILENAME, not from argument order.
+# A leading digit sorts ahead of a letter, and the ordering is asserted below
+# rather than assumed.
+cat > "$FIXTURES/mock-1-fail.test.ts" <<'EOF'
+import { test, expect, mock } from "bun:test";
+mock.module("node:os", () => ({ hostname: () => "kobo-531-selftest-red" }));
+// Deliberately red, and mock-isolated, so the failure lands INSIDE the mock
+// loop rather than in the shared sweep.
+test("kobo-531 selftest: mock-isolated file that fails", () => {
+  expect(1).toBe(2);
+});
+EOF
+
 cat > "$FIXTURES/mock-a.test.ts" <<'EOF'
 import { test, expect, mock } from "bun:test";
 mock.module("node:os", () => ({ hostname: () => "kobo-531-selftest-a" }));
@@ -53,6 +71,7 @@ EOF
 set +e
 bash scripts/test-default-safe.sh \
   "$FIXTURES/plain-fail.test.ts" \
+  "$FIXTURES/mock-1-fail.test.ts" \
   "$FIXTURES/mock-a.test.ts" \
   "$FIXTURES/mock-b.test.ts" \
   > "$OUT" 2>&1
@@ -83,6 +102,27 @@ if ! grep -q -- "--- $FIXTURES/mock-b.test.ts ---" "$OUT"; then
   echo "FAIL: mock-b.test.ts case never started" >&2
   FAIL=1
 fi
+# AC3 (kobo-531 round 2): the same must hold when the failing case is INSIDE
+# the mock loop, not just in the shared sweep — that is the leg
+# test-default-safe.sh:345 guards, and nothing exercised it before.
+# The check is not "the red mock ran" on its own: it is "the red mock ran
+# FIRST and the green ones still ran after it". Ordering is asserted, not
+# assumed, because MOCK_FILES comes out of `sort -u` — if a rename or a locale
+# change ever puts the red fixture last, this fails loudly instead of quietly
+# testing nothing.
+RED_LINE="$(grep -n -- "--- $FIXTURES/mock-1-fail.test.ts ---" "$OUT" | head -1 | cut -d: -f1)"
+LAST_GREEN_LINE="$(grep -n -- "--- $FIXTURES/mock-b.test.ts ---" "$OUT" | head -1 | cut -d: -f1)"
+if [[ -z "$RED_LINE" ]]; then
+  echo "FAIL: mock-1-fail.test.ts case never started — the mock loop is not reaching a failing mock-isolated file at all" >&2
+  FAIL=1
+elif [[ -z "$LAST_GREEN_LINE" ]]; then
+  echo "FAIL: mock-b.test.ts never started after the failing mock-isolated case — a red case inside the mock loop is still killing the cases queued behind it" >&2
+  FAIL=1
+elif [[ "$RED_LINE" -ge "$LAST_GREEN_LINE" ]]; then
+  echo "FAIL: fixture ordering broke — mock-1-fail.test.ts ran at line $RED_LINE, AFTER mock-b.test.ts at line $LAST_GREEN_LINE. MOCK_FILES is sorted by filename, so the red fixture must sort first or this check proves nothing." >&2
+  FAIL=1
+fi
+
 if grep -q "NEVER RAN" "$OUT"; then
   echo "FAIL: output still reports cases as NEVER RAN — the early-exit-and-report behavior is still active, not fixed" >&2
   FAIL=1

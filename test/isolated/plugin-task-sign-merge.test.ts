@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { runTask } from "../../src/vendor/mpr-plugins/task/index";
+import { runTask, __setHeadShaFetcherForTest, __resetHeadShaFetcherForTest } from "../../src/vendor/mpr-plugins/task/index";
 import {
   addTask,
   readTask,
@@ -37,6 +37,12 @@ beforeAll(() => {
     join(dir, "companies", "kobo.json"),
     JSON.stringify({ name: "kobo", departments: { core: { members: [{ oracle: "eq3" }, { oracle: "patchwork" }], lead: "eq3" } } }),
   );
+  // kobo-557: the sign-time SHA fetch now runs unconditionally (no MAW_TEST_MODE
+  // branch in the gate path) — default to "can't determine" so every existing
+  // sign-verb call in this file behaves exactly as before (signedSha stays
+  // undefined) unless a specific test injects a real value to exercise the new
+  // --sha compare/refuse.
+  __setHeadShaFetcherForTest(() => undefined);
 });
 afterAll(() => {
   if (prev === undefined) delete process.env.MAW_DATA_DIR;
@@ -46,6 +52,7 @@ afterAll(() => {
   if (prevTest === undefined) delete process.env.MAW_TEST_MODE;
   else process.env.MAW_TEST_MODE = prevTest;
   if (prevTmux === undefined) delete process.env.TMUX; else process.env.TMUX = prevTmux;
+  __resetHeadShaFetcherForTest(); // kobo-557: undo the injected stub — never leak into another test file
   rmSync(dir, { recursive: true, force: true });
 });
 beforeEach(() => { rmSync(join(dir, "companies", "kobo", "tasks"), { recursive: true, force: true }); });
@@ -396,13 +403,114 @@ describe("kobo-400 signSha hard-bind", () => {
     expect(capturedArgv).not.toContain("--match-head-commit");
   });
 
-  test("sign-time SHA capture is skipped under MAW_TEST_MODE (never shells to real gh in tests)", async () => {
-    // process.env.MAW_TEST_MODE is already "1" for this whole file (see beforeAll above).
-    // A real `sign` through the CLI, with a PR linked, must NOT populate *SignedSha —
-    // otherwise every sign-related test in this file would be making live gh calls.
+  test("sign-time SHA capture default is the REAL gh fetcher, not a leaked stub (kobo-557)", async () => {
+    // kobo-557 removed the MAW_TEST_MODE branch from the gate path itself (kobo-546's
+    // lesson: an env check wrapping the CALL means the call, and any mutation to it,
+    // never runs under test). This file's beforeAll stubs headShaFetcher to return
+    // undefined for every OTHER test — this one resets to the real fetcher and mocks
+    // Bun.spawnSync (this file's existing convention for the real `gh` boundary,
+    // used throughout the describe above) to prove __resetHeadShaFetcherForTest
+    // genuinely wires back to a real `gh pr view` shape, not an inert no-op.
+    __resetHeadShaFetcherForTest();
+    Bun.spawnSync = ((argv: string[]) => {
+      expect(argv).toContain("gh");
+      expect(argv).toContain("headRefOid");
+      return { exitCode: 0, stdout: Buffer.from("sha-from-real-fetcher\n"), stderr: Buffer.from("") };
+    }) as typeof Bun.spawnSync;
+    try {
+      await task(["add", "c"]);
+      await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
+      await signAs("eq3", "kobo-1", "head");
+      expect(readTask("kobo", "kobo-1")!.headSignedSha).toBe("sha-from-real-fetcher");
+    } finally {
+      __setHeadShaFetcherForTest(() => undefined); // restore this file's safe default
+    }
+  });
+});
+
+// kobo-557: comparing crew-sha vs head-sha at MERGE time (kobo-400, above) only proves
+// the two tiers agree with EACH OTHER — never that either one read what it signed. Live
+// incident (kobo-508): a push landed between a reviewer reading the diff and typing
+// `sign`; the fetch silently re-bound the sign to the NEW head. If that happens before
+// BOTH tiers sign, crew+head agree on the new commit without either having read it, and
+// kobo-400's merge-time compare passes clean — merge succeeds with nobody having read
+// what was merged. --sha makes the read explicit and refuses instead of re-binding.
+describe("kobo-557 sign-time SHA-bind refuse (opt-in via --sha)", () => {
+  test("sign REFUSES when --sha disagrees with the CURRENT head, naming both", async () => {
     await task(["add", "c"]);
     await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
-    await signAs("eq3", "kobo-1", "head");
+    __setHeadShaFetcherForTest(() => "sha-B-after-push"); // a push landed since the signer read sha-A
+    try {
+      const r = await task(["sign", "kobo-1", "--role", "head", "--sha", "sha-A-that-was-read"]);
+      expect(r.ok).toBe(false);
+      expect(r.error).toContain("sha-A-that-was-read");
+      expect(r.error).toContain("sha-B-after-push");
+      expect(r.error).toContain("re-review"); // next-step guidance, not just a bare refusal
+      expect(readTask("kobo", "kobo-1")!.headSignedBy).toBeUndefined(); // never recorded
+    } finally {
+      __setHeadShaFetcherForTest(() => undefined);
+    }
+  });
+
+  test("sign PASSES normally when --sha matches the current head — no push interleaved, no regression on the normal path", async () => {
+    await task(["add", "c"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
+    __setHeadShaFetcherForTest(() => "sha-A");
+    try {
+      const r = await task(["sign", "kobo-1", "--role", "head", "--sha", "sha-A"]);
+      expect(r.ok).toBe(true);
+      expect(readTask("kobo", "kobo-1")!.headSignedBy).toBe("eq3");
+      expect(readTask("kobo", "kobo-1")!.headSignedSha).toBe("sha-A");
+    } finally {
+      __setHeadShaFetcherForTest(() => undefined);
+    }
+  });
+
+  test("push lands BEFORE either tier signs → BOTH crew and head are refused, not silently rebound (the card's core scenario — not inferred from a single-tier case)", async () => {
+    await task(["add", "c", "--crew-gate"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
+    __setHeadShaFetcherForTest(() => "sha-B-after-push"); // by the time EITHER signs, head has already moved past what both read
+    const signAtWithSha = async (oracle: string, role: string, sha: string) => {
+      const prevAgent = process.env.CLAUDE_AGENT_NAME;
+      process.env.CLAUDE_AGENT_NAME = oracle;
+      try { return await run(["sign", "kobo-1", "--role", role, "--sha", sha, "--company", "kobo", "--from", `local:${oracle}`]); }
+      finally { process.env.CLAUDE_AGENT_NAME = prevAgent; }
+    };
+    try {
+      const crew = await signAtWithSha("patchwork", "crew", "sha-A-both-read");
+      const head = await signAtWithSha("eq3", "head", "sha-A-both-read");
+      expect(crew.ok).toBe(false);
+      expect(crew.error).toContain("sha-A-both-read");
+      expect(crew.error).toContain("sha-B-after-push");
+      expect(head.ok).toBe(false);
+      expect(head.error).toContain("sha-A-both-read");
+      expect(head.error).toContain("sha-B-after-push");
+      expect(readTask("kobo", "kobo-1")!.crewSignedBy).toBeUndefined();
+      expect(readTask("kobo", "kobo-1")!.headSignedBy).toBeUndefined();
+    } finally {
+      __setHeadShaFetcherForTest(() => undefined);
+    }
+  });
+
+  test("omitting --sha keeps the legacy auto-bind path unchanged — no refuse, no regression for existing callers (kobo-404 owns eventually enforcing this)", async () => {
+    await task(["add", "c"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
+    __setHeadShaFetcherForTest(() => "sha-current-head");
+    try {
+      const r = await task(["sign", "kobo-1", "--role", "head"]); // no --sha — old callers unaffected
+      expect(r.ok).toBe(true);
+      expect(readTask("kobo", "kobo-1")!.headSignedSha).toBe("sha-current-head"); // still auto-binds, just no compare/refuse
+    } finally {
+      __setHeadShaFetcherForTest(() => undefined);
+    }
+  });
+
+  test("a gh fetch failure (signedSha undetermined) never blocks sign, even with --sha declared — best-effort preserved", async () => {
+    await task(["add", "c"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
+    __setHeadShaFetcherForTest(() => undefined); // simulates a gh failure — can't determine current head
+    const r = await task(["sign", "kobo-1", "--role", "head", "--sha", "sha-A-that-was-read"]);
+    expect(r.ok).toBe(true); // nothing to compare against → never refuses
     expect(readTask("kobo", "kobo-1")!.headSignedSha).toBeUndefined();
   });
 });

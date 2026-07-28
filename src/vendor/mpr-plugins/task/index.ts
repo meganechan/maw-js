@@ -206,6 +206,27 @@ function resolveSignerPane(): string | null {
   }
 }
 
+/**
+ * kobo-400/557: the PR's CURRENT head commit, for sign-time SHA binding. Real
+ * `gh` call by default; no MAW_TEST_MODE branch guarding the call itself
+ * (kobo-546's lesson: an env check wrapping a gate's CALL means the code that
+ * reads the result never runs under test — a mutation there would go
+ * undetected). Tests inject a stub via __setHeadShaFetcherForTest instead.
+ * Best-effort: any failure (network/auth/no gh) returns undefined, same as
+ * before — a sign must never be blocked by this fetch failing.
+ */
+function realFetchHeadSha(pr: number, repo: string): string | undefined {
+  const shaOut = Bun.spawnSync(["gh", "pr", "view", String(pr), "--repo", repo, "--json", "headRefOid", "-q", ".headRefOid"], { stdout: "pipe", stderr: "pipe" });
+  if (shaOut.exitCode !== 0) return undefined;
+  const sha = shaOut.stdout.toString().trim();
+  return sha || undefined;
+}
+let headShaFetcher: (pr: number, repo: string) => string | undefined = realFetchHeadSha;
+/** @internal test-only override — never called from a normal code path. */
+export function __setHeadShaFetcherForTest(fn: (pr: number, repo: string) => string | undefined): void { headShaFetcher = fn; }
+/** @internal test-only reset — restores the real `gh` fetcher. */
+export function __resetHeadShaFetcherForTest(): void { headShaFetcher = realFetchHeadSha; }
+
 const STATE_LABEL: Record<TaskState, string> = {
   "backlog": "BACKLOG",
   "todo": "TODO",
@@ -785,7 +806,7 @@ export async function runTask(
       // kobo-327: record a gate sign for the anti-race merge funnel. --role crew = the
       // crew-cell pre-PR gate (.3); --role head = the final gate before merge (.2). A
       // crew sign self-marks the card crewGate so it can't skip the crew tier. Idempotent.
-      const flags = parseFlags(args.slice(1), { "--company": String, "--from": String, "--role": String, "--evidence": String, "--evidence-locus": String }, 0);
+      const flags = parseFlags(args.slice(1), { "--company": String, "--from": String, "--role": String, "--evidence": String, "--evidence-locus": String, "--sha": String }, 0);
       const me = await resolveActor(flags["--from"]);
       const id = flags._[0];
       const role = flags["--role"] as SignTier | undefined;
@@ -832,15 +853,24 @@ export async function runTask(
       // PR is already linked (a sign before `pr` is linked has nothing to bind to yet); a gh
       // failure (network/auth) is swallowed, NOT surfaced as a sign error — the sign itself
       // must never be blocked by this. Either gap just means `merge` grandfathers this tier.
-      // MAW_TEST_MODE=1 skips the real subprocess entirely (same idiom as ping() above /
-      // notify.ts:23) — a test driving `sign` must not shell out to the real `gh` binary.
       let signedSha: string | undefined;
-      if (before?.pr && before?.repo && process.env.MAW_TEST_MODE !== "1") {
-        const shaOut = Bun.spawnSync(["gh", "pr", "view", String(before.pr), "--repo", before.repo, "--json", "headRefOid", "-q", ".headRefOid"], { stdout: "pipe", stderr: "pipe" });
-        if (shaOut.exitCode === 0) {
-          const sha = shaOut.stdout.toString().trim();
-          if (sha) signedSha = sha;
-        }
+      if (before?.pr && before?.repo) {
+        signedSha = headShaFetcher(before.pr, before.repo);
+      }
+      // kobo-557: comparing crew-sha vs head-sha at MERGE time (kobo-400, below) only
+      // proves the two tiers agree with EACH OTHER — it never proves either of them
+      // read what they signed. Live incident: a push landed between a reviewer READING
+      // the diff and typing `sign`; the fetch above silently re-bound the sign to the
+      // NEW head, and if it had happened before BOTH tiers signed, crew+head would have
+      // agreed on the new commit without either having read it — the merge-time compare
+      // would have passed clean. --sha makes the read explicit: the signer states which
+      // commit they reviewed, and a head that moved since is refused, not silently
+      // re-bound. Omitting --sha keeps today's best-effort auto-bind (legacy path,
+      // kobo-404 owns enforcing that eventually) — this card only closes the hole for a
+      // signer who opts in by declaring what they read.
+      const readSha = flags["--sha"];
+      if (readSha && signedSha && readSha !== signedSha) {
+        return { ok: false, error: `sign REFUSED for ${id}: you read ${readSha} but the PR's head is now ${signedSha} — someone pushed since you read it. Pull the latest diff, re-review it, then re-run sign with --sha ${signedSha}.` };
       }
       const t = signTask(company, id, me, role, signerPane, signedSha, evidenceScope, evidenceLocus);
       if (!t) return { ok: false, error: `task not found: ${id}` };

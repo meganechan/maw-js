@@ -242,8 +242,12 @@ describe("crew-skills global asset contract", () => {
     // §2 — the real spawn command a lead's setup script actually runs
     expect(head).toContain('COMM=$(tmux split-window -v -b -t "$LEAD" -l 15%');
     expect(head).not.toContain('COMM=$(tmux split-window -h -t "$LEAD"');
-    // §5 — the reproducible-measurement recipe, explicitly labeled `# = comm`
-    expect(head).toContain('tmux split-window -v -b -t "$L" -l 15% \'sleep 300\'                                    # = comm');
+    // §5 — the reproducible-measurement recipe, explicitly labeled `# = comm`.
+    // Two separate asserts (not one string with the exact column-alignment
+    // whitespace baked in) — reviewer's finding: a pure reformat that keeps the
+    // same direction would otherwise turn this test red for the wrong reason.
+    expect(head).toContain('tmux split-window -v -b -t "$L" -l 15% \'sleep 300\'');
+    expect(head).toContain("# = comm");
   });
 
   // kobo-343 — /teardown = crew lifecycle close (spin↔teardown). Safety-critical pane killer:

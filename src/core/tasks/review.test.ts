@@ -107,9 +107,22 @@ describe("taskNextAction — every state answers 'what next + who'", () => {
       expect(next).not.toBe("รอ merge PR #53 → done"); // the OLD bare claim must not survive unqualified
     });
 
-    test("GitHub's own UNKNOWN (lazy-compute-pending) gets the same not-confirmed treatment as never-checked", () => {
+    // kobo-594 review round 2 (eq3's c5) — real bug found via a LIVE render, not
+    // a diff read: "never checked" and "checked, GitHub itself hadn't resolved
+    // it yet" are DIFFERENT facts and must be 3 distinct states, not 2. This
+    // exact PR's own comment already said so; the message code collapsed them
+    // anyway. "checked, still unknown" must say IT WAS CHECKED + when, never
+    // claim "ยังไม่เคยเช็ค" (never checked) — that's a lie once a check ran.
+    test("checked but GitHub itself hadn't resolved mergeable yet (UNKNOWN + a real checked timestamp) → says CHECKED, not never-checked", () => {
       const next = taskNextAction(mk({ state: "review", pr: 53, prMergeable: "UNKNOWN", prMergeStateStatus: "UNKNOWN", prMergeCheckedTs: Date.now() }));
-      expect(next).toContain("ยังไม่เคยเช็ค");
+      expect(next).not.toContain("ยังไม่เคยเช็คสถานะ"); // must NOT claim never-checked — it WAS checked
+      expect(next).toContain("เช็คแล้ว"); // must say a check DID happen
+      expect(next).toContain("gh ด้วยมือ"); // still carries the manual-verify caveat — UNKNOWN is still not confirmed ready
+    });
+
+    test("genuinely never checked (prMergeable absent entirely) → says never-checked, distinct from the checked-but-UNKNOWN case above", () => {
+      const next = taskNextAction(mk({ state: "review", pr: 53 }));
+      expect(next).toContain("ยังไม่เคยเช็คสถานะ");
     });
 
     // kobo-594 — live evidence eq3 measured while merging this batch of PRs
@@ -120,7 +133,10 @@ describe("taskNextAction — every state answers 'what next + who'", () => {
     // straight over a real conflict.
     test("UNKNOWN resolves EITHER direction on re-check — proves it can never be treated as ready by default", () => {
       const stillUnknown = mk({ state: "review", pr: 371, prMergeable: "UNKNOWN", prMergeStateStatus: "UNKNOWN", prMergeCheckedTs: Date.now() });
-      expect(taskNextAction(stillUnknown)).toContain("ยังไม่เคยเช็ค");
+      const unknownMsg = taskNextAction(stillUnknown);
+      expect(unknownMsg).not.toContain(`PR #${stillUnknown.pr} conflict`); // not the resolved-conflict wording
+      expect(unknownMsg).not.toContain("⚠"); // not the conflict warning marker
+      expect(unknownMsg).toContain("เช็คแล้ว"); // checked, just not resolved — never silently "ready"
 
       const resolvedConflicting = { ...stillUnknown, prMergeable: "CONFLICTING", prMergeStateStatus: "DIRTY" };
       expect(taskNextAction(resolvedConflicting)).toContain("conflict");

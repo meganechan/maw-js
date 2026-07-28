@@ -111,6 +111,40 @@ describe("handleTasksRequest (real file-per-card store)", () => {
     expect(cardFixed.nextAction).not.toContain("ยังไม่เคยเช็ค");
   });
 
+  // kobo-594 review round 2 (eq3's c5) — a real bug caught via a LIVE render
+  // through this exact route, not a diff read: "never checked" and "checked,
+  // GitHub itself hadn't resolved mergeable yet" collapsed into the same
+  // "ยังไม่เคยเช็ค" (never checked) message even when prMergeCheckedTs proved a
+  // check DID run. 3 distinct states, pinned through the real API surface eq3
+  // actually looked at.
+  test("3 distinct PR-mergeable states on /api/tasks: never-checked vs checked-but-UNKNOWN vs resolved (kobo-594 round 2)", async () => {
+    process.env.MAW_DATA_DIR = dir;
+    const t = addTask({ company: "mergestate3", title: "tri-state card", by: "eq3", assignee: "patchwork" });
+    setTaskPr("mergestate3", t.id, 199, "patchwork");
+
+    const neverChecked = (await handleTasksRequest(new Request("http://x/api/tasks?company=mergestate3")).json()) as {
+      tasks: Array<{ title: string; nextAction: string }>;
+    };
+    const cardNever = neverChecked.tasks.find((c) => c.title === "tri-state card")!;
+    expect(cardNever.nextAction).toContain("ยังไม่เคยเช็ค");
+
+    setTaskPrMergeState("mergestate3", t.id, "UNKNOWN", "UNKNOWN"); // a real check ran, GitHub hadn't resolved it
+    const checkedUnknown = (await handleTasksRequest(new Request("http://x/api/tasks?company=mergestate3")).json()) as {
+      tasks: Array<{ title: string; nextAction: string }>;
+    };
+    const cardCheckedUnknown = checkedUnknown.tasks.find((c) => c.title === "tri-state card")!;
+    expect(cardCheckedUnknown.nextAction).not.toContain("ยังไม่เคยเช็คสถานะ"); // must NOT lie that it was never checked
+    expect(cardCheckedUnknown.nextAction).toContain("เช็คแล้ว"); // must say a check DID happen
+
+    setTaskPrMergeState("mergestate3", t.id, "CONFLICTING", "DIRTY"); // resolved
+    const resolved = (await handleTasksRequest(new Request("http://x/api/tasks?company=mergestate3")).json()) as {
+      tasks: Array<{ title: string; nextAction: string }>;
+    };
+    const cardResolved = resolved.tasks.find((c) => c.title === "tri-state card")!;
+    expect(cardResolved.nextAction).toContain("conflict");
+    expect(cardResolved.nextAction).not.toContain("เช็คแล้วแต่"); // the resolved wording is its own branch, not the checked-but-unknown one
+  });
+
   // kobo-510 — crewSignedSha/headSignedSha (kobo-400) had never been copied into
   // /api/tasks either, a gap independent of and predating kobo-501's evidence-scope
   // fields (that PR only touches Evidence* fields). The board's stale-signature

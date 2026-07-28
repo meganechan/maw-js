@@ -1821,8 +1821,17 @@ function prMergeNextAction(task: TaskRecord): string {
     const checked = task.prMergeCheckedTs ? ` (เช็คล่าสุด ${minutesAgo(task.prMergeCheckedTs)} นาทีที่แล้ว)` : "";
     return `รอ merge PR #${pr} → done${checked}`;
   }
-  // absent, or GitHub's own "UNKNOWN" lazy-compute-pending state — both mean the
-  // same thing to a reader deciding whether to click merge: not confirmed ready.
+  // kobo-594 review round 2 (eq3's c5, real bug found via a live render, not a
+  // diff read): "never checked" and "checked, GitHub itself hadn't finished
+  // computing it" are DIFFERENT facts and must be 3 distinct states, not 2 —
+  // exactly the "unknown must be its own state, never collapsed into either
+  // side" rule this whole card's ancestry (557/576/594) has held all night.
+  // task.prMergeCheckedTs is the ONLY thing that tells them apart: absent =
+  // genuinely never checked; present + prMergeable === "UNKNOWN" = a real
+  // check ran and GitHub's own lazy-compute hadn't resolved yet.
+  if (task.prMergeable === "UNKNOWN" && task.prMergeCheckedTs) {
+    return `รอ merge PR #${pr} → done (เช็คแล้วแต่ GitHub ยังไม่สรุปสถานะ conflict — เช็คล่าสุด ${minutesAgo(task.prMergeCheckedTs)} นาทีที่แล้ว, อย่ากด merge โดยไม่เช็ค gh ด้วยมือ)`;
+  }
   return `รอ merge PR #${pr} → done (ยังไม่เคยเช็คสถานะ conflict — อย่ากด merge โดยไม่เช็ค gh ด้วยมือ)`;
 }
 

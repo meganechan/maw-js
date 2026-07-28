@@ -154,6 +154,11 @@ describe("task command plugin standalone boundary", () => {
     expect(src).toContain("__setHeadShaFetcherForTest");
     expect(src).toContain("__resetHeadShaFetcherForTest");
     expect(src).toContain("someone pushed since you read it");
+    // kobo-557 (AC7/AC8): no pr/repo linked is a workflow gap (fixable now) → hard
+    // REFUSE, distinct from a transient gh fetch failure (PR IS linked) which still
+    // passes but must print its unbound state visibly, never identically to a bind.
+    expect(src).toContain("no PR linked yet");
+    expect(src).toContain("NO SHA BOUND");
     // kobo-501: a sign records WHAT justified it (diff-read vs a real test-run vs
     // mutation-verified), not just sha+pane — undeclared is the true default, never
     // silently upgraded to diff-read (the collapse-unknown-into-a-value defect class).

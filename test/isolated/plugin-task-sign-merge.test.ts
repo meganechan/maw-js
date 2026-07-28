@@ -133,6 +133,7 @@ describe("kobo-327 merge-gate: runTask sign/merge verbs", () => {
 
   test("sign --role crew then head (distinct oracles), output flags mergeability", async () => {
     await task(["add", "c", "--crew-gate"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]); // kobo-557: sign now requires a linked PR to bind a SHA
     const c = await signAs("eq3", "kobo-1", "crew");
     expect(c.ok).toBe(true);
     expect(c.output).toContain("still needs: head");
@@ -258,6 +259,7 @@ describe("kobo-336 distinct-signers", () => {
 
   test("sign-time REFUSE: same oracle signing the second tier is barred early", async () => {
     await task(["add", "c", "--crew-gate"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]); // kobo-557: sign now requires a linked PR to bind a SHA
     expect((await signAs("eq3", "kobo-1", "crew")).ok).toBe(true);
     const dup = await signAs("eq3", "kobo-1", "head"); // eq3 already signed crew
     expect(dup.ok).toBe(false);
@@ -513,6 +515,46 @@ describe("kobo-557 sign-time SHA-bind refuse (opt-in via --sha)", () => {
     expect(r.ok).toBe(true); // nothing to compare against → never refuses
     expect(readTask("kobo", "kobo-1")!.headSignedSha).toBeUndefined();
   });
+
+  // AC7 (kobo-556 live incident): reviewer signed BEFORE the PR was stamped — exit 0,
+  // crewSignedSha=null, and the kobo-400 comment on the fetch itself says merge will
+  // grandfather that tier. A workflow gap (fixable immediately, unlike a transient gh
+  // failure below) must REFUSE, not silently succeed with no SHA to bind to.
+  test("sign REFUSES when no PR is linked yet — the kobo-556 shape (silent no-SHA success)", async () => {
+    await task(["add", "c"]);
+    const r = await task(["sign", "kobo-1", "--role", "head"]);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("no PR linked");
+    expect(r.error).toContain("maw company task pr"); // next-step guidance
+    expect(readTask("kobo", "kobo-1")!.headSignedBy).toBeUndefined(); // never recorded
+  });
+
+  // AC8: the bound/unbound state must be readable from the sign command's OWN output
+  // line — kobo-556's reviewer saw `still needs: head` whether or not a SHA bound,
+  // and had to open the card file to learn which. Two tests pin the two shapes as
+  // visibly DIFFERENT from each other, not just individually present.
+  test("a successful sign prints the bound SHA in its output line (kobo-557 AC8)", async () => {
+    await task(["add", "c"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
+    __setHeadShaFetcherForTest(() => "sha-visible-in-output");
+    try {
+      const r = await task(["sign", "kobo-1", "--role", "head"]);
+      expect(r.ok).toBe(true);
+      expect(r.output).toContain("sha-visible-in-output");
+    } finally {
+      __setHeadShaFetcherForTest(() => undefined);
+    }
+  });
+
+  test("a sign whose SHA-bind fails (gh error, PR linked) prints a visibly DIFFERENT line than a bound sign (kobo-557 AC8)", async () => {
+    await task(["add", "c"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]);
+    __setHeadShaFetcherForTest(() => undefined); // simulates a transient gh failure — PR IS linked
+    const r = await task(["sign", "kobo-1", "--role", "head"]);
+    expect(r.ok).toBe(true); // transient external failure, not a workflow gap → still passes
+    expect(r.output).toContain("NO SHA BOUND");
+    expect(r.output).not.toContain("[sha "); // distinct from the bound-case label, not just present
+  });
 });
 
 // kobo-501: a sign records a sha+pane but nothing about what EVIDENCE justified it — a
@@ -573,12 +615,14 @@ describe("kobo-501 signTask store fn: default evidenceScope (independent of the 
 describe("kobo-501 sign CLI: --evidence / --evidence-locus", () => {
   test("omitting --evidence records 'undeclared', NOT 'diff-read' (the whole point of the card)", async () => {
     await task(["add", "c"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]); // kobo-557: sign now requires a linked PR to bind a SHA
     await signAs("eq3", "kobo-1", "head");
     expect(readTask("kobo", "kobo-1")!.headSignedEvidenceScope).toBe("undeclared");
   });
 
   test("--evidence diff-read needs no locus", async () => {
     await task(["add", "c"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]); // kobo-557: sign now requires a linked PR to bind a SHA
     const r = await run(["sign", "kobo-1", "--role", "head", "--evidence", "diff-read", "--company", "kobo", "--from", "local:eq3"]);
     expect(r.ok).toBe(true);
     expect(readTask("kobo", "kobo-1")!.headSignedEvidenceScope).toBe("diff-read");
@@ -594,6 +638,7 @@ describe("kobo-501 sign CLI: --evidence / --evidence-locus", () => {
 
   test("--evidence test-run+mutation WITH --evidence-locus records both fields", async () => {
     await task(["add", "c"]);
+    await task(["pr", "kobo-1", "42", "--repo", "meganechan/maw-js"]); // kobo-557: sign now requires a linked PR to bind a SHA
     const r = await run(["sign", "kobo-1", "--role", "head", "--evidence", "test-run+mutation", "--evidence-locus", "~/maw-js-kobo501", "--company", "kobo", "--from", "local:eq3"]);
     expect(r.ok).toBe(true);
     const t = readTask("kobo", "kobo-1")!;

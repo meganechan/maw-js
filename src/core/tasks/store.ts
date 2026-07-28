@@ -1502,10 +1502,19 @@ export interface PendingMention {
  * itself stays correct for its other callers). Rule 10 says a comment doesn't
  * close because the card is done; gating this queue by the board's 7-day done
  * window silently dropped unanswered @mentions once their card aged off (36
- * cards / 96 comments measured live). Only this CLI-facing function is affected —
- * the web mentions panel (company.ts pendingMentions) has computed its own
- * client-side mirror from the already-unfiltered bulk list since kobo-401 and was
- * never gated here at all; this docstring previously claimed otherwise (stale).
+ * cards / 96 comments measured on kobo; review round 1 re-measured against the
+ * real removal — kobo 20→116, pgw 19→294, i.e. most of the true total on both
+ * boards was hidden). Only this CLI-facing function is affected — the web
+ * mentions panel (company.ts pendingMentions) has computed its own client-side
+ * mirror from the already-unfiltered bulk list since kobo-401 and was never
+ * gated here at all; this docstring previously claimed otherwise (stale).
+ *
+ * kobo-580 review round 1 — a literal "don't show resolved comments" isn't
+ * possible here: kobo-237 removed the resolve concept server-side entirely (the
+ * `resolved` field is legacy-only, never read). The web panel's only trim is
+ * kobo-238's per-browser localStorage mark-as-read, which has no CLI/MCP
+ * equivalent — this function returns every unfiltered @mention every time, by
+ * design, until a real per-reader read-state exists on this side too.
  */
 export function pendingMentions(company: string, forWho?: string): PendingMention[] {
   const want = forWho ? mentionKey(forWho) : null;

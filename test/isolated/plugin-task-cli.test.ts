@@ -750,6 +750,26 @@ describe("maw company task runner (runTask)", () => {
     expect(readTask("pgw", "pgw-1")!.comments!.at(-1)!.tldr).toBe("rebased, ready");
   });
 
+  // kobo-580 review round 1: once the queue stopped gating on isOnBoard, the real
+  // count can be much bigger than what used to show (measured live: kobo 20→116,
+  // pgw 19→294) — the header must say how many came from a card already off the
+  // board, so a big number doesn't read as "healthy queue, just a lot of it".
+  test("mentions header breaks out the count that came from cards off the board (kobo-580)", async () => {
+    await run(["add", "recent", "--company", "pgw"]);
+    await run(["comment", "pgw-1", "@tony", "--tldr", "still open", "--ask", "still open?", "--company", "pgw"]);
+    await run(["add", "old", "--company", "pgw"]);
+    await run(["comment", "pgw-2", "@tony", "--tldr", "old q", "--ask", "old q?", "--company", "pgw"]);
+    await run(["done", "pgw-2", "--company", "pgw"]);
+    const rec = readTask("pgw", "pgw-2")!;
+    (rec as any).updatedTs = Date.now() - 8 * 86_400_000; // aged past the 7-day window
+    writeFileSync(taskFilePath("pgw", "pgw-2"), JSON.stringify(rec));
+
+    const q = await run(["mentions", "--for", "tony", "--company", "pgw"]);
+    expect(q.output).toContain("(2 → tony · 1 จากการ์ดที่ปิดเกิน 7 วัน)");
+    expect(q.output).toContain("pgw-1");
+    expect(q.output).toContain("pgw-2"); // still shown, not silently dropped
+  });
+
   test("a @mention inside a NOTE does NOT enter the mentions queue (rule 10 — notes are log, not asks)", async () => {
     await run(["add", "card A", "--company", "pgw"]);
     await run(["note", "pgw-1", "logged:", "pinged", "@tony", "elsewhere", "--company", "pgw"]);

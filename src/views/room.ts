@@ -522,13 +522,18 @@ async function openCardModal(id) {
     const { body } = await getJson('/api/tasks/detail?company=' + encodeURIComponent(company) + '&id=' + encodeURIComponent(id) + '&notes=0');
     // Superseded by a newer open, or the modal was closed — drop this response.
     // HONEST NOTE (kobo-538 round 2): removing this line reddens NOTHING, and
-    // that is not a gap in the tests — it is unobservable BY CONSTRUCTION. Every
-    // openCardModal call builds its OWN box above and hands it to
-    // openMermaidModal, which replaceChildren()s it into the single content
-    // slot; a superseded call's box is therefore already detached, so writing to
-    // it cannot reach the screen. This stays as a structural guard for the day
-    // someone makes the modal reuse one box — at which point it becomes
-    // load-bearing and testable. Do not read it as a tested guarantee today.
+    // that is not a gap in the tests — a superseded response CANNOT REACH THE
+    // SCREEN by construction. Every openCardModal call builds its OWN box above
+    // and hands it to openMermaidModal, which replaceChildren()s it into the
+    // single content slot, so a superseded call's box is already detached.
+    // It does NOT follow that the line does nothing. Below it we set
+    // bodyDiv.innerHTML: a detached node still parses that HTML, and any
+    // note-img it contains still issues its image request. So this guard also
+    // suppresses network fetches nobody will ever see — invisible is not free.
+    // (Caught by patchwork reviewer %6, who was right that "unobservable" reads
+    // as a licence to delete this line.) It is additionally a structural guard
+    // for the day someone makes the modal reuse one box, at which point the
+    // screen effect becomes real and testable too. Not a tested guarantee today.
     if (!cardModalInFlight || cardModalInFlight.token !== token) return;
     box.replaceChildren();
     const t = body && body.ok ? body.task : null;

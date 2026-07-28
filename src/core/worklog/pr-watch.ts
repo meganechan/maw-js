@@ -14,13 +14,13 @@
  * caught immediately by the PostToolUse hook.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { dirname } from "path";
 import { mawStatePath } from "../xdg";
 import { scanWorktrees } from "../fleet/worktrees";
 import { loadConfig } from "../../config";
 import { appendWorklog } from "./store";
-import { completeOrParkMergedTask, findTasksByPr, prOpenedReview, setTaskRepoIfMissing, listTasks, listCompanies } from "../tasks/store";
+import { completeOrParkMergedTask, findTasksByPr, prOpenedReview, setTaskRepoIfMissing, listCompanies, tasksDir } from "../tasks/store";
 import { notifyReviewer } from "../tasks/notify";
 import { pingOnMerge } from "./ping";
 import { scopeOfOracle, companyOfOracleStrict } from "./company-scope";
@@ -60,7 +60,10 @@ function saveSnapshot(snap: PrSnapshot): void {
 }
 
 async function gh(args: string[]): Promise<string> {
-  const proc = Bun.spawn(["gh", ...args], { stdout: "pipe", stderr: "pipe" });
+  // kobo-534: explicit env so a runtime PATH override (real gh CLI test doubles) is
+  // honored — Bun.spawn does not re-resolve PATH from process.env at call time
+  // unless env is passed explicitly, confirmed by direct test.
+  const proc = Bun.spawn(["gh", ...args], { stdout: "pipe", stderr: "pipe", env: process.env });
   const [out, , code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
@@ -103,6 +106,55 @@ async function mergedBy(repo: string, num: number): Promise<string | undefined> 
   }
 }
 
+// kobo-534: pr-watch ticks every 120s and openPrLinkedRepos used to fully
+// read+parse EVERY card on the board (911 cards / 11 companies measured live —
+// ~150-200MB of heap that didn't reclaim between ticks, ratcheting RSS up over
+// the day). We only need 3 fields (pr, state, repo) per card, and the vast
+// majority of cards don't change between one 120s tick and the next — so cache
+// those 3 fields per file, keyed by mtime. A stat is orders of magnitude
+// cheaper than a read+JSON.parse; a write from ANY other process (another
+// pane's `maw task comment`) always bumps mtime before our next tick's stat, so
+// this is never stale — it's a freshness check against the filesystem's own
+// authoritative clock every single tick, not a cache someone has to remember to
+// invalidate. In-process only (module-level Map): a one-shot CLI process starts
+// with an empty cache and pays the same cost as before; only long-lived
+// processes (this daemon, maw-server) see the saving, because that's the only
+// place cost was ever compounding.
+interface CachedPrLinkFields { mtimeMs: number; pr: unknown; state: unknown; repo: unknown }
+const prLinkFieldsCache = new Map<string, CachedPrLinkFields>(); // key: absolute card file path
+
+function prLinkFieldsIn(dir: string): CachedPrLinkFields[] {
+  if (!existsSync(dir)) return [];
+  const out: CachedPrLinkFields[] = [];
+  const seen = new Set<string>();
+  for (const file of readdirSync(dir)) {
+    if (!file.endsWith(".json") || file.endsWith(".tmp")) continue;
+    const path = `${dir}/${file}`;
+    seen.add(path);
+    let mtimeMs: number;
+    try { mtimeMs = statSync(path).mtimeMs; } catch { continue; } // deleted between readdir and stat
+    const cached = prLinkFieldsCache.get(path);
+    if (cached && cached.mtimeMs === mtimeMs) {
+      out.push(cached);
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf-8"));
+      const fields: CachedPrLinkFields = { mtimeMs, pr: parsed.pr, state: parsed.state, repo: parsed.repo };
+      prLinkFieldsCache.set(path, fields);
+      out.push(fields);
+    } catch {
+      /* skip a corrupt/half card — atomic writes should prevent this */
+    }
+  }
+  // Evict cards that no longer exist in this dir (deleted/archived) so the
+  // cache can't grow forever or resurrect a stale entry under a reused path.
+  for (const key of prLinkFieldsCache.keys()) {
+    if (key.startsWith(dir + "/") && !seen.has(key)) prLinkFieldsCache.delete(key);
+  }
+  return out;
+}
+
 /**
  * Repos referenced by open (non-done) PR-linked cards, across every company on
  * this machine. The board's card→PR link is the source of truth for which repos
@@ -110,10 +162,15 @@ async function mergedBy(repo: string, num: number): Promise<string | undefined> 
  */
 export function openPrLinkedRepos(): string[] {
   return listCompanies().flatMap(company =>
-    listTasks(company)
+    prLinkFieldsIn(tasksDir(company))
       .filter(t => typeof t.pr === "number" && t.state !== "done" && Boolean(t.repo))
       .map(t => t.repo as string),
   );
+}
+
+/** Test-only: drop the mtime cache so a fresh scenario doesn't see a stale entry. */
+export function _clearPrLinkFieldsCache(): void {
+  prLinkFieldsCache.clear();
 }
 
 /**

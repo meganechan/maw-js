@@ -8,8 +8,18 @@ import { Hono } from "hono";
  * the board's ("what state is each card in").
  *
  * READ-ONLY (Tony's explicit constraint) — fetches only, zero POST/write.
- * Sources: GET /api/roster (membership), GET /api/presence (per-pane ctx%),
- * GET /api/tasks (pending cards), GET /api/worklog/feed (recent activity).
+ * Sources: GET /api/roster (membership + held + pending, kobo-445 rev),
+ * GET /api/presence (per-pane ctx%), GET /api/worklog/feed (recent activity).
+ *
+ * kobo-445 review round 1: this used to also fetch GET /api/tasks for the
+ * pending list — 848KB / 532-file server-side scan, every 5s, forever, per
+ * open tab. /api/roster ALREADY does that same file scan (for `held`); the
+ * fix is having it also return the full per-oracle pending set (id/title/
+ * state only — see pendingTasksByOracle in core/presence/held.ts) instead
+ * of a second, heavier route computing the same thing. Measured on the real
+ * kobo company (chrome-devtools network panel, this PR): /api/roster with
+ * `pending` added is 32554 bytes — 26x smaller than the 848KB /api/tasks
+ * response it replaces, and one shared file-scan instead of two.
  */
 export function companyStatusHtml(): string {
   return `<!doctype html>
@@ -112,30 +122,36 @@ async function getJson(url) {
   return res.json();
 }
 
+let loadInFlight = false;
 async function load() {
-  const company = (companyInput.value || '').trim();
-  const url = new URL(window.location.href);
-  if (company) url.searchParams.set('company', company); else url.searchParams.delete('company');
-  window.history.replaceState(null, '', url.toString());
-  if (!company) { statusEl.textContent = 'enter a company to load'; gridEl.replaceChildren(); return; }
-  statusEl.textContent = 'loading…';
+  if (loadInFlight) return; // kobo-445 review: never overlap a poll tick with a still-running one
+  loadInFlight = true;
   try {
-    const [rosterRes, presenceRes, tasksRes, worklogRes] = await Promise.all([
-      getJson('/api/roster?company=' + encodeURIComponent(company)),
-      getJson('/api/presence?company=' + encodeURIComponent(company)),
-      getJson('/api/tasks?company=' + encodeURIComponent(company)),
-      getJson('/api/worklog/feed?company=' + encodeURIComponent(company) + '&limit=300'),
-    ]);
-    render(rosterRes.roster || [], rosterRes.held || {}, presenceRes.rows || [], tasksRes.tasks || [], worklogRes.entries || []);
-    statusEl.textContent = (rosterRes.roster || []).length + ' oracle(s) in ' + company;
-  } catch (err) {
-    statusEl.textContent = 'failed to load: ' + (err && err.message ? err.message : err);
-    statusEl.className = 'error';
-    gridEl.replaceChildren();
+    const company = (companyInput.value || '').trim();
+    const url = new URL(window.location.href);
+    if (company) url.searchParams.set('company', company); else url.searchParams.delete('company');
+    window.history.replaceState(null, '', url.toString());
+    if (!company) { statusEl.textContent = 'enter a company to load'; gridEl.replaceChildren(); return; }
+    statusEl.textContent = 'loading…';
+    try {
+      const [rosterRes, presenceRes, worklogRes] = await Promise.all([
+        getJson('/api/roster?company=' + encodeURIComponent(company)),
+        getJson('/api/presence?company=' + encodeURIComponent(company)),
+        getJson('/api/worklog/feed?company=' + encodeURIComponent(company) + '&limit=300'),
+      ]);
+      render(rosterRes.roster || [], rosterRes.held || {}, rosterRes.pending || {}, presenceRes.rows || [], worklogRes.entries || []);
+      statusEl.textContent = (rosterRes.roster || []).length + ' oracle(s) in ' + company;
+    } catch (err) {
+      statusEl.textContent = 'failed to load: ' + (err && err.message ? err.message : err);
+      statusEl.className = 'error';
+      gridEl.replaceChildren();
+    }
+  } finally {
+    loadInFlight = false;
   }
 }
 
-function render(roster, held, presence, tasks, worklog) {
+function render(roster, held, pending, presence, worklog) {
   gridEl.replaceChildren();
   if (!roster.length) { gridEl.appendChild(el('div', 'empty', 'no roster members')); return; }
 
@@ -161,13 +177,6 @@ function render(roster, held, presence, tasks, worklog) {
     panesByOracle.get(p.oracle).push(p);
   }
 
-  const tasksByOracle = new Map();
-  for (const t of tasks) {
-    if (!t.assignee || t.state === 'done' || t.state === 'rejected') continue;
-    if (!tasksByOracle.has(t.assignee)) tasksByOracle.set(t.assignee, []);
-    tasksByOracle.get(t.assignee).push(t);
-  }
-
   const now = nowMs();
   const rows = roster.map((member) => {
     const act = lastActByOracle.get(member.oracle) || null;
@@ -191,9 +200,20 @@ function render(roster, held, presence, tasks, worklog) {
     head.appendChild(el('span', 'oc-name', member.oracle));
     const roleTxt = member.role ? (member.role + (member.dept ? ' · ' + member.dept : '')) : (member.dept || '');
     if (roleTxt) head.appendChild(el('span', 'oc-role', roleTxt));
+    // kobo-445 review round 1 (non-blocking, decided): "active" was computed from
+    // ANY worklog activity in the last 10 min — but the worklog also records messages
+    // arriving TO an oracle (task-note "via hey→…" entries from others pinging them),
+    // not just what the oracle itself did. An oracle sitting idle who gets pinged a lot
+    // reads as falsely "active" — the exact "stale-that-looks-fresh" trap this page
+    // exists to catch. Chose the honest-label fix over a fragile heuristic (parsing
+    // "via hey→" out of free-text summaries would be brittle and easy to silently
+    // break): say what's actually measured — recent activity in the feed, not
+    // necessarily the oracle's own doing — rather than overclaiming "active".
     const badgeCls = row.errored ? 'badge error' : row.active ? 'badge active' : row.idleWithWork ? 'badge idle-work' : 'badge idle';
-    const badgeTxt = row.errored ? '🛑 error' : row.active ? '● active' : row.idleWithWork ? '⚠️ idle · มีงานค้าง' : '○ idle';
-    head.appendChild(el('span', badgeCls, badgeTxt));
+    const badgeTxt = row.errored ? '🛑 error' : row.active ? '● recent activity' : row.idleWithWork ? '⚠️ idle · มีงานค้าง' : '○ idle';
+    const badgeEl = el('span', badgeCls, badgeTxt);
+    if (row.active) badgeEl.title = 'worklog activity in the last 10 min — may include messages sent TO this oracle, not only what it did itself';
+    head.appendChild(badgeEl);
     cell.appendChild(head);
 
     // presence: per-pane ctx%
@@ -216,13 +236,14 @@ function render(roster, held, presence, tasks, worklog) {
     }
     cell.appendChild(paneSection);
 
-    // pending work
-    const pending = (tasksByOracle.get(member.oracle) || []).sort((a, b) => (b.updatedTs || b.ts || 0) - (a.updatedTs || a.ts || 0));
+    // pending work — server-sorted newest-first, done/rejected already excluded
+    // server-side (pendingTasksByOracle), so a closed card just isn't in this list.
+    const oraclePending = pending[member.oracle] || [];
     const pendSection = el('div', 'section');
-    pendSection.appendChild(el('h3', null, 'ของค้าง (' + pending.length + ')'));
-    if (pending.length) {
+    pendSection.appendChild(el('h3', null, 'ของค้าง (' + oraclePending.length + ')'));
+    if (oraclePending.length) {
       const CAP = 6;
-      for (const t of pending.slice(0, CAP)) {
+      for (const t of oraclePending.slice(0, CAP)) {
         const r = el('div', 'pending-row');
         const title = el('span', 'p-title', t.id + ' — ' + t.title);
         title.title = t.title;
@@ -230,7 +251,7 @@ function render(roster, held, presence, tasks, worklog) {
         r.appendChild(el('span', 'p-state', t.state));
         pendSection.appendChild(r);
       }
-      if (pending.length > CAP) pendSection.appendChild(el('div', 'pending-more', '+' + (pending.length - CAP) + ' more'));
+      if (oraclePending.length > CAP) pendSection.appendChild(el('div', 'pending-more', '+' + (oraclePending.length - CAP) + ' more'));
     } else {
       pendSection.appendChild(el('div', 'empty-note', 'nothing pending'));
     }

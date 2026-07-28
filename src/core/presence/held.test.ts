@@ -2,9 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { heldWorkByOracle } from "./held";
+import { heldWorkByOracle, pendingTasksByOracle } from "./held";
 import { appendWorklog } from "../worklog/store";
-import { addTask, claimTask, completeTask } from "../tasks/store";
+import { addTask, claimTask, completeTask, moveTask, rejectTask } from "../tasks/store";
 
 const dir = mkdtempSync(join(tmpdir(), "maw-held-"));
 const prev = process.env.MAW_DATA_DIR;
@@ -72,5 +72,58 @@ describe("heldWorkByOracle", () => {
   test("null / empty company → empty map, never throws", () => {
     expect(heldWorkByOracle(null)).toEqual({});
     expect(heldWorkByOracle("no-such-company")).toEqual({});
+  });
+});
+
+describe("pendingTasksByOracle", () => {
+  let reviewCardId: string;
+  let rejectedCardId: string;
+
+  beforeAll(() => {
+    // kobo-445: pending is the FULLER set — todo counts here (heldWorkByOracle
+    // excludes it), and a rejected card must NOT count (terminal, like done).
+    const review = addTask({ company: "kobo", title: "in review", by: "eq3", assignee: "patchwork", state: "review" });
+    reviewCardId = review.id;
+    const rejected = addTask({ company: "kobo", title: "rejected thing", by: "eq3", assignee: "neo", state: "todo" });
+    rejectedCardId = rejected.id;
+    moveTask("kobo", rejectedCardId, "in-progress", "neo");
+    rejectTask("kobo", rejectedCardId, "eq3", "not needed");
+  });
+
+  test("includes every non-terminal state (todo/in-progress/review/…), not just in-progress", () => {
+    const pending = pendingTasksByOracle("kobo");
+
+    // neo: the outer-scope todo card ("future") — heldWorkByOracle excludes this, pending includes it
+    expect(pending.neo?.some((p) => p.title === "future" && p.state === "todo")).toBe(true);
+
+    // patchwork: both the in-progress card AND the review card
+    expect(pending.patchwork?.some((p) => p.id === reviewCardId && p.state === "review")).toBe(true);
+    expect(pending.patchwork?.some((p) => p.title === "wire route" && p.state === "in-progress")).toBe(true);
+  });
+
+  test("done and rejected are excluded — a closed card drops off the list", () => {
+    const pending = pendingTasksByOracle("kobo");
+
+    expect(pending.somsri).toBeUndefined(); // done card from the outer fixture
+    expect(pending.neo?.some((p) => p.id === rejectedCardId)).toBe(false); // rejected in this describe
+  });
+
+  test("unassigned tasks are never surfaced (no owner to attribute pending work to)", () => {
+    addTask({ company: "kobo", title: "nobody's yet", by: "eq3" }); // no assignee, state defaults to todo
+    const pending = pendingTasksByOracle("kobo");
+    for (const arr of Object.values(pending)) {
+      expect(arr.some((p) => p.title === "nobody's yet")).toBe(false);
+    }
+  });
+
+  test("sorted newest-first per oracle by updatedTs", () => {
+    const pending = pendingTasksByOracle("kobo");
+    const patchworkTs = pending.patchwork!.map((p) => p.updatedTs);
+    expect(patchworkTs).toEqual([...patchworkTs].sort((a, b) => b - a));
+  });
+
+  test("null / empty company → empty map, never throws", () => {
+    expect(pendingTasksByOracle(null)).toEqual({});
+    expect(pendingTasksByOracle("no-such-company")).toEqual({});
   });
 });

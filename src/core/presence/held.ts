@@ -16,12 +16,20 @@
  */
 
 import { openClaims } from "../worklog/store";
-import { listTasks } from "../tasks/store";
+import { isTerminalState, listTasks } from "../tasks/store";
+import type { TaskState } from "../tasks/store";
 
 export interface HeldWork {
   id: string;
   kind: "claim" | "card";
   title?: string;
+}
+
+export interface PendingWork {
+  id: string;
+  title: string;
+  state: TaskState;
+  updatedTs: number;
 }
 
 /** { oracle → held work }. An oracle with no open claim / in-progress card is
@@ -44,5 +52,29 @@ export function heldWorkByOracle(company: string | null | undefined): Record<str
   for (const c of openClaims(company)) {
     push(c.oracle, c.task ?? c.summary, "claim");
   }
+  return out;
+}
+
+/**
+ * { oracle → every non-terminal card assigned to them }, sorted newest-first
+ * per oracle (kobo-445 rev — company-status page's "ของค้าง" panel needs the
+ * FULL pending set, not just in-progress/claims: a card sitting in todo,
+ * review, blocked, need-answer, approve, or wait-for-deploy is still pending
+ * work, just not the "possible deadlock" signal heldWorkByOracle targets).
+ * done/rejected are excluded via the same isTerminalState the board itself
+ * uses — a card leaving the board (closing) drops out of this list on the
+ * next call, no separate close-tracking needed.
+ */
+export function pendingTasksByOracle(company: string | null | undefined): Record<string, PendingWork[]> {
+  const out: Record<string, PendingWork[]> = {};
+  if (!company) return out;
+  for (const t of listTasks(company)) {
+    if (!t.assignee || isTerminalState(t.state)) continue;
+    const updatedTs = t.updatedTs ?? t.ts;
+    let arr = out[t.assignee];
+    if (!arr) { arr = []; out[t.assignee] = arr; }
+    arr.push({ id: t.id, title: t.title, state: t.state, updatedTs });
+  }
+  for (const arr of Object.values(out)) arr.sort((a, b) => b.updatedTs - a.updatedTs);
   return out;
 }

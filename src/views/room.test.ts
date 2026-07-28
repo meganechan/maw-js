@@ -1148,6 +1148,15 @@ describe("Brainstorm Room 2-pane chat view (kobo-258)", () => {
     const src = html.slice(start, end);
     return new Function("$", `${src}; return { onThreadClick };`)($resolve).onThreadClick;
   }
+  // kobo-538 round 2 — same extraction, but the close path is needed too: the
+  // dead-click bug lives in the interaction BETWEEN openCardModal and
+  // closeMermaidModal, so a test that can only click can never see it.
+  function loadCardModalApi($resolve: (id: string) => unknown) {
+    const start = html.indexOf("const CARD_REF_RE");
+    const end = html.indexOf("// ── wire", start);
+    const src = html.slice(start, end);
+    return new Function("$", `${src}; return { onThreadClick, closeMermaidModal };`)($resolve);
+  }
 
   test("kobo-538: shows a loading placeholder immediately, before the fetch resolves", async () => {
     const { content, modal, mmdModalContent, mermaidModal, mmdModalClose } = modalElements();
@@ -1237,6 +1246,46 @@ describe("Brainstorm Room 2-pane chat view (kobo-258)", () => {
       releasers["kobo-9"]({ body: { ok: true, task: { id: "kobo-9", title: "fresh", state: "todo" } } });
       await second;
       expect(box.children.some((c: any) => c.textContent === "kobo-9 · fresh")).toBe(true);
+    } finally {
+      (globalThis as any).document = prevDoc;
+      if (prevCompany === undefined) delete (globalThis as any).company; else (globalThis as any).company = prevCompany;
+      if (prevEl === undefined) delete (globalThis as any).el; else (globalThis as any).el = prevEl;
+      if (prevGetJson === undefined) delete (globalThis as any).getJson; else (globalThis as any).getJson = prevGetJson;
+    }
+  });
+
+  test("kobo-538: closing the modal mid-load leaves that card clickable again", async () => {
+    const { mmdModalContent, mermaidModal, mmdModalClose } = modalElements();
+    const prevDoc = (globalThis as any).document;
+    const prevCompany = (globalThis as any).company;
+    const prevEl = (globalThis as any).el;
+    const prevGetJson = (globalThis as any).getJson;
+    (globalThis as any).document = { activeElement: { focus() {} } };
+    (globalThis as any).company = "kobo";
+    (globalThis as any).el = (tag: string, cls?: string, txt?: string) => ({ tag, cls, textContent: txt, children: [] as any[], appendChild(c: any) { this.children.push(c); }, replaceChildren() { this.children = []; } });
+    let fetchCalls = 0;
+    const releasers: Array<(v: unknown) => void> = [];
+    (globalThis as any).getJson = (_url: string) => { fetchCalls++; return new Promise((resolve) => releasers.push(resolve)); };
+    try {
+      const { onThreadClick, closeMermaidModal } = loadCardModalApi((id) => ({ mmdModalContent, mermaidModal, mmdModalClose }[id]));
+      const first = clickChip(onThreadClick, "kobo-446"); // starts loading, suspends on its fetch
+      expect(fetchCalls).toBe(1);
+
+      closeMermaidModal(); // reader gives up on the ~1.1s wait and closes — the first fetch is still outstanding
+      const second = clickChip(onThreadClick, "kobo-446"); // clicking that SAME card again must work, not silently do nothing
+      expect(fetchCalls).toBe(2);
+
+      // the abandoned first request settles LAST. It must not clear the second
+      // request's marker on its way out, or the next click double-fetches.
+      releasers[0]({ body: { ok: true, task: { id: "kobo-446", title: "stale", state: "review" } } });
+      await first;
+      clickChip(onThreadClick, "kobo-446"); // second request is still in flight — this one IS a repeat click
+      expect(fetchCalls).toBe(2);
+
+      releasers[1]({ body: { ok: true, task: { id: "kobo-446", title: "fresh", state: "review" } } });
+      await second;
+      const box = mmdModalContent.children[0];
+      expect(box.children.some((c: any) => c.textContent === "kobo-446 · fresh")).toBe(true); // the reopened modal actually rendered
     } finally {
       (globalThis as any).document = prevDoc;
       if (prevCompany === undefined) delete (globalThis as any).company; else (globalThis as any).company = prevCompany;

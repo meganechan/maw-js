@@ -498,16 +498,38 @@ function cardLinkifyDom(root) {
 // notes → 1.5MB) even though this modal only ever renders id/title/state/
 // assignee/body — ?notes=0 (core/tasks/route.ts) drops them server-side instead
 // of fetching-then-discarding client-side.
-let cardModalInFlightId = null;
+// kobo-538 round 2 — the in-flight marker is keyed on a per-REQUEST token, not
+// on the card id alone. Keying it on the id made closing the modal mid-load
+// leave the marker set, so the next click on that same card hit the repeat-click
+// no-op above and did nothing — a dead click, in exactly the ~1.1s window this
+// card exists to fix. It did not always clear itself either: getJson has no
+// timeout and no AbortSignal, so a request that never settles never reaches the
+// finally block, and that card stayed unopenable until a page reload.
+// Clearing the marker on close is necessary but not sufficient on its own: the
+// abandoned request is still in flight, and its finally would then clear the
+// marker belonging to the NEW request, reopening the double-fetch hole for the
+// click after that. The token makes each request only ever clear its own marker.
+let cardModalSeq = 0;
+let cardModalInFlight = null; // { id, token } while a card fetch is outstanding
 async function openCardModal(id) {
-  if (cardModalInFlightId === id) return; // already loading this exact card — a repeat click is a no-op, not a second fetch
-  cardModalInFlightId = id;
+  if (cardModalInFlight && cardModalInFlight.id === id) return; // already loading this exact card — a repeat click is a no-op, not a second fetch
+  const token = ++cardModalSeq;
+  cardModalInFlight = { id, token };
   const box = el('div', 'card-ref-modal');
   box.appendChild(el('div', 'card-ref-modal-loading', 'loading ' + id + '…'));
   openMermaidModal(box); // show the modal (with the loading state) BEFORE the fetch, not after
   try {
     const { body } = await getJson('/api/tasks/detail?company=' + encodeURIComponent(company) + '&id=' + encodeURIComponent(id) + '&notes=0');
-    if (cardModalInFlightId !== id) return; // a different card was opened while this fetch was in flight — drop the stale response, don't clobber it
+    // Superseded by a newer open, or the modal was closed — drop this response.
+    // HONEST NOTE (kobo-538 round 2): removing this line reddens NOTHING, and
+    // that is not a gap in the tests — it is unobservable BY CONSTRUCTION. Every
+    // openCardModal call builds its OWN box above and hands it to
+    // openMermaidModal, which replaceChildren()s it into the single content
+    // slot; a superseded call's box is therefore already detached, so writing to
+    // it cannot reach the screen. This stays as a structural guard for the day
+    // someone makes the modal reuse one box — at which point it becomes
+    // load-bearing and testable. Do not read it as a tested guarantee today.
+    if (!cardModalInFlight || cardModalInFlight.token !== token) return;
     box.replaceChildren();
     const t = body && body.ok ? body.task : null;
     if (!t) {
@@ -522,7 +544,7 @@ async function openCardModal(id) {
       }
     }
   } finally {
-    if (cardModalInFlightId === id) cardModalInFlightId = null;
+    if (cardModalInFlight && cardModalInFlight.token === token) cardModalInFlight = null; // only ever clear OUR OWN marker — never a newer request's
   }
 }
 
@@ -960,6 +982,7 @@ function openMermaidModal(svgNode) {
 function closeMermaidModal() {
   $('mermaidModal').style.display = 'none';
   $('mmdModalContent').replaceChildren();
+  cardModalInFlight = null; // kobo-538: closing mid-load must not leave that card unopenable — see openCardModal
   if (mermaidModalReturnFocus && mermaidModalReturnFocus.focus) mermaidModalReturnFocus.focus();
   mermaidModalReturnFocus = null;
 }

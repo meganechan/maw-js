@@ -298,6 +298,32 @@ describe("task command plugin standalone boundary", () => {
     expect(laneOrderLine).toContain('"need-answer"');
   });
 
+  // kobo-570 — no-silent-caps: isOnBoard() (ADR 0002 P3) hides done/rejected cards
+  // older than the archive window before either render function sees the list.
+  // Both renderBoard and renderBoardCompact must say how many they hid, scoped to
+  // whatever the view (--mine) is already scoped to — not the whole board's count
+  // slapped on a filtered view (review round 1 finding, fixed in this same PR).
+  // Behavioral coverage lives in plugin-task-cli.test.ts; this is the content-assert
+  // companion this standalone file's own convention expects.
+  test("ls computes the hidden-count AFTER --mine scoping, both render fns take it (kobo-570)", () => {
+    const src = readFileSync(
+      join(import.meta.dir, "../../src/vendor/mpr-plugins/task/index.ts"),
+      "utf8",
+    );
+    expect(src).toContain("function hiddenSummaryLine");
+    const lsStart = src.indexOf('subcmd === "ls"');
+    const nextReadyStart = src.indexOf('subcmd === "next-ready"');
+    const lsBlock = src.slice(lsStart, nextReadyStart);
+    // `mine` filters allTasks BEFORE hiddenDone/hiddenRejected are derived from it —
+    // the ordering that keeps the count scoped to the view (kobo-570 review round 1).
+    const mineFilterIdx = lsBlock.indexOf("if (mine) allTasks = allTasks.filter");
+    const hiddenDoneIdx = lsBlock.indexOf("const hiddenDone =");
+    expect(mineFilterIdx).toBeGreaterThan(-1);
+    expect(mineFilterIdx).toBeLessThan(hiddenDoneIdx);
+    expect(lsBlock).toContain("renderBoard(tasks, company, mine, stale, hiddenDone, hiddenRejected)");
+    expect(lsBlock).toContain("renderBoardCompact(tasks, company, mine, hiddenDone, hiddenRejected)");
+  });
+
   // kobo-581 — the top-level usage string silently drifted from the real dispatch
   // chain: 7 real verbs (sign, merge, deployed, approve, need-answer, reject,
   // next-ready — the merge-gate family) had no handler entry in it at all. A

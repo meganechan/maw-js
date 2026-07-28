@@ -323,4 +323,32 @@ describe("task command plugin standalone boundary", () => {
     expect(lsBlock).toContain("renderBoard(tasks, company, mine, stale, hiddenDone, hiddenRejected)");
     expect(lsBlock).toContain("renderBoardCompact(tasks, company, mine, hiddenDone, hiddenRejected)");
   });
+
+  // kobo-576 — the `sign` command's own status message used to derive
+  // "(mergeable)" from missingSignTiers alone (does a BY field exist), never
+  // checking whether the tiers that signed agree on which commit they
+  // reviewed. Behavioral coverage of staleSignTiers/taskNextAction lives in
+  // store.test.ts (fully testable there, no gh dependency); the live "stale
+  // AND both signs present" shape at `sign` time can't be driven through the
+  // CLI test harness under MAW_TEST_MODE (the sha fetch is skipped entirely,
+  // so a real per-tier sha never gets set via the CLI path in tests) — this
+  // is the content-assert companion this standalone file's own convention
+  // expects for exactly that kind of gap.
+  test("sign's status message checks staleSignTiers before claiming mergeable (kobo-576)", () => {
+    const src = readFileSync(
+      join(import.meta.dir, "../../src/vendor/mpr-plugins/task/index.ts"),
+      "utf8",
+    );
+    const signStart = src.indexOf('subcmd === "sign"');
+    const mergeStart = src.indexOf('subcmd === "merge"');
+    const signBlock = src.slice(signStart, mergeStart);
+    // stale is only computed when still is empty — a truly incomplete card
+    // (missing a tier) must keep saying "still needs", not the stale wording
+    const staleIdx = signBlock.indexOf("const stale = still.length ? [] : staleSignTiers(t)");
+    expect(staleIdx).toBeGreaterThan(-1);
+    const afterStale = signBlock.slice(staleIdx);
+    expect(afterStale).toContain("DIFFERENT commits");
+    expect(afterStale).toContain("NOT mergeable");
+    expect(afterStale).toContain("all signs in (mergeable)"); // the real-complete case still exists, unchanged
+  });
 });

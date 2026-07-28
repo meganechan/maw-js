@@ -76,6 +76,7 @@ import {
   clearTaskPr,
   signTask,
   missingSignTiers,
+  staleSignTiers,
   sameSignerBothTiers,
   samePaneBothTiers,
   signPaneViolation,
@@ -949,7 +950,23 @@ export async function runTask(
       const t = signTask(company, id, me, role, signerPane, signedSha, evidenceScope, evidenceLocus);
       if (!t) return { ok: false, error: `task not found: ${id}` };
       const still = missingSignTiers(t);
-      console.log(`\x1b[32m✍ signed\x1b[0m ${t.id} \x1b[90m(${role})\x1b[0m: ${t.title} \x1b[90m[${formatSignEvidenceScope(evidenceScope)}]\x1b[0m${still.length ? ` \x1b[90m— still needs: ${still.join(", ")}\x1b[0m` : ` \x1b[90m— all signs in (mergeable)\x1b[0m`}`);
+      // kobo-576: "all signs in" used to mean "every required tier has a BY
+      // field" — never checked whether the tiers agree on WHICH commit they
+      // reviewed. A stale tier (crew signed 11 days ago, head signed today,
+      // different commits) counted as complete and printed "(mergeable)" —
+      // the exact claim `merge` itself will refuse on (kobo-400's tierShas
+      // check). staleSignTiers mirrors that same comparison here, BEFORE
+      // merge time, so this message can't lie ahead of what merge will do.
+      const stale = still.length ? [] : staleSignTiers(t);
+      let statusSuffix: string;
+      if (still.length) {
+        statusSuffix = ` \x1b[90m— still needs: ${still.join(", ")}\x1b[0m`;
+      } else if (stale.length) {
+        statusSuffix = ` \x1b[31m— signed at DIFFERENT commits (${stale.join(" + ")}) — NOT mergeable, re-sign the stale tier\x1b[0m`;
+      } else {
+        statusSuffix = ` \x1b[90m— all signs in (mergeable)\x1b[0m`;
+      }
+      console.log(`\x1b[32m✍ signed\x1b[0m ${t.id} \x1b[90m(${role})\x1b[0m: ${t.title} \x1b[90m[${formatSignEvidenceScope(evidenceScope)}]\x1b[0m${statusSuffix}`);
     } else if (subcmd === "merge") {
       // kobo-327: the ONE path that merges a gated card. REFUSES until every required
       // sign tier (requiredSignTiers) is present, then runs `gh pr merge`. Removes merge

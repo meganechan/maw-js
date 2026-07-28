@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { runTask, compareReadyOrder } from "../../src/vendor/mpr-plugins/task/index";
-import { listArchivedTasks, listTasks, readTask, type TaskRecord } from "../../src/core/tasks/store";
+import { DEFAULT_ARCHIVE_DAYS, listArchivedTasks, listTasks, readTask, taskFilePath, type TaskRecord } from "../../src/core/tasks/store";
 import { COMPANIES_DIR, _setCompaniesDir } from "../../src/vendor/mpr-plugins/company/company-helpers";
 
 // Behavioural test for the task-board runner `runTask` — the shared engine that

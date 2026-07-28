@@ -1056,10 +1056,31 @@ export function setTaskRepoIfMissing(company: string, id: string, repo: string):
 export function setTaskPrMergeState(company: string, id: string, mergeable: string, mergeStateStatus: string): TaskRecord | null {
   const task = readTask(company, id);
   if (!task) return null;
+  // kobo-594 review round 1: this runs on EVERY poll (serve-pr-watch ticks every
+  // 2 min) for every OPEN PR-linked card, by design — that's what makes it
+  // self-heal without a manual unset. But rewriting the file + bumping a
+  // timestamp on EVERY poll even when NOTHING changed means a card churns
+  // (and Company Home's git diff churns) ~720x/day for zero new information.
+  // Skip the write entirely — INCLUDING prMergeCheckedTs — when the value
+  // didn't change. Trade-off, chosen deliberately: prMergeCheckedTs then reads
+  // as "last time this CHANGED," not "last time this was re-confirmed," so a
+  // long-stable MERGEABLE PR can show an old checked-time even though pr-watch
+  // has silently re-confirmed it every 2 minutes since. That is the safe
+  // direction to be wrong in for a merge-safety signal — it makes a fresh fact
+  // look OLDER than it is (prompting a manual double-check, harmless) rather
+  // than newer (which could paper over a check that actually failed silently
+  // upstream). Never the other way.
+  if (task.prMergeable === mergeable && task.prMergeStateStatus === mergeStateStatus) return task;
   task.prMergeable = mergeable;
   task.prMergeStateStatus = mergeStateStatus;
   task.prMergeCheckedTs = Date.now();
-  task.updatedTs = Date.now();
+  // kobo-594 review round 1: deliberately NOT touching task.updatedTs here.
+  // updatedTs is the same field kobo-571 is asking Tony to rule "no longer
+  // trustworthy" because too many writers already bump it for reasons a human
+  // reading the board doesn't care about — adding pr-watch's routine polling
+  // as a new automatic writer would make that problem worse, not better, and
+  // would fight its own pending resolution. prMergeCheckedTs already carries
+  // this write's own freshness signal; nothing needs to borrow updatedTs.
   writeTaskRecord(task);
   return task;
 }

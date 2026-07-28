@@ -1471,6 +1471,38 @@ describe("pr-link repo binding (kobo-80 — enforce/backfill card.repo so pr-wat
     expect(t.prMergeStateStatus).toBe("CLEAN");
     expect(t.prMergeCheckedTs).toBeGreaterThanOrEqual(firstTs);
   });
+
+  // kobo-594 review round 1: serve-pr-watch polls every 2 min — writing the file
+  // + bumping a timestamp on EVERY poll for EVERY open PR-linked card even when
+  // nothing changed is ~720 no-op writes/day/card, and Company Home is a git
+  // repo (diff churn for free).
+  test("setTaskPrMergeState skips the write entirely when the value is unchanged — no poll-churn", () => {
+    const a = addTask({ company: "pgw", title: "watch me", by: "eq3", pr: 53 });
+    setTaskPrMergeState("pgw", a.id, "MERGEABLE", "CLEAN");
+    const afterFirst = readTask("pgw", a.id)!;
+    // spin until the clock ticks at least 1ms forward — Date.now() has only
+    // millisecond resolution, so two calls back-to-back can land in the SAME
+    // millisecond and make a real (unwanted) write look like a no-op by
+    // coincidence. This makes the comparison below load-bearing: if the skip
+    // guard is removed, the re-write MUST land on a strictly later timestamp.
+    const spinFrom = Date.now();
+    while (Date.now() === spinFrom) { /* busy-wait */ }
+    // re-poll with the IDENTICAL result — must be a true no-op, not just "same values written again"
+    setTaskPrMergeState("pgw", a.id, "MERGEABLE", "CLEAN");
+    const afterSecond = readTask("pgw", a.id)!;
+    expect(afterSecond.prMergeCheckedTs).toBe(afterFirst.prMergeCheckedTs); // NOT bumped — the write never happened
+  });
+
+  // kobo-594 review round 1: this field must never feed the SAME "too many
+  // writers, no longer trustworthy" problem kobo-571 is asking Tony to rule on
+  // for updatedTs — pr-watch's routine 2-minute poll must not become a new
+  // automatic writer of it.
+  test("setTaskPrMergeState never touches task.updatedTs", () => {
+    const a = addTask({ company: "pgw", title: "watch me", by: "eq3", pr: 53 });
+    const before = readTask("pgw", a.id)!.updatedTs;
+    setTaskPrMergeState("pgw", a.id, "CONFLICTING", "DIRTY");
+    expect(readTask("pgw", a.id)!.updatedTs).toBe(before);
+  });
 });
 
 describe("prOpenedReview (eq3-011 kobo-13 — PR open drives the linked card to review + owner)", () => {

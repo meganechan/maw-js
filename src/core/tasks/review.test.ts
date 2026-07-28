@@ -109,6 +109,23 @@ describe("taskNextAction — every state answers 'what next + who'", () => {
       expect(next).toContain("ยังไม่เคยเช็ค");
     });
 
+    // kobo-594 — live evidence eq3 measured while merging this batch of PRs
+    // (not a hypothetical): the SAME UNKNOWN value resolved to BOTH real states
+    // on re-check — #375/#371 UNKNOWN → CONFLICTING after merging 576, #588
+    // UNKNOWN → MERGEABLE after merging 592. UNKNOWN alone carries zero
+    // direction — defaulting it to "ready" (the old bug) would have merged
+    // straight over a real conflict.
+    test("UNKNOWN resolves EITHER direction on re-check — proves it can never be treated as ready by default", () => {
+      const stillUnknown = mk({ state: "review", pr: 371, prMergeable: "UNKNOWN", prMergeStateStatus: "UNKNOWN", prMergeCheckedTs: Date.now() });
+      expect(taskNextAction(stillUnknown)).toContain("ยังไม่เคยเช็ค");
+
+      const resolvedConflicting = { ...stillUnknown, prMergeable: "CONFLICTING", prMergeStateStatus: "DIRTY" };
+      expect(taskNextAction(resolvedConflicting)).toContain("conflict");
+
+      const resolvedMergeable = { ...stillUnknown, pr: 377, prMergeable: "MERGEABLE", prMergeStateStatus: "CLEAN" };
+      expect(taskNextAction(resolvedMergeable)).toContain("รอ merge PR #377 → done");
+    });
+
     test("prMergeable CONFLICTING → explicit conflict warning, distinct from ready", () => {
       const next = taskNextAction(mk({ state: "review", pr: 53, prMergeable: "CONFLICTING", prMergeStateStatus: "DIRTY", prMergeCheckedTs: Date.now() }));
       expect(next).toContain("conflict");

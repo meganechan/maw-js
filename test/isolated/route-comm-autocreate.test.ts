@@ -100,6 +100,19 @@ describe("routeComm hey → auto-create board card (Track 3 integration)", () =>
     expect(listTasks("kobo")).toEqual([]);
     expect(calls.length).toBe(1);
   });
+
+  // kobo-555 follow-up (eq3 head review, crew reviewer independently raised the same
+  // gap): the auto-capture removal made this file's coverage of route-comm.ts:185's
+  // authenticateActor call site MORE VISIBLE, not less real — it was already the only
+  // gate standing between a forged --from and an auto-created card's `by` field
+  // (kobo-335). Nothing here previously pinned the CALL SITE directly; the harness
+  // agent-self is "eq3" (beforeAll), so a claim of "patchwork" is a forgery.
+  test("a FORGED --from on a [request:] dispatch creates NO card (authenticateActor refuses, kobo-335)", async () => {
+    const handled = await routeComm("hey", ["hey", "--from", "local:patchwork", "patchwork", "[request:forge-2] forged dispatch"]);
+    expect(handled).toBe(true);
+    expect(calls.length).toBe(1); // delivery itself is unaffected — auth only gates the auto-create
+    expect(listTasks("kobo").filter((t) => t.requestId === "forge-2")).toEqual([]);
+  });
 });
 
 // kobo-555: kobo-165's auto-capture (a hey mentioning an existing card id wrote

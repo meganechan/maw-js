@@ -90,7 +90,7 @@ echo "$_WORKER_MODEL" > "$STATE_DIR/worker-model.txt"    # §5 worker-N reuse �
 ```
 - **verified live** (kobo-89/91): raw pane boot + skip-permissions ทำงาน (footer "bypass permissions on") · pane โผล่ข้าง spawner · `-P -F '#{pane_id}'` → capture `%pane-id` → เขียนแถว roster ทันที (§2)
 - ไม่ใช้ `maw team spawn` / `--exec` — คุม tmux เอง → คุม flag (skip-perm) + auto-kick เอง
-- **Stop-hook target ต่างบท (env per-pane):** worker `CREW_COORD_PANE=$COND` (idle → conductor route ต่อ) · reviewer `CREW_COORD_PANE=$FRONT` (verdict → front → head-lead). hook gate = `worker*|reviewer` (no dash — `worker*` matches bare "worker" AND worker-N; `worker-*` would ORPHAN the base bare-"worker" pane = deadlock) → **conductor ไม่ fire** (spawn ไม่มี `--settings` + ไม่มี `CREW_ROLE` = ตรงกับ head conductor) → conductor ping front ด้วย contract discipline
+- **Stop-hook target ต่างบท (env per-pane):** worker `CREW_COORD_PANE=$COND` (idle-signal, conductor เห็นสถานะ ไม่ใช่ handoff — เนื้องานเข้า reviewer ตรง kobo-560) · reviewer `CREW_COORD_PANE=$FRONT` (verdict → front → head-lead). hook gate = `worker*|reviewer` (no dash — `worker*` matches bare "worker" AND worker-N; `worker-*` would ORPHAN the base bare-"worker" pane = deadlock) → **conductor ไม่ fire** (spawn ไม่มี `--settings` + ไม่มี `CREW_ROLE` = ตรงกับ head conductor) → conductor ping front ด้วย contract discipline
 - **env บังคับ:** `MAW_ROOM_COMPANY=$CO_NAME` (kobo-267 presence scope) · `CREW_STATE_DIR` (state-file + hook state-hint path) · `CREW_ROLE`+`CREW_COORD_PANE` (worker/reviewer เท่านั้น — gate + resolve coord สด)
 - **Stop hook = completion signal (kobo-91 deadlock fix)** — worker/reviewer spawn `--settings "$HOME/.claude/crew-worker-settings.json"` → ทุกจบ turn hook resolve coord addr สดจาก `CREW_COORD_PANE` → `maw hey` แจ้ง idle + state path = **completion signal deterministic ไม่พึ่งความจำ model**. conductor/front spawn ปกติ (ไม่มี `CREW_ROLE`) → hook exit ทันที (env-gate = local-first, ไม่แตะ pane อื่น)
 
@@ -175,7 +175,7 @@ maw hey "$ADDR" "<งาน 1 บรรทัด + ชี้ card>"
 >
 > **re-seat หลัง clear (light state)**: `--append-system-prompt` รอด /clear แต่ context หาย *(verified 2026-07-04)* → ทุก fresh turn/หลัง clear: **อ่าน `$CREW_STATE_DIR/worker.md` เดิมก่อน** แล้วทำต่อ. `worker.md` = ความจำเดียวที่รอด — เก็บ **light state เท่านั้น (standing task + held card)** ไม่ต้อง full re-init (heavy exec คืน distilled ให้ conductor แล้ว ไม่ค้างใน state)
 >
-> **กฎ (invariant):** 1) signal+state: overwrite `$CREW_STATE_DIR/worker.md` (`## worker @ <pane-addr> · <time>` + bullets) · เหตุสำคัญ ping conductor 1 บรรทัด + ชี้ไฟล์ · 2) verified: ทุก claim มี `verified: <how,path>` — ไม่ verify = `(unverified)` ห้าม ✅ เปล่า · 3) รอ human: card (needs_input) + what/why/options → หยุด (default deny) → ping · 4) งานนอกสาย: ลง card (tag ที่มา) + แจ้ง conductor ก่อนทำ · 5) ก่อนลงมือ: อ่าน premise จาก card/state จริง · 6) ได้ยิน decision: เขียนลง card/ไฟล์ทันที
+> **กฎ (invariant):** 1) signal+state: **overwrite `$CREW_STATE_DIR/worker.md` ให้เสร็จก่อนจบทุก turn เสมอ** (ไม่ใช่แค่ตอน "มีนัย" — conductor ใช้ mtime ของไฟล์นี้ตัดสินว่าค้างหรือไม่, kobo-560) (`## worker @ <pane-addr> · <time>` + bullets) · เหตุสำคัญ (เสร็จ/block/เจอของแปลก) **เพิ่ม** ping conductor 1 บรรทัด + ชี้ไฟล์ (ping เป็นเงื่อนไข ไฟล์ไม่ใช่) · 2) verified: ทุก claim มี `verified: <how,path>` — ไม่ verify = `(unverified)` ห้าม ✅ เปล่า · 3) รอ human: card (needs_input) + what/why/options → หยุด (default deny) → ping · 4) งานนอกสาย: ลง card (tag ที่มา) + แจ้ง conductor ก่อนทำ · 5) ก่อนลงมือ: อ่าน premise จาก card/state จริง · 6) ได้ยิน decision: เขียนลง card/ไฟล์ทันที
 >
 > **card-lifecycle (worker ขับ state ของ card ตัวเอง — state-drive + done-split):**
 > - **state-drive:** รับ card → `maw task move --state in-progress` · ติด (รอ card อื่น) → `move --state blocked --kind dependency` · รอ Tony ตอบ decision → `move --state need-answer --reason "<คำถาม>"` · เสร็จงาน → **self-review งานตัวเองก่อน** (opus judgment: correctness + scope + AC ครบ — bg-agent ทำ gather ดิบให้ แต่ verdict เป็นของ worker) → **handoff reviewer** — **worker ไม่ set done เอง · worker ไม่ stamp PR/review เอง** (reviewer ผ่าน → front stamp). self-review = ตาแรก ไม่แทน reviewer (คนละคน = self-review guard)
@@ -199,10 +199,10 @@ maw hey "$ADDR" "<งาน 1 บรรทัด + ชี้ card>"
 >
 > **verdict routing (Board Truth rule 12 + rule 3 — PR drives lifecycle):** reviewer = **pre-PR quality gate ไม่ใช่ done-closer**. **ไม่มี path ไหน reviewer ปิด card done เอง** — done มาจาก pr-watch ตอน PR merge เท่านั้น (kobo-205 dogfound board-lie).
 > 1. อ่าน premise จาก card จริง + diff จริง (`gh pr diff <n> --repo <owner/name>` หรืออ่านไฟล์ที่แก้) — ground ก่อนตัดสิน. **ห้ามเชื่อ self-report ของ worker — verify เอง**
-> 2. เขียน finding ลง `$CREW_STATE_DIR/reviewer.md` + **comment บน card** (หลักฐาน file:line + verdict)
+> 2. เขียน finding ลง `$CREW_STATE_DIR/reviewer.md` **ให้เสร็จก่อนจบ turn เสมอ** (conductor ใช้ mtime ของไฟล์นี้ตัดสินว่าค้างหรือไม่, kobo-560) + **comment บน card** (หลักฐาน file:line + verdict)
 > 3. **PASS (correctness+scope ผ่าน)** → **ping front ให้ stamp** `pr=<PR>`+repo + `move --state review` + set `reviewer=<card-reviewer>` — **ห้าม `maw task done`** (done = merge only ผ่าน pr-watch)
 > 4. **งานใหญ่ (เงิน/hash/live/deploy/schema/ข้าม company/ไม่แน่ใจ)** → **ย้าย card เข้า lane Tony:** decision → `move --state need-answer --reason "<คำถาม>"` · approve deploy/สำคัญ → `move --state approve --reason "<ทำไม>"` (human gate — lane ≠ done)
-> 5. **ไม่ผ่าน (scope ล้ำ / ไม่ตรง AC / มี broken ref)** → comment finding + ตีกลับ (request-change) **ตรงถึง worker** (เหมือนขาไป, ไม่ผ่าน conductor — kobo-560) ให้แก้
+> 5. **ไม่ผ่าน (scope ล้ำ / ไม่ตรง AC / มี broken ref)** → comment finding + ตีกลับ (request-change) **ตรงถึง worker** (ไม่ผ่าน conductor — kobo-560) ให้แก้
 >
 > **verdict เสร็จ → ping front 1 บรรทัด** (`verdict: pass|hold|reject + card`) → front loopback ลง card + report head-lead. reviewer = **pane ถาวร** → re-seat หลัง /clear เหมือน worker (อ่าน `reviewer.md` เดิม), ไม่ teardown ต่องาน (จบ cell ถึง teardown §9).
 >
@@ -223,7 +223,8 @@ maw hey "$ADDR" "<งาน 1 บรรทัด + ชี้ card>"
 > 3. **persist:** `maw company task decompose <epicId> --plan '[...]' --company <co> --from <you>` (idempotent — title ซ้ำ = skip)
 >
 > ### หน้าที่ 2 — route + light-exec + คุม worker/reviewer
-> - **route:** dispatch = card assign (signal) + `maw hey <worker-addr>` nudge. worker เสร็จ (idle) → route งานไป **reviewer** ตรวจ (worker Stop hook idle → คุณ = coord)
+> - **route:** dispatch ขาลง (คุณ → worker) = card assign (signal) + `maw hey <worker-addr>` nudge — **เหมือนเดิม ไม่เปลี่ยน**. ขาขึ้น (worker เสร็จ) **worker ส่งตรงเข้า reviewer เอง** ไม่ผ่านคุณ (kobo-560, แก้คอขวด) — บทคุณคือ **เห็นสถานะ** จาก `worker.md`/`reviewer.md` (state file) ไม่ใช่เป็นทางผ่านของเนื้องาน (worker Stop hook idle ยังเด้งหาคุณ = สัญญาณ ไม่ใช่เนื้องาน)
+> - **state file ค้าง = ต้องรู้ได้ ห้ามเชื่อของเก่า (kobo-560):** ก่อนตัดสินใจจากเนื้อใน `worker.md`/`reviewer.md` **เช็ค mtime ก่อน** (`stat -f %m <file>` บน darwin) เทียบกับเวลาที่ idle ping ล่าสุดมาถึง — **mtime เก่ากว่า ping = ไฟล์ไม่ถูกอัปเดตใน turn นั้น = ถือว่าค้าง ห้ามตัดสินใจจากเนื้อในไฟล์** ให้ `maw hey` ถามเจ้าของไฟล์ตรงแทน. เหตุที่ใช้ mtime ไม่ใช่ timestamp ในไฟล์: timestamp พึ่งวินัยคนเขียน (สิ่งที่ทำให้ปัญหานี้เกิดตั้งแต่แรก) ส่วน mtime มีอยู่ฟรีจากระบบไฟล์ ไม่ต้องมีใครร่วมมือ · **ข้อจำกัดตรง ๆ:** mtime บอกได้แค่ว่า *ไฟล์ถูกเขียนเมื่อไหร่* **ไม่ได้บอกว่าเนื้อในถูกต้องหรือครบ** — จับได้เฉพาะเคส "ลืมเขียน" ไม่ใช่เคส "เขียนแต่เขียนผิด"
 > - **auto-reassign idle worker → next-ready (event-driven, board-read, kobo-356):** worker idle-ping มา (Stop hook แนบ `NEXT-READY <id>: <title>` หรือ `NO-READY-WORK inFlight=<N>` มาแล้ว — **ห้าม loop/poll เอง**, hook เป็น trigger เดียว):
 >   - **`NEXT-READY <id>`** → dispatch card นั้นให้ worker ทันที (board=memory, คุณ=dispatcher — ไม่ถืองานไว้ในหัว)
 >   - **`NO-READY-WORK inFlight=<N>`, N>0** → note "empty, N in flight" ใน conductor.md (งานยังไม่กลับมาหมด — ห้ามปล่อย idle เงียบ)
@@ -235,7 +236,7 @@ maw hey "$ADDR" "<งาน 1 บรรทัด + ชี้ card>"
 >
 > ### self-review guard (เส้นห้ามข้าม) ⭐
 > - **คุณทำ light-exec → คุณ *ไม่* เคาะเอง** → ส่ง **reviewer/front** ตรวจ
-> - งาน worker → route review chain (worker → **crew reviewer** → front → head reviewer → lead). merge = lead/human
+> - งาน worker → **ตรง**ถึง **crew reviewer** ไม่ผ่านคุณ → front → head reviewer → lead (review chain). merge = lead/human
 >
 > **guards:** ห้าม git push -f · rm -rf นอก repo · แตะไฟล์นอก repo · commit secrets · แตะ hash/idempotency · **heavy code เอง** (= worker)
 > **comm:** `maw hey` เท่านั้น — resolve address สดจาก pane-id (roster/front). submit ทุก turn ให้ box ว่าง. อ่านข้าม tag. ห้าม backtick ใน hey string. front addr resolve จาก kick message/roster

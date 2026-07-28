@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifySignTiers, SENSITIVE_PATHS, type DiffFile } from "./sign-tier-classifier";
+import { classifySignTiers, SENSITIVE_PATHS, LARGE_DIFF_LINE_THRESHOLD, type DiffFile } from "./sign-tier-classifier";
 
 // kobo-546: every AC here is "the case we're afraid of," not a mechanism test —
 // per the card's own explicit callout, a test that only proves a helper returns
@@ -110,5 +110,80 @@ describe("SENSITIVE_PATHS (kobo-546) — table lives in code, ONE list, seed cou
 
   test("every category has a non-empty label (readable in a reviewer's finding, not an opaque index)", () => {
     for (const s of SENSITIVE_PATHS) expect(s.category.length).toBeGreaterThan(0);
+  });
+});
+
+describe("classifySignTiers (kobo-546 REWORK) — %109's holes A + B", () => {
+  test("HOLE A: the real auth trust root (authenticateActor, comm-send.ts:259) is sensitive, not just its caller", () => {
+    const files: DiffFile[] = [{ path: "src/commands/shared/comm-send.ts", additions: 2, deletions: 0 }];
+    const r = classifySignTiers(files);
+    expect(r.tiers).toEqual(["crew", "head"]);
+    expect(r.reason).toContain("comm-send.ts");
+  });
+
+  test("HOLE B: the MCP entry point that also builds merge argv + can push --single-tier (tools.ts:363) is sensitive", () => {
+    const files: DiffFile[] = [{ path: "src/vendor/mpr-plugins/mcp/tools.ts", additions: 1, deletions: 1 }];
+    expect(classifySignTiers(files).tiers).toEqual(["crew", "head"]);
+  });
+});
+
+describe("classifySignTiers (kobo-546 REWORK) — the 300-line threshold (eq3 lead's starting number)", () => {
+  test("LARGE_DIFF_LINE_THRESHOLD is 300, exported from the SAME file as SENSITIVE_PATHS (rule 4 — one place)", () => {
+    expect(LARGE_DIFF_LINE_THRESHOLD).toBe(300);
+  });
+
+  test("a diff with MORE than 300 changed lines, safe paths only → 2 tiers", () => {
+    const files: DiffFile[] = [{ path: "src/vendor/mpr-plugins/whoami/index.ts", additions: 250, deletions: 51 }];
+    const r = classifySignTiers(files);
+    expect(r.tiers).toEqual(["crew", "head"]);
+    expect(r.reason).toContain("301");
+  });
+
+  test("EXACTLY 300 changed lines → still 1 tier (over the threshold, not at-or-over)", () => {
+    const files: DiffFile[] = [{ path: "src/vendor/mpr-plugins/whoami/index.ts", additions: 200, deletions: 100 }];
+    expect(classifySignTiers(files).tiers).toEqual(["head"]);
+  });
+
+  test("a diff under 300 lines, safe paths → 1 tier", () => {
+    const files: DiffFile[] = [{ path: "src/vendor/mpr-plugins/whoami/index.ts", additions: 10, deletions: 5 }];
+    expect(classifySignTiers(files).tiers).toEqual(["head"]);
+  });
+
+  test("a lockfile carrying thousands of lines is EXCLUDED from the count — a real small change stays 1 tier", () => {
+    const files: DiffFile[] = [
+      { path: "bun.lock", additions: 4000, deletions: 3800 },
+      { path: "src/vendor/mpr-plugins/whoami/index.ts", additions: 3, deletions: 1 },
+    ];
+    expect(classifySignTiers(files).tiers).toEqual(["head"]);
+  });
+
+  test("a generated/dist bundle is EXCLUDED from the count too", () => {
+    const files: DiffFile[] = [
+      { path: "dist/bundle.js", additions: 5000, deletions: 5000 },
+      { path: "src/vendor/mpr-plugins/whoami/index.ts", additions: 2, deletions: 0 },
+    ];
+    expect(classifySignTiers(files).tiers).toEqual(["head"]);
+  });
+
+  // kobo-546 REWORK item 4 (%109): gh reports 0 additions AND 0 deletions for a
+  // binary/unreadable file — the case a large binary-heavy PR could otherwise
+  // sneak under the threshold on.
+  test("BINARY FAIL-CLOSED: a file reporting 0 additions and 0 deletions makes the WHOLE count undeterminable → 2 tiers, even alongside a tiny safe text diff", () => {
+    const files: DiffFile[] = [
+      { path: "src/vendor/mpr-plugins/whoami/index.ts", additions: 1, deletions: 0 },
+      { path: "assets/logo.png", additions: 0, deletions: 0 },
+    ];
+    const r = classifySignTiers(files);
+    expect(r.tiers).toEqual(["crew", "head"]);
+    expect(r.reason).toContain("can't be determined");
+  });
+
+  test("a large binary-heavy PR does NOT sneak under the threshold via 0/0 lines (the exact regression this closes)", () => {
+    const files: DiffFile[] = [
+      { path: "assets/huge-binary-1.bin", additions: 0, deletions: 0 },
+      { path: "assets/huge-binary-2.bin", additions: 0, deletions: 0 },
+      { path: "src/vendor/mpr-plugins/whoami/index.ts", additions: 5, deletions: 2 }, // small, would otherwise be well under 300
+    ];
+    expect(classifySignTiers(files).tiers).toEqual(["crew", "head"]);
   });
 });

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { runTask } from "../../src/vendor/mpr-plugins/task/index";
+import { runTask, __setPrDiffFetcherForTest, __resetPrDiffFetcherForTest } from "../../src/vendor/mpr-plugins/task/index";
 import {
   addTask,
   readTask,
@@ -37,6 +37,14 @@ beforeAll(() => {
     join(dir, "companies", "kobo.json"),
     JSON.stringify({ name: "kobo", departments: { core: { members: [{ oracle: "eq3" }, { oracle: "patchwork" }], lead: "eq3" } } }),
   );
+  // kobo-546 REWORK: the classify/escalate gate now runs unconditionally on every
+  // `pr`/`merge` call (no MAW_TEST_MODE branch) — inject a safe, NON-EMPTY,
+  // non-sensitive stub so the 43 `pr`/`merge` calls in this file never shell to
+  // real gh. MUST be non-empty: classifySignTiers reads an empty diff as
+  // fail-closed 2 tiers (DELIBERATE — the card's own unhappy path), so an empty
+  // stub here would silently crew-gate every card in this suite. Do not "tidy"
+  // this back to an empty array — that's the gate quietly dying, not a cleanup.
+  __setPrDiffFetcherForTest(() => [{ path: "docs/README.md", additions: 1, deletions: 0 }]);
 });
 afterAll(() => {
   if (prev === undefined) delete process.env.MAW_DATA_DIR;
@@ -46,6 +54,7 @@ afterAll(() => {
   if (prevTest === undefined) delete process.env.MAW_TEST_MODE;
   else process.env.MAW_TEST_MODE = prevTest;
   if (prevTmux === undefined) delete process.env.TMUX; else process.env.TMUX = prevTmux;
+  __resetPrDiffFetcherForTest(); // kobo-546: undo the injected stub — never leak into another test file
   rmSync(dir, { recursive: true, force: true });
 });
 beforeEach(() => { rmSync(join(dir, "companies", "kobo", "tasks"), { recursive: true, force: true }); });

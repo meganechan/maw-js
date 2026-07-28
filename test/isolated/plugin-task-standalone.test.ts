@@ -134,6 +134,12 @@ describe("task command plugin standalone boundary", () => {
     expect(src).toContain("reclassifyAndEscalate");
     expect(src).toContain("fetchPrDiffFiles");
     expect(src).toContain("--single-tier used for merge");
+    // kobo-546 REWORK: no MAW_TEST_MODE branch anywhere on the gate path — a code
+    // branch in the gate is the hole, not a missing env-discipline rule. Injectable
+    // seam instead: real fetcher by default, test-only override + reset.
+    expect(src).not.toContain('process.env.MAW_TEST_MODE !== "1" && t.pr');
+    expect(src).toContain("__setPrDiffFetcherForTest");
+    expect(src).toContain("__resetPrDiffFetcherForTest");
     expect(src).toContain("crew-gated"); // --single-tier rejected on a crew-gated card
     // kobo-336: a crew card needs two INDEPENDENT signers — one oracle can't fill both tiers.
     expect(src).toContain("sameSignerBothTiers"); // merge backstop: refuse same-signer crew+head

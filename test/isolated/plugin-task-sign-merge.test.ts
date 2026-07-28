@@ -480,7 +480,7 @@ describe("kobo-557 sign-time SHA-bind refuse (A/B/C/D)", () => {
       const r = await task(["sign", "kobo-1", "--role", "head"]);
       expect(r.ok).toBe(true);
       expect(r.output).toContain("sha-visible-in-output");
-      expect(r.output).not.toContain("NO SHA BOUND"); // must not carry state C's marker too (reviewer pre-screen point 3)
+      expect(r.output).not.toContain("sign REFUSED for"); // must not carry any refuse marker (A/C/D all start with this) (reviewer pre-screen point 3)
       expect(readTask("kobo", "kobo-1")!.headSignedSha).toBe("sha-visible-in-output");
     } finally {
       __setHeadShaFetcherForTest(() => DEFAULT_TEST_HEAD_SHA);

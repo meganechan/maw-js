@@ -550,9 +550,20 @@ export async function isSafeToInject(
   host?: string,
   deps: { captureFn?: typeof capture } = {},
 ): Promise<{ safe: boolean; reason?: "typing" | "menu"; lastInput: string }> {
-  const pane = await checkPaneIdle(target, host, deps);
+  // %5's request-change: checkPaneIdle + detectPermissionMenu each captured
+  // independently doubled the real tmux round-trips per send (1 -> 2) — on a
+  // shared tmux server that has already hung once tonight (kobo-477) with an
+  // open latency card (kobo-408), that is not a cost to pay silently as a
+  // side effect of wiring two functions together. Capture once, feed the SAME
+  // snapshot to both — one round-trip, same behavior either function had on
+  // its own.
+  let captured: Promise<string> | undefined;
+  const captureOnce: typeof capture = (...args) => (captured ??= (deps.captureFn ?? capture)(...args));
+  const onceDeps = { captureFn: captureOnce };
+
+  const pane = await checkPaneIdle(target, host, onceDeps);
   if (!pane.idle) return { safe: false, reason: "typing", lastInput: pane.lastInput };
-  const menuOpen = await detectPermissionMenu(target, host, deps);
+  const menuOpen = await detectPermissionMenu(target, host, onceDeps);
   if (menuOpen) return { safe: false, reason: "menu", lastInput: pane.lastInput };
   return { safe: true, lastInput: pane.lastInput };
 }

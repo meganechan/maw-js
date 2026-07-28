@@ -111,7 +111,7 @@ Status dir: `ψ/active/head/` (ephemeral, gitignored) — `conductor.md` (roster
 3. **kick conductor + reviewer [+comm]** — `maw hey` (resolve index จาก pane-id) 1 บรรทัดต่อ pane: ชี้ lead pane-id + role + standby. (kick แรก = act จาก message แรก, ตาม crew)
 4. **offload lower tiers** — conductor spawn crew/worker-cell เมื่อ offload (ดู §Tiers · §Worker cell). worker-cell = /crew ตรงๆ. head cell เอง ≤4 pane.
 5. **layout** — **lead ใหญ่สุด (ล่างซ้าย, main-vertical 45%)** · conductor + reviewer กลางเท่ากัน (ขวา) — verb เซ็ตให้เองแล้ว (kobo-543, best-effort inside `headSpawn()`), **ไม่ต้องรัน tmux มือ**. comm (ถ้า opt-in) แบ่งความสูงจาก lead ตอน spawn ใน §2 แล้ว (`-v -b -l 15%`) ⇒ **ไม่ต้อง resize อะไรเพิ่ม**.
-   ⚠️ **ห้าม `select-layout` ซ้ำหลัง comm เกิด** — main-vertical จะรวบ comm ไปกอง stack ขวา แล้วแถบเหนือ lead หาย
+   ⚠️ **ห้าม `select-layout` ซ้ำหลัง comm เกิด** — `-b` แทรก comm ให้ index ต่ำกว่า lead ⇒ main-vertical เลือก **comm** เป็น main pane ซ้ายเต็มความสูง (วัดจริง: comm w=89 h=50) แล้วดัน **lead** ไปกอง stack ขวา (w=110 h=16) ⇒ ตรงข้ามกับที่ต้องการ. ถ้า layout เพี้ยน ให้ไปดูที่ lead ไม่ใช่หา comm ในกองขวา
    **วัดซ้ำได้ (kobo-556 — เลือกวิธีนี้แทนเทสต์อัตโนมัติ เพราะ layout ขึ้นกับ geometry ของ terminal จริง เทสต์ที่ mock tmux จะเขียวโดยไม่ได้พิสูจน์อะไร):**
    ```bash
    S=tmp-headsplit-$$; tmux new-session -d -s "$S" -x 200 -y 50 'sleep 300'

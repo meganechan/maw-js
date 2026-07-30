@@ -18,6 +18,16 @@
 #   CI uses this to keep the default suite short enough to parallelize while
 #   preserving the same per-file mock isolation semantics within each shard.
 #
+#   --src discovers and runs `src/**/*.test.ts` instead of `test/**/*.ts`
+#   (kobo-472) — the same mock-isolation + set -e-survives-a-failure +
+#   git-ls-files/find completeness guard this script already gives `test/`,
+#   just aimed at a different tree. Before kobo-472, every non-plugin file
+#   under `src/` was invisible to CI (test:plugin only covers
+#   `src/commands/plugins/`) — "CI green" never meant those files passed,
+#   it meant CI had never looked. See the SRC_EXCLUDED_PREFIXES list below
+#   for exactly what's carved out and why — kobo-472's own AC forbids a
+#   silent narrowing, so every exclusion here is named, not implicit.
+#
 # This is the release/CI-safe replacement for bare `bun run test`.
 
 set -eo pipefail
@@ -32,6 +42,7 @@ REQUESTED_FILES=()
 SHARD_INDEX=""
 SHARD_TOTAL=""
 EXPECT_SHARD_VALUE=0
+SRC_MODE=0
 
 parse_shard_spec() {
   local spec="$1"
@@ -63,6 +74,8 @@ for arg in "$@"; do
     EXPECT_SHARD_VALUE=1
   elif [[ "$arg" == --shard=* ]]; then
     parse_shard_spec "${arg#--shard=}"
+  elif [[ "$arg" == "--src" ]]; then
+    SRC_MODE=1
   elif [[ "$arg" == -* ]]; then
     BUN_EXTRA_ARGS+=("$arg")
   elif [[ -d "$arg" ]]; then
@@ -142,7 +155,87 @@ run_bun_case() {
   fi
 }
 
-if [ "${#REQUESTED_FILES[@]}" -gt 0 ]; then
+if [[ "$SRC_MODE" -eq 1 ]]; then
+  if [ "${#REQUESTED_FILES[@]}" -gt 0 ]; then
+    echo "error: --src cannot be combined with explicit file/directory arguments" >&2
+    exit 2
+  fi
+
+  # kobo-472 — named exclusion list, not an implicit assumption. Every entry
+  # here is a DELIBERATE, reviewable decision that a given src/ subtree is
+  # someone else's job, not a guess this script makes about what "looks like"
+  # a plugin file. Add an entry only with a reason; the completeness guard
+  # below turns an UNLISTED gap into a hard failure, so silently dropping a
+  # subtree here would just move the blind spot rather than close it.
+  SRC_EXCLUDED_PREFIXES=(
+    "src/commands/plugins/" # already run by `test:plugin` (package.json) — a separate job's job
+  )
+  src_is_excluded() {
+    local f="$1" p
+    for p in "${SRC_EXCLUDED_PREFIXES[@]}"; do
+      [[ "$f" == "$p"* ]] && return 0
+    done
+    return 1
+  }
+
+  RAW_SRC_TEST_FILES=()
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && RAW_SRC_TEST_FILES+=("$f")
+  done < <(git ls-files -- ':(top)src/**/*.test.ts')
+
+  # kobo-472 — a hand-written list is only as honest as its members are still
+  # real. The completeness guard below catches a file that's OUTSIDE this
+  # list going unnoticed; this catches the opposite decay — an exclusion
+  # entry that no longer MATCHES anything (the subtree got renamed/removed/
+  # emptied) sitting here forever, looking like an active decision when it's
+  # actually a fossil. Every entry must match at least one real file right now.
+  for p in "${SRC_EXCLUDED_PREFIXES[@]}"; do
+    matched=0
+    for f in "${RAW_SRC_TEST_FILES[@]}"; do
+      [[ "$f" == "$p"* ]] && { matched=1; break; }
+    done
+    if [[ "$matched" -eq 0 ]]; then
+      echo "error: test-default-safe.sh --src: SRC_EXCLUDED_PREFIXES entry '$p' matches ZERO src/*.test.ts files right now — it's either stale (the subtree moved/emptied, delete this line) or the subtree it once guarded genuinely has no tests yet (in which case it's excluding nothing and can wait to be added back when it does). Either way this can't be left silent." >&2
+      exit 2
+    fi
+  done
+
+  ALL_TEST_FILES=()
+  for f in "${RAW_SRC_TEST_FILES[@]}"; do
+    src_is_excluded "$f" && continue
+    ALL_TEST_FILES+=("$f")
+  done
+
+  # kobo-472/kobo-499 — same cross-check discipline as the test/ branch below,
+  # aimed at src/ instead: an independent `find`-based recount, filtered
+  # through the SAME named-exclusion predicate, must match git-ls-files
+  # exactly. This does NOT assert "0 files live under an agents/ path" (a
+  # hardcoded expectation like that goes red the day someone legitimately
+  # adds one, and the person who hits it is more likely to bump the number
+  # than to stop and ask). It asserts the two independent enumerations of
+  # "src/ test files minus the named exclusions" agree — a file appearing or
+  # vanishing on only one side is what fails, regardless of WHY.
+  FIND_RECOUNT_FILES=()
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    src_is_excluded "$f" && continue
+    FIND_RECOUNT_FILES+=("$f")
+  done < <(
+    find src -type f -name '*.test.ts' |
+      sed 's#^\./##' |
+      sort
+  )
+  GIT_LS_FILES_SORTED=()
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && GIT_LS_FILES_SORTED+=("$f")
+  done < <(printf '%s\n' "${ALL_TEST_FILES[@]}" | sort)
+
+  if [[ "${GIT_LS_FILES_SORTED[*]}" != "${FIND_RECOUNT_FILES[*]}" ]]; then
+    echo "error: test-default-safe.sh --src: git-ls-files enumeration (${#GIT_LS_FILES_SORTED[@]} file(s)) disagrees with an independent find-based recount (${#FIND_RECOUNT_FILES[@]} file(s)) — a src/ test file appeared or vanished outside SRC_EXCLUDED_PREFIXES. If this is intentional, name it in SRC_EXCLUDED_PREFIXES with a reason; if not, the enumeration drifted. Diff:" >&2
+    diff <(printf '%s\n' "${GIT_LS_FILES_SORTED[@]}") <(printf '%s\n' "${FIND_RECOUNT_FILES[@]}") >&2 || true
+    exit 2
+  fi
+elif [ "${#REQUESTED_FILES[@]}" -gt 0 ]; then
   ALL_TEST_FILES=()
   for f in "${REQUESTED_FILES[@]}"; do
     [[ "$f" == test/helpers/* ]] && continue

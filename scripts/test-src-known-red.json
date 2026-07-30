@@ -1,0 +1,12 @@
+[
+  {
+    "test": "POST /api/send — company-scope gate on local/self-node delivery (kobo-431) > refuses cross-company: sendKeys is NEVER called, not just warned-and-sent",
+    "card": "kobo-533",
+    "owner": "patchwork"
+  },
+  {
+    "test": "POST /api/send — company-scope gate on local/self-node delivery (kobo-431) > Defect B — a node:agent resolving to local/self-node is scope-gated too, whatever produced that result",
+    "card": "kobo-533",
+    "owner": "patchwork"
+  }
+]

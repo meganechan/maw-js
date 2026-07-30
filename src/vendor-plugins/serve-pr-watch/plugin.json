@@ -4,22 +4,18 @@
   "entry": "./index.ts",
   "sdk": "^1.0.0",
   "tier": "core",
-  "description": "Periodically polls open/merged PRs during serve lifecycle so a github web-merge drives card lifecycle without a manual maw command.",
+  "description": "Periodically polls open/merged PRs via its own standalone daemon process so a github web-merge drives card lifecycle without a manual maw command.",
   "author": "Soul-Brews-Studio",
-  "hooks": {
-    "serve": {
-      "script": "./index.ts",
-      "handler": "serve",
-      "ensures": ["serve:pr:watch"],
-      "policy": "fail-fast"
-    }
-  },
   "module": {
     "path": "./index.ts",
-    "exports": ["serve", "startServePrWatch"]
+    "exports": ["startServePrWatch"]
   },
-  "capabilities": ["serve:worklog", "worklog:pr-watch"],
-  "capabilityNamespaces": ["serve", "worklog"],
+  "capabilities": ["worklog:pr-watch"],
+  "capabilityNamespaces": ["worklog"],
+  "cli": {
+    "command": "pr-watch",
+    "help": "maw pr-watch [--since <ISO8601>] [--json] — pr-watch daemon liveness + acceptance status"
+  },
   "weight": 3,
   "license": "MIT",
   "schemaVersion": 1

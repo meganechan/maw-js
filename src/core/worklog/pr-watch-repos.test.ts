@@ -310,9 +310,52 @@ describe("pollPrsOnce — mergeable-state write is wired correctly (kobo-594)", 
     const listCallBlock = src.slice(listCallIdx, src.indexOf("]);", listCallIdx));
     expect(listCallBlock).toContain("mergeable");
     expect(listCallBlock).toContain("mergeStateStatus");
-    // sanity: exactly one gh(["pr","list",...]) call in the whole poll loop —
-    // if this ever becomes 2, the "zero extra gh calls" design claim is false.
-    expect(src.match(/"pr",\s*"list"/g)?.length).toBe(1);
+  });
+
+  // kobo-633 — REPLACES the old whole-file `src.match(/"pr",\s*"list"/g)`
+  // count-based sanity check entirely (was: assert exactly 1 occurrence of
+  // the literal text anywhere in the file). Two rounds of attempted fixes to
+  // that check (narrow the text scan to "before runPollPrsOnce", then widen
+  // it to "exactly 2, second one pinned to selfSelectMostRecentMerge by
+  // name") were both source-shape tests — this codebase's own mutation-control
+  // rule already forbids treating "does this string appear" as behavioral
+  // evidence, and front caught that the underlying problem predates kobo-633:
+  // a REGEX COUNT OVER FILE TEXT can never actually answer "how many times
+  // does one poll pass call gh" — only "how many times does this substring
+  // appear in the file," which is a DIFFERENT question that happens to have
+  // matched the answer by coincidence, until code moves. This version asks
+  // the real question at runtime: spy on the gh call and count invocations
+  // FOR ONE SPECIFIC REPO during ONE pollPrsOnce() pass. Immune to code
+  // being moved anywhere in the file, and — the case none of the earlier
+  // text-based versions could ever see — if `prWatchLiveness`'s self-select
+  // call were ever wired to run FROM INSIDE the poll loop instead of
+  // on-demand, this spy would catch it immediately (repoCallCount would
+  // become 2), where a source-shape count could not, because the moved call
+  // would just be "the same 2 substrings" in a different place.
+  it("pollPrsOnce calls gh pr list exactly once per repo, per pass — measured at runtime, not by reading source text", async () => {
+    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest } = await import("./pr-watch.ts?kobo594-runtime-call-count");
+    const testRepo = "kobo594-runtime/only-this-repo";
+    card("kobo594runtime", "kobo594runtime-1", { state: "review", pr: 42, repo: testRepo });
+    __setSnapshotPathForTest(() => join(root, "watch-pr-state.json"));
+
+    const callsByRepo: Record<string, number> = {};
+    __setGhForTest(async (args: string[]) => {
+      if (args[0] === "pr" && args[1] === "list") {
+        const repoIdx = args.indexOf("--repo");
+        const repo = repoIdx >= 0 ? args[repoIdx + 1] : "?";
+        callsByRepo[repo] = (callsByRepo[repo] ?? 0) + 1;
+        // Hermetic against whatever real local worktrees scanWorktrees()
+        // happens to find on this dev machine (pr-watch-resilience.test.ts's
+        // own comment notes this same reality) — only our own fixture repo
+        // returns data; anything else answers empty.
+        return repo === testRepo ? JSON.stringify([{ number: 42, title: "x", state: "OPEN", mergedAt: null }]) : "[]";
+      }
+      return "[]";
+    });
+
+    await pollPrsOnce();
+
+    expect(callsByRepo[testRepo]).toBe(1);
   });
 
   it("the mergeable write runs BEFORE the firstRun/prev===cur early-out — every poll, not just on a state transition", () => {

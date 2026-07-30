@@ -43,6 +43,7 @@ const PROTECTED = new Set([
   "/state",           // company-ui coordination markdown — company-internal state doc (Rule 6); loopback UI bypasses, LAN must auth
   "/roster",          // company-ui presence roster — company org membership (Rule 6, kobo-50); loopback UI bypasses, LAN must auth
   "/presence",        // company-ui presence detail — per-pane model + context% (Rule 6, kobo-104); loopback UI bypasses, LAN must auth
+  "/pr-watch/liveness", // company-ui pr-watch daemon status badge — repo/PR names from failed/unlinked buckets are company-internal (Rule 6, kobo-633 Slice 5); exact entry, single sub-path, same convention as "/tasks/events"; loopback UI bypasses, LAN must auth
 ]);
 
 /** POST-only protected (GET is public for UI, POST needs auth) */

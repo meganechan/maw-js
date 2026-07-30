@@ -2,16 +2,18 @@
  * PR watcher — poll-based (snapshot diff, each transition logs once).
  *
  * Triggered by: `maw done` (on-signal), `maw company worklog log` (on-read),
- * `maw company worklog sync`, AND — on a running server — the `serve-pr-watch`
- * plugin's periodic tick (kobo-33), so a plain github.com web-merge drives the
- * linked card to done with NO human `maw` command.
+ * `maw company worklog sync`, AND — via the standalone `pr-watch` daemon
+ * (`vendor-plugins/serve-pr-watch/daemon.ts`, its own `pm2` process, kobo-33
+ * originally / kobo-633 moved it out of `maw-server`'s own process) — its
+ * periodic tick, so a plain github.com web-merge drives the linked card to
+ * done with NO human `maw` command.
  * `gh pr list` is ground truth for open/merged/closed; we diff against a snapshot
  * so each transition logs exactly once. On merge we ping the author's dept lead +
  * the author (carrying content), so the log gets read.
  *
- * An out-of-band github.com web merge is picked up within one server tick (or on
- * the next on-demand trigger when no server runs). In-pane `gh pr merge` is
- * caught immediately by the PostToolUse hook.
+ * An out-of-band github.com web merge is picked up within one daemon tick (or
+ * on the next on-demand trigger when the daemon isn't running). In-pane
+ * `gh pr merge` is caught immediately by the PostToolUse hook.
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "fs";
@@ -106,9 +108,9 @@ function loadSnapshot(): { snap: PrSnapshot; firstRun: boolean } {
  * (acceptable — the next poll re-converges from live `gh` state regardless).
  *
  * PID alone does NOT protect against two overlapping poll passes IN THE SAME
- * process: `serve-pr-watch/index.ts`'s `setInterval` calls `void
- * d.pollPrsOnce().catch(...)` — `setInterval` does NOT wait for an async
- * callback to finish before scheduling the next tick, and there was no guard
+ * process: `startServePrWatch`'s (called by `daemon.ts`, kobo-633) `setInterval`
+ * calls `void d.pollPrsOnce().catch(...)` — `setInterval` does NOT wait for an
+ * async callback to finish before scheduling the next tick, and there was no guard
  * against that until `pollPrsOnce`'s reentrancy check (below). Without it, two
  * overlapping passes in the SAME pid would both write `${p}.${pid}.tmp` and
  * race the SAME rename.
@@ -137,6 +139,158 @@ function saveSnapshotAtomic(snap: PrSnapshot): void {
   } catch (e) {
     try { unlinkSync(tmp); } catch { /* best effort — nothing to clean up if the write itself never landed */ }
     throw e;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// kobo-633 — heartbeat: a small file SEPARATE from the 216KB snapshot above,
+// written on EVERY completed poll pass (not gated by transitions the way
+// `saveSnapshotAtomic` deliberately is — see that function's own doc comment
+// for why the snapshot's gate must NOT be removed). Two independent reasons
+// it has to be its own file rather than a field bolted onto the snapshot:
+//   (a) cost — writing the whole ~216KB snapshot unconditionally on every
+//       pass (to record ~30 bytes of heartbeat) would reintroduce exactly the
+//       ~30x write-amplification `saveSnapshotAtomic`'s gate exists to avoid;
+//       this file is ~110 bytes and IS written unconditionally, so the actual
+//       added cost is negligible instead of ~216KB/pass.
+//   (b) survival — this lives once `pr-watch` becomes its own daemon process
+//       (kobo-633's AC1): if the heartbeat lived only in daemon memory, a
+//       dead daemon would take its own liveness signal down with it — silence
+//       reporting on silence. A file survives the process that wrote it.
+// ---------------------------------------------------------------------------
+
+interface HeartbeatMeta {
+  pollsCompleted: number;
+  lastPollCompletedAtIso: string;
+  // kobo-633 — stamped ONCE, the first time this process completes a pass,
+  // then carried forward unchanged on every later write (same cache-once
+  // shape as `codeVersion`). Exists so the acceptance check can tell "this
+  // PR merged BEFORE the daemon ever ran" (retroactive visibility only, a
+  // backfill) apart from "this PR merged AFTER the daemon was already
+  // alive" (real evidence the daemon can drive a NEW transition, not just
+  // see an old one) — front's exact distinction, and the reason kobo-641+
+  // matters: 631/640/647/651 all merged and settled BEFORE this daemon
+  // existed, so none of them can prove the second half.
+  firstPollCompletedAtIso: string;
+  codeVersion: string;
+  intervalMs: number;
+  // kobo-633 — front's correction: "the loop completed" is not "the loop did
+  // anything useful." If `gh` is unreachable for EVERY watched repo, the pass
+  // still finishes and `pollsCompleted` still advances — a heartbeat that's
+  // fresh under that condition is a real signal pointing at the wrong
+  // conclusion. Stamped from `lastPollRepoCounts()` right after the pass that
+  // produced this heartbeat.
+  reposTotal: number;
+  reposFailed: number;
+}
+
+let metaPathOverride: (() => string) | null = null;
+
+function metaPath(): string {
+  return metaPathOverride ? metaPathOverride() : mawStatePath("watch-pr-state.meta.json");
+}
+
+/** TEST-ONLY seam — override the heartbeat file's path, same shape as
+ *  `__setSnapshotPathForTest`. Caller MUST call `__resetMetaPathForTest()`. */
+export function __setMetaPathForTest(fn: () => string): void {
+  metaPathOverride = fn;
+}
+
+export function __resetMetaPathForTest(): void {
+  metaPathOverride = null;
+}
+
+// kobo-633 — captured ONCE, lazily, on first use, then cached forever for the
+// life of this process. A re-read on every heartbeat write would stamp
+// whatever SHA happens to be on disk at write time, not the SHA the running
+// process actually loaded at start — if someone `git pull`s without
+// restarting the daemon, a live re-read would stamp a NEWER sha than the code
+// that's actually executing: a version lie, which defeats the entire purpose
+// of the stamp (telling apart a 631-era symptom from a 633-era one the first
+// time this code runs in production — see the card's own UNKNOWN section).
+let cachedCodeVersion: string | null = null;
+
+function codeVersion(): string {
+  if (cachedCodeVersion !== null) return cachedCodeVersion;
+  try {
+    const proc = Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"], { cwd: import.meta.dir });
+    cachedCodeVersion = proc.success ? proc.stdout.toString().trim() || "unknown" : "unknown";
+  } catch {
+    cachedCodeVersion = "unknown";
+  }
+  return cachedCodeVersion;
+}
+
+/** TEST-ONLY seam. */
+export function __setCodeVersionForTest(v: string): void {
+  cachedCodeVersion = v;
+}
+export function __resetCodeVersionForTest(): void {
+  cachedCodeVersion = null;
+}
+
+let pollsCompletedCount = 0;
+let firstPollCompletedAtIsoCache: string | null = null;
+
+/** TEST-ONLY seam — reset the in-memory completed-pass counter AND the
+ *  cached first-pass timestamp together (they share the same "since this
+ *  process started" lifetime). */
+export function __resetHeartbeatCountForTest(): void {
+  pollsCompletedCount = 0;
+  firstPollCompletedAtIsoCache = null;
+}
+
+/**
+ * kobo-633 — call this from the standalone daemon (never from one-shot
+ * triggers like `maw watch log`/`maw done` — those aren't the long-running
+ * process this heartbeat exists to attest to) immediately after a poll pass
+ * completes WITHOUT throwing. `pollsCompleted` therefore only advances on a
+ * pass that ran cleanly through to the end (including any `saveSnapshotAtomic`
+ * calls it needed) — a pass that throws partway never reaches this call, so
+ * the counter already distinguishes "completed" from "died mid-pass" with no
+ * extra bookkeeping beyond where this function is called from.
+ *
+ * Written atomically (tmp + rename), same pattern as `saveSnapshotAtomic`,
+ * despite being tiny — this file is written on every single completed pass,
+ * making it the most-frequently-written file in the whole system. A
+ * non-atomic write torn by a kill mid-write would leave `JSON.parse` failing
+ * on read, and the reader (`prWatchLiveness`, below) would then have no way
+ * to tell "daemon never ran" apart from "caught it mid-write this instant" —
+ * exactly the false-dead report this file exists to prevent.
+ */
+export function recordHeartbeat(intervalMs: number): void {
+  pollsCompletedCount += 1;
+  const nowIso = new Date().toISOString();
+  if (firstPollCompletedAtIsoCache === null) firstPollCompletedAtIsoCache = nowIso;
+  const { total, failed } = lastPollRepoCounts();
+  const meta: HeartbeatMeta = {
+    pollsCompleted: pollsCompletedCount,
+    lastPollCompletedAtIso: nowIso,
+    firstPollCompletedAtIso: firstPollCompletedAtIsoCache,
+    codeVersion: codeVersion(),
+    intervalMs,
+    reposTotal: total,
+    reposFailed: failed,
+  };
+  const p = metaPath();
+  const tmp = `${p}.${process.pid}.${globalThis.crypto.randomUUID()}.tmp`;
+  mkdirSync(dirname(p), { recursive: true });
+  try {
+    writeFileSync(tmp, JSON.stringify(meta, null, 2) + "\n");
+    renameSync(tmp, p);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* best effort — nothing to clean up if the write itself never landed */ }
+    throw e;
+  }
+}
+
+function loadHeartbeat(): HeartbeatMeta | null {
+  const p = metaPath();
+  if (!existsSync(p)) return null;
+  try {
+    return JSON.parse(readFileSync(p, "utf-8")) as HeartbeatMeta;
+  } catch {
+    return null;
   }
 }
 
@@ -317,6 +471,44 @@ function recordFailure(repo: string, message: string): void {
   for (const company of companies) record({ ...base, company });
 }
 
+// kobo-633 — `gh pr list --limit N` truncates SILENTLY: a repo with exactly
+// N rows back is indistinguishable, from the response alone, from a repo
+// truncated AT N — the count that matters (per-PR list length) cannot tell
+// you which happened. This is the SAME bug class as the truncation trap this
+// card's own AC5 verification script guards against — one lives in the
+// script that CHECKS this code, this one lives in the code BEING checked;
+// both found the same day.
+//
+// Deliberately NOT fixed by raising the limit or adding pagination here:
+// raising the limit means fetching more per repo, every poll, forever, to
+// guard against a case that (so far) only matters ONCE — the very first poll
+// after a long outage. That is a permanent cost paid to cover a temporary
+// condition, and it runs directly against kobo-631's own point of this file
+// (the transition-gate exists specifically to keep per-poll cost down).
+// Pagination is a real fix but a different-sized change, out of THIS card's
+// scope. Instead: make the possible-truncation LOUD, with the repo and the
+// exact count, the same shape as `recordFailure` above — if this line never
+// fires, nobody needed pagination; if it does, there's a real number to act
+// on instead of a guess.
+const GH_PR_LIST_LIMIT = 30;
+
+function recordPossibleTruncation(repo: string, count: number): void {
+  const companies = companiesForRepo(repo);
+  const base = {
+    ts: Date.now(),
+    iso: new Date().toISOString(),
+    oracle: "pr-watch",
+    kind: "error" as const,
+    summary: `poll for ${repo} returned ${count} PRs — EXACTLY the --limit (${GH_PR_LIST_LIMIT}), result may be truncated; older PRs could be silently missing from this pass`,
+    repo,
+  };
+  if (!companies.length) {
+    record(base);
+    return;
+  }
+  for (const company of companies) record({ ...base, company });
+}
+
 /**
  * One repo's worth of a poll pass. Never throws — a failure (the `gh pr
  * list` call itself, or anything inside the per-PR loop that isn't already
@@ -352,13 +544,19 @@ async function pollRepoOnce(
   let prs: GhPr[];
   try {
     const out = await ghFetcher([
-      "pr", "list", "--repo", repo, "--state", "all", "--limit", "30",
+      "pr", "list", "--repo", repo, "--state", "all", "--limit", String(GH_PR_LIST_LIMIT),
       "--json", "number,title,state,mergedAt,author,mergeable,mergeStateStatus",
     ], signal);
     prs = JSON.parse(out || "[]") as GhPr[];
   } catch (e) {
     return { entries, recorded, failed: e instanceof Error ? e.message : String(e), changed: firstRun || sawTransition };
   }
+  // kobo-633 — see recordPossibleTruncation's own doc comment above for why
+  // this is loud-not-fixed: exactly GH_PR_LIST_LIMIT rows back means this
+  // repo's list may have been cut off, not that there genuinely were only
+  // this many. Checked here, before any per-PR processing, so it fires even
+  // if the loop below finds nothing else worth reporting.
+  if (prs.length === GH_PR_LIST_LIMIT) recordPossibleTruncation(repo, prs.length);
 
   try {
     for (const [i, pr] of prs.entries()) {
@@ -613,6 +811,26 @@ let currentGeneration = 0;
 // yet been confirmed to have actually stopped. See `pollPrsOnce` below.
 let zombiesInFlight = 0;
 
+// kobo-633 — set at the end of the MOST RECENT completed `runPollPrsOnce`
+// pass. Exists because "the poll loop completed" and "the poll loop did
+// anything useful" are DIFFERENT facts — if `gh` is unreachable for EVERY
+// watched repo, the loop still finishes normally (`pollRepoOnce` catches the
+// failure and returns `failed`, the outer loop just moves to the next repo),
+// so a heartbeat/`pollsCompleted` advancing on its own is a real but
+// MISLEADING signal: it proves the daemon PROCESS is alive, not that it
+// accomplished anything. Front's framing: this is the exact same "metric is
+// true while the real thing is broken" shape as the snapshot-content gap
+// found the same round — that one lived in what the snapshot could prove,
+// this one lives in what a bare completion counter can prove.
+let lastPassRepoTotal = 0;
+let lastPassRepoFailed = 0;
+
+/** Read after `pollPrsOnce()` resolves — how many repos this pass attempted
+ *  vs how many of them failed (their own `gh` call or processing threw). */
+export function lastPollRepoCounts(): { total: number; failed: number } {
+  return { total: lastPassRepoTotal, failed: lastPassRepoFailed };
+}
+
 export function pollPrsOnce(): Promise<WorklogEntry[]> {
   if (inFlightPoll) {
     consecutiveSkips++;
@@ -689,22 +907,34 @@ async function runPollPrsOnce(generation: number, signal: AbortSignal): Promise<
     const worktreeRepos = wts.map(w => w.mainRepo).filter(Boolean);
     repos = [...new Set([...worktreeRepos, ...openPrLinkedRepos()])];
   } catch {
+    lastPassRepoTotal = 0;
+    lastPassRepoFailed = 0;
     return [];
   }
-  if (!repos.length) return [];
+  if (!repos.length) {
+    lastPassRepoTotal = 0;
+    lastPassRepoFailed = 0;
+    return [];
+  }
 
   const { snap, firstRun } = loadSnapshot();
   const recorded: WorklogEntry[] = [];
+  // kobo-633 — repos ATTEMPTED this pass (pollRepoOnce actually called for
+  // them) vs how many failed. NOT the same as `repos.length` if the pass
+  // aborts partway — only count what was actually tried.
+  let repoTotal = 0;
+  let repoFailed = 0;
 
   for (const repo of repos) {
     if (signal.aborted) {
       recordStuckPoll(`generation ${generation} aborted — stopping before repo ${repo}`);
       break;
     }
+    repoTotal++;
     const outcome = await pollRepoOnce(repo, snap, firstRun, fallbackCompany, signal);
     Object.assign(snap, outcome.entries); // merge this repo's committed entries into the running view
     recorded.push(...outcome.recorded);
-    if (outcome.failed) recordFailure(repo, outcome.failed);
+    if (outcome.failed) { recordFailure(repo, outcome.failed); repoFailed++; }
     if (outcome.abortedMidLoop) {
       recordStuckPoll(`generation ${generation} aborted mid-repo ${repo} — ${outcome.abortedMidLoop} PR(s) left unprocessed, earlier PRs in this repo's list already had their side effects (worklog/card writes) applied from a stale view`);
     }
@@ -725,10 +955,423 @@ async function runPollPrsOnce(generation: number, signal: AbortSignal): Promise<
     if (outcome.abortedMidLoop) break; // this generation is done — no point starting another repo
   }
 
+  lastPassRepoTotal = repoTotal;
+  lastPassRepoFailed = repoFailed;
   return recorded;
 }
 
 /** Fire-and-forget single poll (used by `maw done`). Never throws. */
 export function triggerPrPollNow(): Promise<WorklogEntry[]> {
   return pollPrsOnce().catch(() => []);
+}
+
+// ---------------------------------------------------------------------------
+// kobo-633 AC3 — TWO SEPARATE TIERS, never rendered as one flat list (front's
+// explicit lock, this round): a nice-looking Tier 2 counter must never read
+// as satisfying Tier 1, or the next person who reads this stops at "counters
+// are fine" and never notices the daemon accomplished nothing.
+//
+// TIER 1 — ACCEPTANCE (`PrWatchAcceptanceResult`): the ONE check that can
+// fail a daemon that LOOKS healthy but is USELESS — does every PR GitHub
+// says merged (since `sinceIso`) have at least one linked card correctly
+// flipped to done/wait-for-deploy. THREE verdicts, not two:
+//   - "n/a"    — no PR merged since `sinceIso` among any repo with a linked
+//                card. NOT a pass — a quiet night vacuously satisfies
+//                `merged − flipped = ∅` without ever exercising anything.
+//                Front: "n/a ไม่ใช่การยอมรับ มันคือการยังไม่ได้ทดสอบ."
+//   - "passed" — at least one PR merged, and EVERY one has a flipped card.
+//                Proves the RESULT happened — does NOT prove the DAEMON did
+//                it (pollPrsOnce is CLI-reachable too — `maw watch
+//                log/sync`, `maw done`; kobo-640 tonight is a real instance
+//                of a CLI trigger doing the flip). Attributing the ACTOR
+//                needs Tier 2's heartbeat/codeVersion, never this tier alone.
+//   - "failed" — at least one merged PR has NO flipped card anywhere. A real,
+//                unambiguous defect.
+// Deliberately reads cards WITHOUT `findTasksByPr`/`findCardsByPrAnywhere` —
+// both exclude done/rejected/wait-for-deploy by design (their original
+// caller wants only STILL-OPEN work). Reused here, that exclusion silently
+// removes the exact evidence a "passed" verdict needs (a DONE card IS the
+// proof) — the same "tool answers a narrower question than the one asked"
+// shape chased all night. This tier reads the task store directly, matching
+// repo+number, no state excluded.
+//
+// TIER 2 — DIAGNOSTICS (`PrWatchDiagnostics`): heartbeat freshness +
+// pollsCompleted + reposTotal/reposFailed + resolved file paths. These
+// LOCATE where something is broken — they never PROVE nothing is. A fresh
+// heartbeat with reposFailed < reposTotal only means "the loop ran and did
+// SOME work" — it says nothing about whether the work was correct, which is
+// exactly what Tier 1 is for. The two tiers are complementary, not
+// redundant: Tier 1 is always correct when it fires but not always
+// applicable (silent on a quiet night); Tier 2 is always applicable but
+// never sufficient alone (proven this round — a fresh heartbeat coexisted
+// with a daemon that reconciled nothing, see the all-repos-failed gate
+// below).
+// ---------------------------------------------------------------------------
+
+// kobo-633 — "unknown" added per front's hard rule: if any repo's fetch hit
+// exactly `limit` (truncation suspected), a "passed" verdict is FORBIDDEN,
+// not merely discouraged — a false "passed" is worse than a false "n/a"
+// (front: "n-a ที่โดนตัด... คนอ่านรู้ว่าต้องไปดูต่อ · passed ที่โดนตัด...
+// คนอ่านจะปิดเรื่อง"). "failed" is UNAFFECTED by truncation — a confirmed
+// defect within the visible set stays confirmed regardless of what a
+// truncated tail might also contain.
+export type PrWatchAcceptanceVerdict = "passed" | "failed" | "n/a" | "unknown";
+
+export interface PrWatchAcceptanceResult {
+  verdict: PrWatchAcceptanceVerdict;
+  reason: string;
+  sinceIso: string;
+  mergedSinceCount: number;
+  // kobo-633 — front: EVERY verdict must print the inputs that produced it,
+  // "n/a" most of all. A "n/a" with only the window stated still can't be
+  // told apart from a DIFFERENT failure: real merges existed but a repo's
+  // `gh pr list` result got cut off at `limit` and filtered down to nothing
+  // — that's a truncation bug, not an empty incident, and it needs a
+  // completely different fix. Stamping `limit` alongside `mergedSinceCount`
+  // lets a reader tell "genuinely nothing merged" apart from "got truncated
+  // to nothing" without re-deriving it — same principle as this file's own
+  // `recordPossibleTruncation` guard, applied to THIS check's own gh calls.
+  limit: number;
+  passedCount: number;
+  failed: { repo: string; number: number; mergedAt: string }[];
+  // kobo-633 — front's 3rd instance of the same rule tonight ("a case that
+  // can't be classified must not be swallowed into either the good or the
+  // bad bucket" — 1st: `unknown` for truncation, 2nd: `n/a` for nothing
+  // merged, 3rd: this): a merged PR with NO linked card anywhere is neither
+  // a daemon failure (there was nothing FOR it to flip) nor silently fine
+  // (a merged PR with no card is a real board gap — either work landed
+  // without ever being tracked, or a card exists but was never stamped with
+  // its PR number; different problems, different fixes, both invisible if
+  // this list doesn't exist). Reported ALWAYS, never folded into `failed`,
+  // and never allowed to produce a false "passed" either — see
+  // `computeAcceptance`'s verdict logic: `passedCount` only counts CHECKABLE
+  // (has ≥1 card) PRs, so a batch that's entirely unlinked reports "n/a",
+  // not "passed" (nothing was actually verified).
+  unlinked: { repo: string; number: number; mergedAt: string }[];
+  // kobo-633 — front, mandatory: the report must ALWAYS state which of two
+  // DIFFERENT claims it's making, never left for a human caption (people
+  // forget to write it down; a report field can't). "retroactive-only" —
+  // every checked PR merged BEFORE this daemon process ever completed a
+  // pass, so a "passed" verdict proves the daemon can SEE a past merge
+  // (backfill), never that it can DRIVE a brand-new transition live.
+  // "live-transition-demonstrated" — at least one checkable, correctly
+  // flipped PR merged AFTER this daemon had already completed its first
+  // pass — real evidence of the stronger claim. "unknown" — no heartbeat to
+  // compare against. This distinction is exactly why 631/640/647/651 (all
+  // merged and settled before this daemon ever existed) can only ever prove
+  // the first claim — kobo-641 onward, merged while the daemon is already
+  // confirmed alive, is what can prove the second.
+  provenanceClaim: "retroactive-only" | "live-transition-demonstrated" | "unknown";
+  provenanceReason: string;
+}
+
+export type PrWatchHeartbeatStatus = "fresh" | "stale" | "missing";
+
+export interface PrWatchDiagnostics {
+  heartbeatStatus: PrWatchHeartbeatStatus;
+  reason: string;
+  // kobo-633 — front's own live incident: a snapshot with 335 keys for
+  // `meganechan/maw-js` (proving the repo WAS watched, historically) yet no
+  // `#389`/`#390` at all — took multiple rounds of manual hunting across
+  // `~/.maw`/`/tmp`/Application Support/`.local/share` to even confirm which
+  // file the running code actually reads/writes, because nothing said so on
+  // its own. Always populated — the actual RESOLVED path (via
+  // `snapshotPath()`/`metaPath()`), never the env var that's supposed to
+  // produce it (same principle as this session's own test-isolation rule:
+  // assert the resolved path, not that a variable is set — this is the
+  // production-runtime version of that rule).
+  snapshotFilePath: string;
+  metaFilePath: string;
+  pollsCompleted?: number;
+  lastPollCompletedAtIso?: string;
+  firstPollCompletedAtIso?: string;
+  // kobo-633 — front: a "fresh"/"stale" verdict must print the age it was
+  // computed from, not just the verdict word — the same input the code
+  // itself compared against `STALE_HEARTBEAT_MULTIPLIER * intervalMs` to
+  // decide fresh vs stale. Populated whenever a heartbeat file exists at
+  // all (fresh OR stale); absent only when `heartbeatStatus === "missing"`.
+  ageSeconds?: number;
+  codeVersion?: string;
+  reposTotal?: number;
+  reposFailed?: number;
+}
+
+export interface PrWatchLivenessResult {
+  acceptance: PrWatchAcceptanceResult;
+  diagnostics: PrWatchDiagnostics;
+}
+
+// kobo-633 — 3 missed intervals, not 1: tolerates one slow/retried tick
+// (pr-watch's own `pollTimeoutMs` above is already up to 90s) without crying
+// wolf on a daemon that's merely running a hair behind schedule.
+const STALE_HEARTBEAT_MULTIPLIER = 3;
+
+// kobo-633 — front's correction: a SILENT default here is a trap, not a
+// convenience. The real acceptance window is T0 — a FIXED point in time
+// (when pr-watch was actually turned off) — never "24h before whenever this
+// happened to run." A floating default drifts with the caller's clock: run
+// it tomorrow with no `sinceIso` and you get an entirely different universe
+// than the incident's own AC means, and the moment the real T0 falls
+// outside a rolling 24h window, this would return `"n/a"` while real,
+// unreconciled merges sit right there — a FALSE "n/a", the exact same
+// false-comfort-metric shape this whole card spent the night hunting, just
+// with a different metric. `prWatchLiveness` therefore takes `sinceIso` as a
+// REQUIRED parameter — no default, cannot be silently omitted. This
+// constant stays EXPORTED only so a caller that explicitly wants a rolling
+// "daily status" window (not an acceptance verdict) can opt into it on
+// purpose: `prWatchLiveness(new Date(Date.now() -
+// DEFAULT_ACCEPTANCE_LOOKBACK_MS).toISOString())`. Whichever window a caller
+// picks, `PrWatchAcceptanceResult.sinceIso` always echoes it back — an
+// answer that doesn't state which window it measured gets reused outside
+// that window every time (proven live this round: the merged-PR set itself
+// changed within under 90 seconds).
+export const DEFAULT_ACCEPTANCE_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * kobo-633 — reads the task store DIRECTLY, no state excluded (see the tier
+ * comment block above for why `findTasksByPr`/`findCardsByPrAnywhere` are
+ * wrong for this specific question).
+ */
+function findAllCardsByPrUnfiltered(repo: string, number: number): { company: string; taskId: string; state: string }[] {
+  const hits: { company: string; taskId: string; state: string }[] = [];
+  for (const company of listCompanies()) {
+    for (const task of listTasks(company)) {
+      if (task.pr === number && task.repo === repo) hits.push({ company, taskId: task.id, state: task.state });
+    }
+  }
+  return hits;
+}
+
+async function computeAcceptance(sinceIso: string): Promise<PrWatchAcceptanceResult> {
+  // Every repo that has EVER had a PR-linked card, any state — deliberately
+  // not `openPrLinkedRepos()` (excludes done, same class of gap as above).
+  const repos = [...new Set(
+    listCompanies().flatMap(c => listTasks(c).filter(t => typeof t.pr === "number" && t.repo).map(t => t.repo as string)),
+  )].sort();
+
+  const mergedSince: { repo: string; number: number; mergedAt: string }[] = [];
+  const truncatedRepos: string[] = [];
+  for (const repo of repos) {
+    try {
+      const out = await ghFetcher([
+        "pr", "list", "--repo", repo, "--state", "merged", "--search", `merged:>=${sinceIso}`,
+        "--limit", String(GH_PR_LIST_LIMIT), "--json", "number,mergedAt",
+      ]);
+      const list = JSON.parse(out || "[]") as { number: number; mergedAt: string }[];
+      // Same truncation trap as the main poll's own gh pr list, same guard —
+      // AND, unlike the main poll, this ALSO changes the verdict below, not
+      // just a loud log line: a truncated fetch can never justify "passed".
+      if (list.length === GH_PR_LIST_LIMIT) {
+        recordPossibleTruncation(repo, list.length);
+        truncatedRepos.push(repo);
+      }
+      for (const pr of list) mergedSince.push({ repo, number: pr.number, mergedAt: pr.mergedAt });
+    } catch {
+      // A single repo's gh failure doesn't invalidate the whole acceptance
+      // check — the other repos' evidence still stands; this repo's own
+      // absence from the result is itself visible via `repos.length` vs
+      // how many contributed to `mergedSince`, not hidden.
+    }
+  }
+
+  // kobo-633 — front: these 3 fields (sinceIso, mergedSinceCount, limit) are
+  // PROVENANCE of the verdict, not a property of any one state — every
+  // return below carries the exact same shape so a reader can always tell
+  // which data set produced this answer, regardless of which verdict it is.
+  const provenance = { sinceIso, mergedSinceCount: mergedSince.length, limit: GH_PR_LIST_LIMIT };
+
+  // kobo-633 — front, mandatory: the report must ALWAYS state which of TWO
+  // claims it's making — "saw a merge that predates this daemon" (backfill/
+  // retroactive — 631/640/647/651 all merged and settled before this daemon
+  // ever existed, so they can only ever prove this) vs "saw a merge that
+  // happened AFTER the daemon was already alive and correctly flipped it"
+  // (real evidence the daemon can drive a NEW transition, not just see an
+  // old one — kobo-641 onward is what can prove this). Computed inline
+  // below, alongside the failed/unlinked classification, to avoid a second
+  // pass over `findAllCardsByPrUnfiltered`.
+  const heartbeatForProvenance = loadHeartbeat();
+  let provenanceClaim: PrWatchAcceptanceResult["provenanceClaim"] = "unknown";
+  let provenanceReason = "no heartbeat recorded yet — cannot compare merge times against daemon uptime";
+
+  const failed: { repo: string; number: number; mergedAt: string }[] = [];
+  const unlinked: { repo: string; number: number; mergedAt: string }[] = [];
+  let passedCount = 0;
+  for (const pr of mergedSince) {
+    const cards = findAllCardsByPrUnfiltered(pr.repo, pr.number);
+    // kobo-633 — a merged PR with ZERO linked cards is neither a daemon
+    // failure (nothing existed for it to flip) nor evidence of success —
+    // it's a THIRD, unclassifiable case (front's 3rd instance of "don't
+    // fold the can't-classify case into good or bad" tonight). Reported in
+    // `unlinked`, never in `failed`, never counted toward `passedCount`.
+    if (!cards.length) { unlinked.push(pr); continue; }
+    const anyFlipped = cards.some(c => c.state === "done" || c.state === "wait-for-deploy");
+    if (anyFlipped) {
+      passedCount++;
+      if (
+        provenanceClaim !== "live-transition-demonstrated" &&
+        heartbeatForProvenance &&
+        new Date(pr.mergedAt).getTime() > new Date(heartbeatForProvenance.firstPollCompletedAtIso).getTime()
+      ) {
+        provenanceClaim = "live-transition-demonstrated";
+        provenanceReason = `${pr.repo}#${pr.number} merged ${pr.mergedAt}, AFTER this daemon's first completed pass (${heartbeatForProvenance.firstPollCompletedAtIso}), and is correctly flipped — real evidence the daemon can drive a NEW transition, not just see an old one`;
+      }
+    } else {
+      failed.push(pr);
+    }
+  }
+  // kobo-633 — reviewer caught this (feeds directly into front's own
+  // reasoning for releasing kobo-641's merge brake — this field IS that
+  // reasoning, so it can't be allowed to blur): the ORIGINAL fallback here
+  // collapsed two genuinely different situations into the same
+  // `"retroactive-only"` value — (a) real evidence exists: at least one
+  // flipped PR was found, all of it merged before the daemon's first pass
+  // (a true, if weak, positive claim) vs (b) NO evidence exists at all —
+  // nothing merged, or nothing that merged ever got flipped — which is not
+  // "weak evidence," it's NO evidence, and claiming `"retroactive-only"`
+  // there overclaims exactly the same way a bare `n/a` overclaiming
+  // `"passed"` would (front's own earlier rule, not yet applied to THIS
+  // field until now — the same probe-collapsing-3-states-into-2 trap, one
+  // level deeper). Fixed: `"retroactive-only"` now REQUIRES `passedCount >
+  // 0` (genuine flipped-PR evidence, just capped at the weaker claim);
+  // anything else with a heartbeat but no such evidence is `"unknown"`,
+  // with a reason naming WHICH absence it is (no heartbeat vs nothing
+  // merged vs nothing flipped) — different absences need different next
+  // steps, so collapsing them back into one shrug-bucket would recreate the
+  // exact "unknown-without-a-reason" trap already fixed for `acceptance`.
+  if (provenanceClaim !== "live-transition-demonstrated") {
+    if (!heartbeatForProvenance) {
+      provenanceClaim = "unknown";
+      provenanceReason = "no heartbeat recorded yet — cannot compare merge times against daemon uptime";
+    } else if (passedCount === 0) {
+      provenanceClaim = "unknown";
+      provenanceReason = mergedSince.length
+        ? `heartbeat exists (first completed pass: ${heartbeatForProvenance.firstPollCompletedAtIso}) but none of the ${mergedSince.length} merged PR(s) found have a flipped card — never observed a genuine transition to judge provenance from`
+        : `heartbeat exists (first completed pass: ${heartbeatForProvenance.firstPollCompletedAtIso}) but nothing merged since ${sinceIso} to compare — never observed ANY transition, live or retroactive, to measure`;
+    } else {
+      provenanceClaim = "retroactive-only";
+      provenanceReason = `${passedCount} flipped PR(s) found, all merged before or without a confirmed daemon pass after them (first completed pass: ${heartbeatForProvenance.firstPollCompletedAtIso}) — proves the daemon CAN see a past merge (backfill), not that it can drive a new one live`;
+    }
+  }
+  const provenanceClaimFields = { provenanceClaim, provenanceReason };
+
+  // A confirmed defect stands regardless of truncation elsewhere — more
+  // (unseen) data could only ADD failures, never retract this one.
+  if (failed.length > 0) {
+    return {
+      verdict: "failed",
+      reason: `${failed.length} of ${mergedSince.length} PR(s) merged since ${sinceIso} have a linked card that's NOT done/wait-for-deploy${unlinked.length ? ` (${unlinked.length} other merged PR(s) are unlinked — see acceptance.unlinked, not counted here)` : ""}`,
+      ...provenance, ...provenanceClaimFields, passedCount, failed, unlinked,
+    };
+  }
+
+  // kobo-633 — HARD RULE, not a suggestion: truncation suspected means we
+  // cannot claim to have seen everything, so "passed" is forbidden even
+  // though nothing FOUND failed — "found nothing wrong in a set we know is
+  // incomplete" must never render the same as "checked everything, all
+  // clear." A false "passed" here is worse than a false "n/a" (front: "n-a
+  // ที่โดนตัด... คนอ่านรู้ว่าต้องไปดูต่อ · passed ที่โดนตัด...
+  // คนอ่านจะปิดเรื่อง").
+  if (truncatedRepos.length > 0) {
+    return {
+      verdict: "unknown",
+      reason: `${truncatedRepos.join(", ")} returned exactly ${GH_PR_LIST_LIMIT} (the limit) — cannot confirm the full merged set was seen, so "passed" cannot be claimed even though nothing found among the ${mergedSince.length} PR(s) actually fetched was missing a flipped card`,
+      ...provenance, ...provenanceClaimFields, passedCount, failed: [], unlinked,
+    };
+  }
+
+  // kobo-633 — `passedCount === 0` here covers BOTH "nothing merged at all"
+  // AND "things merged but every single one is unlinked" — in either case
+  // NOTHING was actually verified via a card, so "passed" would be a false
+  // claim of having checked something. Reason string distinguishes the two
+  // for a human reader; the verdict itself is the same "untested" word on
+  // purpose (front: n/a means untested, not a special case of failure).
+  if (passedCount === 0) {
+    return {
+      verdict: "n/a",
+      reason: !mergedSince.length
+        ? `no PR merged since ${sinceIso} among any repo with a linked card (fetched 0, limit ${GH_PR_LIST_LIMIT}/repo, no repo truncated) — untested, not passed (front: "n/a ไม่ใช่การยอมรับ")`
+        : `${mergedSince.length} PR(s) merged since ${sinceIso}, but ALL are unlinked to any card (see acceptance.unlinked) — nothing was actually checkable, so this is untested, not passed`,
+      ...provenance, ...provenanceClaimFields, passedCount: 0, failed: [], unlinked,
+    };
+  }
+
+  return {
+    verdict: "passed",
+    reason: `all ${passedCount} checkable PR(s) merged since ${sinceIso} have a linked card correctly flipped, and no repo's fetch was truncated${unlinked.length ? ` (${unlinked.length} other merged PR(s) are unlinked — see acceptance.unlinked, not counted toward this verdict)` : ""} — this proves the RESULT happened, NOT that the daemon specifically did it (pollPrsOnce is CLI-reachable too); see diagnostics.heartbeatStatus/codeVersion to attribute the actor`,
+    ...provenance, ...provenanceClaimFields, passedCount, failed: [], unlinked,
+  };
+}
+
+function computeDiagnostics(): PrWatchDiagnostics {
+  const paths = { snapshotFilePath: snapshotPath(), metaFilePath: metaPath() };
+  const heartbeat = loadHeartbeat();
+  if (!heartbeat) {
+    return { heartbeatStatus: "missing", reason: "no completed pass ever recorded (heartbeat file missing or unreadable)", ...paths };
+  }
+  const ageMs = Date.now() - new Date(heartbeat.lastPollCompletedAtIso).getTime();
+  const staleAfterMs = heartbeat.intervalMs * STALE_HEARTBEAT_MULTIPLIER;
+  const base = {
+    ...paths,
+    pollsCompleted: heartbeat.pollsCompleted,
+    lastPollCompletedAtIso: heartbeat.lastPollCompletedAtIso,
+    firstPollCompletedAtIso: heartbeat.firstPollCompletedAtIso,
+    ageSeconds: Number.isFinite(ageMs) ? Math.round(ageMs / 1000) : undefined,
+    codeVersion: heartbeat.codeVersion,
+    reposTotal: heartbeat.reposTotal,
+    reposFailed: heartbeat.reposFailed,
+  };
+  if (!Number.isFinite(ageMs) || ageMs > staleAfterMs) {
+    return {
+      heartbeatStatus: "stale",
+      reason: `last completed pass was ${Math.round(ageMs / 1000)}s ago — exceeds ${STALE_HEARTBEAT_MULTIPLIER}x the configured ${heartbeat.intervalMs}ms interval`,
+      ...base,
+    };
+  }
+  // kobo-633 — "the loop completed" is not "the loop did anything useful."
+  // Surfaced here as a DIAGNOSTIC fact (fresh but reposFailed===reposTotal),
+  // not as a verdict of its own — Tier 1's acceptance check is what actually
+  // judges usefulness; this tier only ever locates.
+  if (heartbeat.reposTotal > 0 && heartbeat.reposFailed === heartbeat.reposTotal) {
+    return {
+      heartbeatStatus: "fresh",
+      reason: `heartbeat is fresh (pass completed) but ALL ${heartbeat.reposTotal} watched repo(s) failed this pass — the loop ran, nothing it did succeeded`,
+      ...base,
+    };
+  }
+  return { heartbeatStatus: "fresh", reason: `heartbeat fresh, ${heartbeat.reposTotal - heartbeat.reposFailed}/${heartbeat.reposTotal} repo(s) succeeded last pass`, ...base };
+}
+
+/**
+ * kobo-633 — pull-probe (Board Truth rule 19): answerable at any moment.
+ * `sinceIso` REQUIRED, no default — bounds Tier 1's acceptance check. Front's
+ * correction: a silent rolling default is a trap here specifically, because
+ * the acceptance window is T0, a FIXED point in time, not "N hours before
+ * whenever this happens to run" — see `DEFAULT_ACCEPTANCE_LOOKBACK_MS`'s own
+ * doc comment for the false-"n/a" failure mode a silent default produces.
+ * Callers who genuinely want a rolling "daily status" window (not an
+ * acceptance verdict) opt in explicitly:
+ * `prWatchLiveness(new Date(Date.now() -
+ * DEFAULT_ACCEPTANCE_LOOKBACK_MS).toISOString())`. Whichever window is
+ * chosen, `result.acceptance.sinceIso` always echoes it back. Tier 2
+ * (diagnostics) is unaffected by `sinceIso`.
+ */
+export async function prWatchLiveness(sinceIso: string): Promise<PrWatchLivenessResult> {
+  // kobo-633 — TypeScript's required-param check is a compile-time guard
+  // only; a plain-JS caller (or one that bypasses types) can still pass
+  // `undefined`/`""`. Front: reject loudly, never guess a window and return
+  // a fake "n/a" — 48h/72h defaults are the same trap as 24h, just slower to
+  // drift; the real problem is answering a question nobody specified, not
+  // the specific length chosen.
+  if (!sinceIso) {
+    throw new Error(
+      "prWatchLiveness: sinceIso is required — refusing to guess a window. " +
+      "Use the incident's real T0 (see kobo-633's card, e.g. 2026-07-29T10:08:53Z) " +
+      "or explicitly compute a rolling window yourself if that's genuinely what you want.",
+    );
+  }
+  const [acceptance, diagnostics] = await Promise.all([
+    computeAcceptance(sinceIso),
+    Promise.resolve(computeDiagnostics()),
+  ]);
+  return { acceptance, diagnostics };
 }

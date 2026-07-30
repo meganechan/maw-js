@@ -656,6 +656,12 @@ function companyBody(): string {
     .presence-cell .p-badge.idle { color:var(--st-meta); }
     .presence-cell .p-badge.idle-work { color:var(--warn); border-color:var(--warn); }
     .presence-cell .p-badge.error { color:var(--bad); border-color:var(--bad); } /* kobo-111 */
+    /* kobo-633 Slice 5 — pr-watch daemon status badge, header row */
+    #pr-watch-badge { font-size:var(--t-xs); font-weight:600; padding:2px var(--s-3); border-radius:var(--r-pill); border:1px solid var(--line); color:var(--muted); white-space:nowrap; cursor:default; }
+    #pr-watch-badge.ok { color:var(--ok); border-color:var(--ok); }
+    #pr-watch-badge.warn { color:var(--warn); border-color:var(--warn); }
+    #pr-watch-badge.bad { color:var(--bad); border-color:var(--bad); }
+    #pr-watch-badge.hidden { display:none; }
     .presence-cell .p-role { color:var(--muted); font-size:var(--t-sm); }
     .presence-cell .p-when { color:var(--muted); font-size:var(--t-sm); }
     .presence-cell .p-count { color:var(--muted); font-size:var(--t-xs); }
@@ -704,7 +710,7 @@ function companyBody(): string {
   <header>
     <div class="brand">
       <h1><span class="logo" aria-hidden="true">◈</span> maw company <span class="co" id="co-name">—</span></h1>
-      <div class="sub">read-only board + worklog timeline · <code id="status">loading…</code></div>
+      <div class="sub">read-only board + worklog timeline · <code id="status">loading…</code> <span id="pr-watch-badge" class="hidden" title=""></span></div>
     </div>
     <div class="controls">
       <label class="switcher">company <input id="company" placeholder="pgw" /></label>
@@ -2808,6 +2814,22 @@ async function getJson(url) {
   return res.json();
 }
 
+/**
+ * kobo-633 Slice 5 — pr-watch daemon status badge, header row. Host-wide
+ * signal (not per-company): hides itself entirely on fetch failure (plugin
+ * disabled, older server without the route) rather than showing a
+ * misleading "bad" state for "endpoint doesn't exist here."
+ */
+function renderPrWatchBadge(result) {
+  const el = $('pr-watch-badge');
+  if (!result || !result.diagnostics || !result.acceptance) { el.className = 'hidden'; return; }
+  const { diagnostics, acceptance } = result;
+  const cls = diagnostics.heartbeatStatus === 'fresh' ? 'ok' : diagnostics.heartbeatStatus === 'stale' ? 'warn' : 'bad';
+  el.className = cls;
+  el.textContent = 'pr-watch: ' + diagnostics.heartbeatStatus;
+  el.title = 'heartbeat: ' + diagnostics.reason + ' · acceptance (' + acceptance.sinceIso + '): ' + acceptance.verdict + ' — ' + acceptance.reason;
+}
+
 async function load() {
   const company = currentCompany();
   $('co-name').textContent = company || '—';
@@ -2817,13 +2839,15 @@ async function load() {
   try {
     const q = '?company=' + encodeURIComponent(company);
     // state panel + roster are optional — a failed/absent one must not break the page.
-    const [tasksRes, feedRes, stateRes, rosterRes, presenceRes] = await Promise.all([
+    const [tasksRes, feedRes, stateRes, rosterRes, presenceRes, prWatchRes] = await Promise.all([
       getJson('/api/tasks' + q),
       getJson('/api/worklog/feed' + q + '&limit=200'), // wider window feeds the Worklog + Presence tabs (kobo-49)
       getJson('/api/state' + q).catch(() => null),
       getJson('/api/roster' + q).catch(() => null), // authoritative company membership (kobo-50)
       getJson('/api/presence' + q).catch(() => null), // per-pane model + ctx% overlay (kobo-104); ?company= scopes to this board's panes (kobo-267)
+      getJson('/api/pr-watch/liveness').catch(() => null), // kobo-633 Slice 5 — host-wide daemon status, not per-company; badge hides if unavailable
     ]);
+    renderPrWatchBadge(prWatchRes);
     const tasks = Array.isArray(tasksRes.tasks) ? tasksRes.tasks : [];
     const entries = Array.isArray(feedRes.entries) ? feedRes.entries : [];
     const roster = rosterRes && Array.isArray(rosterRes.roster) ? rosterRes.roster : [];

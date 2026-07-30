@@ -6,13 +6,14 @@
  * - capture: add the feed listener (PostToolUse/UserPromptSubmit/interrupt → worklog)
  * - inject/read: register GET /api/worklog (behind auth — see PROTECTED "/worklog")
  * - company-ui (read-only): GET /api/worklog/feed (timeline) + GET /api/tasks
- *   (board) + GET /api/state (coordination markdown panel) — toggle with this
- *   plugin, same worklog-engine territory (spec §6 + addendum).
+ *   (board) + GET /api/state (coordination markdown panel) + GET
+ *   /api/pr-watch/liveness (kobo-633 Slice 5, daemon status badge) — toggle
+ *   with this plugin, same worklog-engine territory (spec §6 + addendum).
  */
 
 import type { PluginLifecycleContext } from "maw-js/plugin/lifecycle";
 import { registerWorklogListener } from "../../../core/worklog/listener";
-import { handleWorklogRequest, handleWorklogFeedRequest } from "../../../core/worklog/route";
+import { handleWorklogRequest, handleWorklogFeedRequest, handlePrWatchLivenessRequest } from "../../../core/worklog/route";
 import { handleTasksRequest, handleTaskDetailRequest, handleTaskArchiveRequest, handleTaskNoteRequest, handleTaskCommentRequest, handleTaskCreateRequest, handleTaskDoneRequest, handleTaskDeployedRequest, handleTaskApproveRequest, handleTaskRejectRequest, handleTaskAssignRequest, handleTaskEditRequest, handleTaskEventsRequest } from "../../../core/tasks/route";
 import { handleStateDocRequest } from "../../../core/state-doc/route";
 import { handleRosterRequest } from "../../../core/roster/route";
@@ -33,6 +34,11 @@ export function serve(ctx: PluginLifecycleContext): { ok: true } {
   ctx.http?.route("GET", "/api/worklog", (request: Request) => handleWorklogRequest(request));
   // company-ui timeline feed (behind auth — see PROTECTED "/worklog/feed")
   ctx.http?.route("GET", "/api/worklog/feed", (request: Request) => handleWorklogFeedRequest(request));
+  // company-ui pr-watch daemon status badge (kobo-633 Slice 5): reads the
+  // task store + heartbeat file directly, no RPC to the daemon process
+  // needed — works whether the daemon is up or down (behind auth — PROTECTED
+  // "/pr-watch").
+  ctx.http?.route("GET", "/api/pr-watch/liveness", (request: Request) => handlePrWatchLivenessRequest(request));
   // company-ui kanban board — stub now, backbone later (behind auth — PROTECTED "/tasks")
   ctx.http?.route("GET", "/api/tasks", (request: Request) => handleTasksRequest(request));
   // company-ui single-card detail fetch (kobo-401): the bulk list above stopped

@@ -719,8 +719,15 @@ describe("pr-watch.ts source shape — ordering + assignee wiring (kobo-631)", (
     const fnBody = src.slice(fnStart);
     const loopIdx = fnBody.indexOf("for (const repo of repos)");
     const saveIdx = fnBody.indexOf("if (generation === currentGeneration) saveSnapshotAtomic(snap);");
-    const loopEndIdx = fnBody.indexOf("\n  }\n\n  return recorded;");
+    // kobo-633 — anchor on the FOR LOOP's own closing brace, not on whatever
+    // happens to follow it (was: the literal text right before `return
+    // recorded;`, which broke the moment kobo-633 added 2 lines of
+    // repo-count bookkeeping between the loop and the return — an unrelated
+    // change, same class of positional fragility already caught once this
+    // session on a different file's test).
+    const loopEndIdx = fnBody.indexOf("\n  }\n", loopIdx);
     expect(loopIdx).toBeGreaterThan(-1);
+    expect(loopEndIdx).toBeGreaterThan(-1);
     expect(saveIdx).toBeGreaterThan(loopIdx);
     expect(saveIdx).toBeLessThan(loopEndIdx); // save call is INSIDE the loop body
   });

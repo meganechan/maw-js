@@ -131,6 +131,11 @@ describe("watch command plugin standalone boundary", () => {
     // and offer a reload. Served from companyVersion() (content hash of the board).
     expect(serveSrc).toContain("companyVersion");
     expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']GET["'],\s*["']\/api\/version["']/);
+    // kobo-633 Slice 5: pr-watch daemon status badge GET — company-ui polls this
+    // alongside tasks/roster/presence each cycle, same plugin so it toggles with
+    // the worklog engine.
+    expect(serveSrc).toContain("handlePrWatchLivenessRequest");
+    expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']GET["'],\s*["']\/api\/pr-watch\/liveness["']/);
   });
 
   // cli-reorg kobo-26: `maw watch` is HARD-REMOVED (no cli command). The plugin
@@ -166,6 +171,7 @@ describe("watch command plugin standalone boundary", () => {
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/presence"); // kobo-104
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/state");
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/version"); // kobo-57 cache-bust
+    expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/pr-watch/liveness"); // kobo-633 Slice 5
   });
 
   // cli-reorg kobo-26: exports the shared `runWorklog` runner (all verbs, OQ2 —

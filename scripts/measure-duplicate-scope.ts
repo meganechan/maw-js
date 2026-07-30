@@ -38,7 +38,7 @@ import {
   BATCH_WINDOW_MS,
   type ScopeOverlapWarning,
 } from "../src/core/tasks/duplicate-scope-warn";
-import type { TaskRecord, TaskState } from "../src/core/tasks/store";
+import { taskNeeds, type TaskRecord, type TaskState } from "../src/core/tasks/store";
 
 const OPEN_STATES: ReadonlySet<TaskState> = new Set([
   "backlog", "todo", "ready", "in-progress", "review", "need-answer", "approve", "blocked",
@@ -109,9 +109,14 @@ function main() {
   for (let i = 0; i < sorted.length; i++) {
     const cand = sorted[i];
     const priorOpen = sorted.slice(0, i).filter((t) => OPEN_STATES.has(t.state));
+    // kobo-641: taskNeeds() reads either shape — cand.parentIds directly would
+    // silently undercount shared-parent for every card written after the rename
+    // (this script is duplicate-scope-warn.ts's own declared reproducible
+    // measurement source, per its docstring — a quiet wrong number here is
+    // exactly the failure class that docstring exists to prevent).
     const warns = findSimilarOpenCards(
       "measured",
-      { title: cand.title, body: cand.body, parentIds: cand.parentIds, epic: cand.epic },
+      { title: cand.title, body: cand.body, parentIds: taskNeeds(cand), epic: cand.epic },
       { listTasks: () => priorOpen, now: cand.ts },
     );
     if (warns.length) warnedCount++;

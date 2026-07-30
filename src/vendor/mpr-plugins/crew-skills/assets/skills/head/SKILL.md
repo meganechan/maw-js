@@ -67,7 +67,7 @@ worker เล็ก (sonnet) ปลอดภัยเพราะโดน 2 ต
 
 ## Lead Discipline — lead ห้ามทัก peer ตรง
 
-> lead = คุย **human ล้วน**. คุย peer/federation → **delegate comm** (ถ้า opt-in) หรือผ่าน conductor. reply เด้งกลับ pane 0 = federation noise บนจอที่ควรเป็น human↔AI.
+> lead = คุย **human ล้วน**. คุย peer/federation → **delegate comm** (ถ้า opt-in) หรือผ่าน conductor. reply เด้งกลับหน้าจอ lead = federation noise บนจอที่ควรเป็น human↔AI.
 
 - **routine peer comm** (progress · status · coordinate) → comm (ถ้ามี) หรือ conductor. ห้าม `maw hey` peer ตรงจาก lead.
 - **ยกเว้น decision-gate** (ด่วน + human ต้องเห็น: round-trip verify · restart-green · merge relay · blocker-needs-human) → lead ทัก peer **ตรงได้**

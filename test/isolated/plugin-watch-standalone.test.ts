@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expectStandalonePluginBoundary } from "./helpers/plugin-standalone-boundary";
 import { loadManifestFromDir } from "../../src/plugin/manifest-load";
+import { serve } from "../../src/vendor/mpr-plugins/watch/serve";
+import type { PluginLifecycleContext } from "../../src/plugin/lifecycle";
 
 // #2316 plugin-coverage-gate: the worklog engine lives in src/core/worklog/* +
 // the feed singleton (src/api/feed). The `watch` plugin is its thin CLI + serve
@@ -136,6 +138,33 @@ describe("watch command plugin standalone boundary", () => {
     // the worklog engine.
     expect(serveSrc).toContain("handlePrWatchLivenessRequest");
     expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']GET["'],\s*["']\/api\/pr-watch\/liveness["']/);
+  });
+
+  // kobo-633 — reviewer caught this (c3): every assertion above is source-text
+  // or manifest inspection, both blind to the exact defect class that just bit
+  // kobo-647 (a `toContain` kept the call text present while the call itself
+  // was cut, still green). Proven live: wrapping the route-registration line
+  // in `if (false) { ... }` leaves the literal string intact — every assertion
+  // above stays green — while the route is never actually registered. This
+  // test observes the RUNTIME EFFECT instead: call the real `serve()` hook
+  // with a fake `ctx.http` that RECORDS every `.route()` call, then assert the
+  // route is actually present in what got registered. `if (false)`-style
+  // dead-code wrapping cannot fool this — nothing gets pushed to `registered`
+  // if the call never executes, regardless of what the source text says.
+  test("serve() ACTUALLY registers GET /api/pr-watch/liveness at runtime, not just in source text", () => {
+    const registered: { method: string; path: string }[] = [];
+    const fakeCtx = {
+      phase: "serve",
+      plugin: { name: "watch", dir: "" },
+      http: {
+        route: (method: string, path: string) => { registered.push({ method, path }); },
+        fallback: () => {},
+      },
+    } as unknown as PluginLifecycleContext;
+
+    serve(fakeCtx);
+
+    expect(registered).toContainEqual({ method: "GET", path: "/api/pr-watch/liveness" });
   });
 
   // cli-reorg kobo-26: `maw watch` is HARD-REMOVED (no cli command). The plugin

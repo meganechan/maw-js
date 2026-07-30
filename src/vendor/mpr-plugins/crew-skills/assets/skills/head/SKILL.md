@@ -3,7 +3,7 @@ name: head
 description: Spin up a /head strategic cell — top tier of the 3-tier operating model (head → crew → worker). head = lead(opus,human) · conductor(opus,decompose→route→light-exec) · reviewer(opus,ตาอิสระ) [+comm opt-in]. ทุก teammate = raw pane อิสระ → lead toilet/clear ได้ ทีมไม่ตาย. kernel เดียวกับ /crew (validated kobo-89/91). /head = canonical (แทน /warroom เดิม, kobo-303). Use when user says "/head", "เปิด head", "3-tier", or wants a strategic cell (lead + conductor + reviewer) at the top of a head→crew→worker hierarchy.
 ---
 
-# /head — lead(.0) | conductor 🎼 | reviewer 🔎 [+comm 📡 opt-in] (raw engine panes)
+# /head — lead | conductor 🎼 | reviewer 🔎 [+comm 📡 opt-in] (raw engine panes)
 
 > **3-tier operating model** (grill+lock Tony 2026-07-13→14, room "skill-worker-crew"). `/head` = **top tier** — strategic, opus. งานไหลลง (สั่ง) · ผลไหลขึ้น (ตรวจทีละชั้น) · model เล็กลงตามลงล่าง.
 > **canonical:** `/head` แทน `/warroom` เดิม (cutover kobo-303) — strategic cell มาตรฐานตัวเดียว. /crew (execution) + /head (strategic) = 2 skill ที่เหลือ.
@@ -26,7 +26,7 @@ description: Spin up a /head strategic cell — top tier of the 3-tier operating
 
 | บท (head) | model | ทำ | ไม่ทำ |
 |----|-------|-----|-------|
-| **lead** (.0) | opus | brief · ตัดสิน · merge-gate · คุย human | ไม่ทัก peer ตรง (delegate comm, ยกเว้น decision-gate) · ไม่ dispatch/สร้าง card เอง (→ brief conductor) |
+| **lead** | opus | brief · ตัดสิน · merge-gate · คุย human | ไม่ทัก peer ตรง (delegate comm, ยกเว้น decision-gate) · ไม่ dispatch/สร้าง card เอง (→ brief conductor) |
 | **conductor 🎼** | opus | decompose (story-split→card) · route/dispatch · **light-exec เอง** (board-ops/doc/ψ) · offload heavy→crew/worker-cell | ไม่ทำ heavy code เอง · **ไม่ review งานตัวเอง** |
 | **reviewer 🔎** | opus | **review งานคนอื่น** (conductor light-exec · lower-tier PR) — correctness+scope · ตาอิสระ · ปลายทาง review chain ก่อน lead | **ไม่เขียนงานเอง** (เขียน=ตรวจงานตัวเอง=ห้าม) |
 | **comm 📡** (opt-in) | **sonnet** | peer/federation relay · รับ inbox/hey · escalate lead conclusion-ready | ไม่แตะ code/hash/เงิน/deploy · ไม่ decompose/review |
@@ -50,7 +50,7 @@ worker เล็ก (sonnet) ปลอดภัยเพราะโดน 2 ต
 
 `worker → crew reviewer → head reviewer → lead (merge-gate)`. **คนทำ ≠ คนตรวจ ทุกชั้น.** worker เล็ก (sonnet) ปลอดภัยเพราะโดน 2 ตา opus (crew + head reviewer) กรอง.
 
-**funnel ordering (kobo-325)** — hand-off gate ถัดไป **หลัง gate ตัวเอง sign เท่านั้น**: `worker → crew reviewer(.3) → front → head reviewer(.2) → merge`. **head ไม่ merge จนครบ crew + head sign** (ไม่ race, ไม่ข้าม gate).
+**funnel ordering (kobo-325)** — hand-off gate ถัดไป **หลัง gate ตัวเอง sign เท่านั้น**: `worker → crew reviewer → front → head reviewer → merge`. **head ไม่ merge จนครบ crew + head sign** (ไม่ race, ไม่ข้าม gate).
 
 - **head reviewer** = ปลายทาง review chain ก่อน lead — ตรวจ conductor light-exec + roll-up จาก crew reviewer. เจอปัญหา = comment finding + คืนคนทำ (ไม่แก้เอง).
 - **lead** = merge-gate สุดท้าย (human/decision). ไม่ review รายชิ้น — เชื่อ chain, ตัดสิน merge/deploy.
@@ -65,9 +65,9 @@ worker เล็ก (sonnet) ปลอดภัยเพราะโดน 2 ต
 - **offload → worker cell** (execution · sonnet, on-demand: coordinator + worker×3, /clear-after) = **/crew เดิม ตรงๆ** — heavy code / write / parallel. wiring = **§Worker cell** (reuse /crew, ไม่ rebuild).
 - **card = outcome/PR เท่านั้น** (1 card ≈ 1 PR). grounding/sub-fetch = internal ephemeral (ไม่ลง board).
 
-## Lead Discipline (pane .0) — lead ห้ามทัก peer ตรง
+## Lead Discipline — lead ห้ามทัก peer ตรง
 
-> lead (.0) = คุย **human ล้วน**. คุย peer/federation → **delegate comm** (ถ้า opt-in) หรือผ่าน conductor. reply เด้งกลับ pane 0 = federation noise บนจอที่ควรเป็น human↔AI.
+> lead = คุย **human ล้วน**. คุย peer/federation → **delegate comm** (ถ้า opt-in) หรือผ่าน conductor. reply เด้งกลับ pane 0 = federation noise บนจอที่ควรเป็น human↔AI.
 
 - **routine peer comm** (progress · status · coordinate) → comm (ถ้ามี) หรือ conductor. ห้าม `maw hey` peer ตรงจาก lead.
 - **ยกเว้น decision-gate** (ด่วน + human ต้องเห็น: round-trip verify · restart-green · merge relay · blocker-needs-human) → lead ทัก peer **ตรงได้**
@@ -285,7 +285,7 @@ tmux set-option -p -t "$SCRATCH" @role "🗒️ scratchpad"
 
 ## lead-toilet-survive (⭐)
 
-crew พิสูจน์ worker+coord toilet แล้ว (kobo-91). head: **lead (.0) toilet/clear/ปิด session → conductor+reviewer[+comm] (raw panes อิสระ) วิ่งต่อ**:
+crew พิสูจน์ worker+coord toilet แล้ว (kobo-91). head: **lead toilet/clear/ปิด session → conductor+reviewer[+comm] (raw panes อิสระ) วิ่งต่อ**:
 ```
 lead toilet → conductor dispatch/aggregate ต่อ · reviewer review ต่อ · comm relay ต่อ (autonomous)
    ↓

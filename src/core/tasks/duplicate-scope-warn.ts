@@ -352,7 +352,10 @@ export function findSimilarOpenCards(
 
   // structural pass — exact, cheap, no threshold
   for (const t of open) {
-    if (candidateParents.size && t.parentIds?.some((p) => candidateParents.has(p))) {
+    // kobo-641: dual-read inline (not an import from store.ts — see this
+    // function's own doc comment above on avoiding a circular module dep).
+    // t.parentIds alone would go blind to every card created after the rename.
+    if (candidateParents.size && (t.needs ?? t.parentIds)?.some((p) => candidateParents.has(p))) {
       warnings.push({ id: t.id, title: t.title, reason: "shared-parent" });
       continue; // a card only needs to be flagged once — structural already won
     }

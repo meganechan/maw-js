@@ -165,7 +165,8 @@ export interface TaskRecord {
   reviewerPane?: string; // kobo-587: the tmux %pane-id that `--to-pane` resolved to and that the DISPATCHING caller verified is (a) a live pane, (b) in the caller's own tmux session, and (c) not the caller's own pane (same pane-grain binding as crewSignedByPane, kobo-346) — NOT proof anyone at that pane has looked at anything yet, only that a distinct, same-session pane was named. This is what lets resolveReviewer treat a same-oracle-different-pane reviewer as independent instead of falling to human. Live-resolved in the DISPATCHING caller's shell (not the reviewer's) → agent-settable → DEFENSE-IN-DEPTH, not airtight (same ceiling as kobo-346, and kobo-460's pane-id-reuse-across-sessions applies here too).
   rejectReason?: string; // why the card was rejected (kobo-101) — MANDATORY on reject, kept to learn (Nothing is Deleted)
   requestId?: string; // dispatch correlation id — set for auto-created tasks (idempotency key)
-  parentIds?: string[]; // card→card deps (ADR 0003 A) — blocked-by-dependency is DERIVED, never stored
+  needs?: string[]; // kobo-641: card→card deps (ADR 0003 A), CANONICAL name — blocked-by-dependency is DERIVED, never stored. New cards write here.
+  parentIds?: string[]; // kobo-641 LEGACY name for the same axis — read-only compat for card files written before this rename; never written by new code. Use `taskNeeds(task)` to read either shape; never read `.parentIds` directly.
   body?: string; // free text: why/detail + markdown checklist (ADR 0003 C) — git-diff'able
   notes?: TaskNote[]; // append-only notes (kobo-39) — mid-flight truth, oldest first, NEVER mutated/deleted
   comments?: TaskComment[]; // threaded ask/answer comments (kobo-140) — resolve flips a flag, never deleted
@@ -204,6 +205,40 @@ export interface TaskRecord {
   signHistory?: SignHistoryEntry[];
   ts: number; // created (epoch ms)
   updatedTs?: number; // last mutation (epoch ms)
+}
+
+/**
+ * kobo-641 — the ONE place that resolves the dependency-edge id list, either
+ * shape. Declared precedence (not silent, per the card's own AC): `needs` wins
+ * whenever both are present on the same record — `needs` is canonical, a
+ * lingering `parentIds` on a needs-bearing record would only be leftover, not
+ * a second source of truth. Every READ of the dependency edge elsewhere in this
+ * file (and in task/index.ts, duplicate-scope-warn.ts) must go through this,
+ * never `.parentIds` directly, or it silently goes blind to cards written under
+ * the new name.
+ */
+export function taskNeeds(task: TaskRecord | null | undefined): string[] {
+  return task?.needs ?? task?.parentIds ?? [];
+}
+
+/**
+ * kobo-641 — the ONE place that WRITES the dependency-edge id list back onto a
+ * record. No migration-on-touch: a record that already has ONLY the legacy
+ * `parentIds` field keeps using it (old card files on disk stay old-shaped,
+ * per this card's explicit scope — a bulk rename script is exactly what this
+ * card does NOT do). Everything else (a brand-new record with neither field
+ * yet, or a record that already has `needs`) writes `needs` — canonical for
+ * every new write, matching the read precedence above.
+ */
+function writeTaskNeeds(task: TaskRecord, ids: string[]): void {
+  const legacyOnly = task.parentIds !== undefined && task.needs === undefined;
+  if (legacyOnly) {
+    if (ids.length) task.parentIds = ids;
+    else delete task.parentIds;
+  } else {
+    if (ids.length) task.needs = ids;
+    else delete task.needs;
+  }
 }
 
 /** company → safe single path segment (no traversal / separators / dots). */
@@ -474,7 +509,11 @@ export function addTask(input: AddTaskInput): TaskRecord & { scopeWarnings?: Sco
   if (input.repo) task.repo = input.repo;
   if (input.deployRequired !== undefined) task.deployRequired = input.deployRequired; // kobo-274 — persist explicit override (incl. false), else the flip defaults to has-PR
   if (input.requestId) task.requestId = input.requestId;
-  if (input.parentIds?.length) task.parentIds = [...new Set(input.parentIds)]; // dedupe, drop if empty
+  // kobo-641: every NEW card writes the canonical `needs` field, never legacy
+  // `parentIds` — the input param keeps its old name (`AddTaskInput.parentIds`,
+  // unchanged — this card doesn't touch CLI/MCP flag names, kobo-640's job),
+  // only what gets PERSISTED changes.
+  if (input.parentIds?.length) task.needs = [...new Set(input.parentIds)]; // dedupe, drop if empty
   if (input.body?.length) task.body = input.body;
   if (input.reviewer) task.reviewer = input.reviewer; // kobo-144: persistent per-card reviewer
   if (input.reviewReason) task.reviewReason = input.reviewReason; // kobo-218: born-in-approve card's WHY
@@ -486,7 +525,7 @@ export function addTask(input: AddTaskInput): TaskRecord & { scopeWarnings?: Sco
   // real state, not a derived overlay; prevState remembers the flow lane to
   // return to, kobo-223). If all deps are already done/archived it skips straight
   // to `ready` (the parent-done promote already fired before this card existed).
-  if (task.parentIds?.length && (task.state === "todo" || task.state === "in-progress" || task.state === "ready")) {
+  if (taskNeeds(task).length && (task.state === "todo" || task.state === "in-progress" || task.state === "ready")) {
     const resolve = parentStateResolver(input.company);
     if (dependencyBlock(task, resolve).blockedBy.length) {
       task.prevState = task.state; // remember where to return (todo default / in-progress dispatch)
@@ -2196,7 +2235,7 @@ export function dependencyBlock(
 ): DependencyBlock {
   const blockedBy: string[] = [];
   const missing: string[] = [];
-  for (const p of task.parentIds ?? []) {
+  for (const p of taskNeeds(task)) {
     const st = getParentState(p);
     if (st === null) { missing.push(p); continue; } // unknown id → satisfied + warn
     if (st === "done" || st === "archived" || st === "wait-for-deploy") continue; // satisfied
@@ -2218,7 +2257,7 @@ export function promoteReadyChildren(company: string, doneId: string, by: string
   const resolve = parentStateResolver(company);
   const promoted: TaskRecord[] = [];
   for (const t of listTasks(company)) {
-    if (!t.parentIds?.includes(doneId)) continue;
+    if (!taskNeeds(t).includes(doneId)) continue;
     // kobo-223: two kinds are eligible — a DEPENDENCY-blocked card (state=blocked,
     // kind=dependency, the new persisted form) and a legacy derived-todo card (never
     // persisted-blocked). An explicit block (kind !== dependency) is NOT eligible:
@@ -2478,11 +2517,8 @@ export function setTaskEpic(
     // Re-link (kobo-72): a card can't both wait-for (dependency) and live-under
     // (containment) the same parent — moving `next` onto the containment axis drops
     // a stale `next` dependency so the axes never contradict. Other deps are kept.
-    if (task.parentIds?.length) {
-      const kept = task.parentIds.filter((p) => p !== next);
-      if (kept.length) task.parentIds = kept;
-      else delete task.parentIds;
-    }
+    const curNeeds = taskNeeds(task);
+    if (curNeeds.length) writeTaskNeeds(task, curNeeds.filter((p) => p !== next));
   } else {
     delete task.epic;
   }
@@ -2536,22 +2572,20 @@ export function setTaskDep(
   const task = readTask(company, id);
   if (!task) return null;
   const dep = parentId.trim();
-  const cur = task.parentIds ?? [];
+  const cur = taskNeeds(task);
   if (op === "add") {
     if (dep === id) throw new Error(`dep rejected: ${id} cannot wait for itself`);
     if (dep === task.epic) {
       throw new Error(`dep rejected: ${dep} is already ${id}'s containment parent (epic) — wait-for and lives-under must not contradict`);
     }
     if (cur.includes(dep)) return task; // idempotent — link already there
-    if (createsDepLoop(id, dep, (cid) => readTask(company, cid)?.parentIds ?? [])) {
+    if (createsDepLoop(id, dep, (cid) => taskNeeds(readTask(company, cid)))) {
       throw new Error(`dep loop rejected: ${id} 🚫→ ${dep} would create a wait cycle (mutual deadlock)`);
     }
-    task.parentIds = [...cur, dep];
+    writeTaskNeeds(task, [...cur, dep]);
   } else {
     if (!cur.includes(dep)) return task; // idempotent — nothing to remove
-    const kept = cur.filter((p) => p !== dep);
-    if (kept.length) task.parentIds = kept;
-    else delete task.parentIds;
+    writeTaskNeeds(task, cur.filter((p) => p !== dep));
   }
   // kobo-223: keep the blocked state honest as deps change — adding a pending dep
   // to a flow-state card blocks it; removing the last pending dep from a

@@ -90,14 +90,14 @@ describe("maw company task runner (runTask)", () => {
 
   // kobo-640 — front-of-house rename: `--needs` is the primary dependency-link flag,
   // `--parent` keeps working as a deprecated alias (no silent break of old scripts).
-  // Storage field stays `parentIds` on disk (that's kobo-641, not this card) — these
-  // tests assert the CLI/MCP surface only.
+  // Storage field is the CANONICAL `needs` as of kobo-641 (was `parentIds` when
+  // this block was first written — flipped here, not a new claim).
   describe("--needs / --parent dependency flag (kobo-640)", () => {
     test("--needs links a dependency exactly like the old --parent did", async () => {
       await run(["add", "parent card", "--company", "kobo394"]); // kobo394-1
       const r = await run(["add", "child card", "--company", "kobo394", "--needs", "kobo394-1"]);
       expect(r.ok).toBe(true);
-      expect(readTask("kobo394", "kobo394-2")!.parentIds).toEqual(["kobo394-1"]);
+      expect(readTask("kobo394", "kobo394-2")!.needs).toEqual(["kobo394-1"]);
       expect(readTask("kobo394", "kobo394-2")!.state).toBe("blocked"); // dep pending, same as --parent behavior
     });
 
@@ -105,7 +105,7 @@ describe("maw company task runner (runTask)", () => {
       await run(["add", "parent card", "--company", "kobo394"]); // kobo394-1
       const r = await run(["add", "child card", "--company", "kobo394", "--parent", "kobo394-1"]);
       expect(r.ok).toBe(true);
-      expect(readTask("kobo394", "kobo394-2")!.parentIds).toEqual(["kobo394-1"]);
+      expect(readTask("kobo394", "kobo394-2")!.needs).toEqual(["kobo394-1"]);
       expect(r.output).toContain("deprecated");
       expect(r.output).toContain("--needs");
     });
@@ -115,7 +115,7 @@ describe("maw company task runner (runTask)", () => {
       await run(["add", "b", "--company", "kobo394"]); // kobo394-2
       const r = await run(["add", "child", "--company", "kobo394", "--needs", "kobo394-1", "--parent", "kobo394-2"]);
       expect(r.ok).toBe(true);
-      expect(readTask("kobo394", "kobo394-3")!.parentIds).toEqual(["kobo394-1", "kobo394-2"]);
+      expect(readTask("kobo394", "kobo394-3")!.needs).toEqual(["kobo394-1", "kobo394-2"]);
       expect(r.output).toContain("deprecated"); // the --parent half still warns
     });
 
@@ -391,26 +391,26 @@ describe("maw company task runner (runTask)", () => {
   test("epic re-links a same-id dependency onto containment (the hand-edit gap, kobo-72)", async () => {
     await run(["add", "epic", "--company", "pgw", "--kind", "epic"]);              // pgw-1
     await run(["add", "child", "--company", "pgw", "--parent", "pgw-1"]);          // pgw-2 wrongly dep'd on pgw-1
-    expect(readTask("pgw", "pgw-2")!.parentIds).toEqual(["pgw-1"]);
+    expect(readTask("pgw", "pgw-2")!.needs).toEqual(["pgw-1"]);
     await run(["epic", "pgw-2", "pgw-1", "--company", "pgw"]);
     const t = readTask("pgw", "pgw-2")!;
     expect(t.epic).toBe("pgw-1");
-    expect(t.parentIds).toBeUndefined(); // stale dep on the same id dropped
+    expect(t.needs).toBeUndefined(); // stale dep on the same id dropped
   });
 
-  test("dep add/rm edit parentIds after create; guards + usage errors are clean (kobo-134)", async () => {
+  test("dep add/rm edit needs after create; guards + usage errors are clean (kobo-134)", async () => {
     await run(["add", "parent", "--company", "pgw"]); // pgw-1
     await run(["add", "child", "--company", "pgw"]);  // pgw-2
     const add = await run(["dep", "add", "pgw-2", "pgw-1", "--company", "pgw"]);
     expect(add.ok).toBe(true);
-    expect(readTask("pgw", "pgw-2")!.parentIds).toEqual(["pgw-1"]);
+    expect(readTask("pgw", "pgw-2")!.needs).toEqual(["pgw-1"]);
     // reverse link = wait cycle → clean error, not a throw
     const loop = await run(["dep", "add", "pgw-1", "pgw-2", "--company", "pgw"]);
     expect(loop.ok).toBe(false);
     expect(loop.error).toMatch(/loop/i);
     const rm = await run(["dep", "rm", "pgw-2", "pgw-1", "--company", "pgw"]);
     expect(rm.ok).toBe(true);
-    expect(readTask("pgw", "pgw-2")!.parentIds).toBeUndefined();
+    expect(readTask("pgw", "pgw-2")!.needs).toBeUndefined();
     expect((await run(["dep", "bogus", "pgw-2", "pgw-1", "--company", "pgw"])).error).toContain("usage");
     expect((await run(["dep", "add", "pgw-2", "--company", "pgw"])).error).toContain("usage");
     expect((await run(["dep", "add", "pgw-999", "pgw-1", "--company", "pgw"])).error).toContain("not found");
@@ -420,7 +420,7 @@ describe("maw company task runner (runTask)", () => {
     await run(["add", "child", "--company", "pgw"]); // pgw-1
     const r = await run(["dep", "add", "pgw-1", "pgw-ghost", "--company", "pgw"]);
     expect(r.ok).toBe(true);
-    expect(readTask("pgw", "pgw-1")!.parentIds).toEqual(["pgw-ghost"]);
+    expect(readTask("pgw", "pgw-1")!.needs).toEqual(["pgw-ghost"]);
     expect(r.output).toContain("ไม่พบ");
   });
 

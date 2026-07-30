@@ -71,6 +71,7 @@ import {
   createsDepLoop,
   setTaskDep,
   setTaskEpic,
+  taskNeeds,
   setTaskPr,
   clearTaskPr,
   setTaskRepoIfMissing,
@@ -632,12 +633,13 @@ describe("reject (kobo-101 — terminal 'done but not accepted', parallel to don
 });
 
 describe("dependency graph (ADR 0003 A — derived blocked-by-dependency, 1 hop)", () => {
-  test("addTask stores parentIds (deduped); omits the field when none given", () => {
+  test("addTask stores needs (deduped, kobo-641 canonical field); omits the field when none given", () => {
     const child = addTask({ company: "pgw", title: "child", by: "eq3", parentIds: ["pgw-1", "pgw-1", "pgw-2"] });
-    expect(child.parentIds).toEqual(["pgw-1", "pgw-2"]); // deduped
+    expect(child.needs).toEqual(["pgw-1", "pgw-2"]); // deduped, written to the CANONICAL field
+    expect(child.parentIds).toBeUndefined(); // never the legacy field for a new card
     const plain = addTask({ company: "pgw", title: "plain", by: "eq3", parentIds: [] });
-    expect(plain.parentIds).toBeUndefined(); // empty → not written
-    expect(addTask({ company: "pgw", title: "none", by: "eq3" }).parentIds).toBeUndefined();
+    expect(plain.needs).toBeUndefined(); // empty → not written
+    expect(addTask({ company: "pgw", title: "none", by: "eq3" }).needs).toBeUndefined();
   });
 
   const child = (parentIds: string[]): TaskRecord => ({
@@ -697,6 +699,90 @@ describe("dependency graph (ADR 0003 A — derived blocked-by-dependency, 1 hop)
     completeTask("pgw", parent.id, "x");
     const blockedAfter = isBlockedByDependency(readTask("pgw", "pgw-2")!, parentStateResolver("pgw"));
     expect(blockedAfter).toBe(false); // parent done → child free (and auto-promoted to ready, kobo-133)
+  });
+});
+
+// kobo-641 — needs is the canonical dependency-edge field; parentIds is the
+// legacy name, dual-read only, NEVER migrated on touch (a card file written
+// before this rename stays exactly as old-shaped as it was, forever, unless
+// some OTHER unrelated write happens to touch its dep list — even then it
+// keeps using parentIds, never flips to needs). Card files are hand-written
+// directly to disk (taskFilePath + fs.writeFileSync, same idiom used
+// elsewhere in this file) to simulate "a real old card file nobody has
+// touched since before this rename" — addTask can't produce that shape
+// anymore, which is the whole point.
+describe("kobo-641 — needs is canonical, parentIds is a read-only legacy alias (no migration on touch)", () => {
+  test("a card file written with ONLY legacy parentIds is still read correctly through the REAL production path (completeTask → promoteReadyChildren)", () => {
+    const parent = addTask({ company: "k641", title: "parent", by: "x" });
+    const child = addTask({ company: "k641", title: "child", by: "x" }); // born dep-less
+    const rec = readTask("k641", child.id)!;
+    delete rec.needs;
+    rec.parentIds = [parent.id]; // simulate: this file predates the rename
+    rec.state = "blocked";
+    rec.block = { kind: "dependency" };
+    rec.prevState = "todo";
+    require("fs").writeFileSync(taskFilePath("k641", child.id), JSON.stringify(rec));
+
+    expect(isBlockedByDependency(readTask("k641", child.id)!, parentStateResolver("k641"))).toBe(true);
+    completeTask("k641", parent.id, "x"); // real call path — not a unit call to promoteReadyChildren directly
+    const after = readTask("k641", child.id)!;
+    expect(after.state).toBe("ready"); // legacy-shaped child still auto-promoted
+    expect(after.parentIds).toEqual([parent.id]); // untouched — no migration
+    expect(after.needs).toBeUndefined(); // still never written
+  });
+
+  test("needs wins over parentIds when a record somehow has both — declared precedence, not silent", () => {
+    const stillPending = addTask({ company: "k641p", title: "a", by: "x" });
+    const alreadyDone = addTask({ company: "k641p", title: "b", by: "x" });
+    completeTask("k641p", alreadyDone.id, "x");
+    const child = addTask({ company: "k641p", title: "child", by: "x" });
+    const rec = readTask("k641p", child.id)!;
+    rec.needs = [stillPending.id]; // canonical: blocked on a still-pending card
+    rec.parentIds = [alreadyDone.id]; // legacy leftover: would read as satisfied — must be IGNORED
+    require("fs").writeFileSync(taskFilePath("k641p", child.id), JSON.stringify(rec));
+
+    const reread = readTask("k641p", child.id)!;
+    expect(taskNeeds(reread)).toEqual([stillPending.id]); // accessor declares needs the winner
+    expect(dependencyBlock(reread, parentStateResolver("k641p")).blockedBy).toEqual([stillPending.id]);
+  });
+
+  test("setTaskDep on a legacy-only card mutates parentIds in place — no migration to needs", () => {
+    const p1 = addTask({ company: "k641d", title: "p1", by: "x" });
+    const p2 = addTask({ company: "k641d", title: "p2", by: "x" });
+    const child = addTask({ company: "k641d", title: "child", by: "x" });
+    const rec = readTask("k641d", child.id)!;
+    delete rec.needs;
+    rec.parentIds = [p1.id];
+    require("fs").writeFileSync(taskFilePath("k641d", child.id), JSON.stringify(rec));
+
+    const updated = setTaskDep("k641d", child.id, p2.id, "add", "x")!;
+    expect(updated.parentIds).toEqual([p1.id, p2.id]); // stayed in the legacy field
+    expect(updated.needs).toBeUndefined(); // never migrated
+  });
+
+  test("setTaskDep on a brand-new dep-less card (neither field yet) writes needs, not parentIds", () => {
+    const p = addTask({ company: "k641n", title: "p", by: "x" });
+    const child = addTask({ company: "k641n", title: "child", by: "x" }); // neither field set at birth
+    expect(child.needs).toBeUndefined();
+    expect(child.parentIds).toBeUndefined();
+    const updated = setTaskDep("k641n", child.id, p.id, "add", "x")!;
+    expect(updated.needs).toEqual([p.id]);
+    expect(updated.parentIds).toBeUndefined();
+  });
+
+  test("setTaskEpic's stale-dep-drop respects a legacy-only field too — no migration", () => {
+    const parent = addTask({ company: "k641e", title: "parent", by: "x" });
+    const other = addTask({ company: "k641e", title: "other", by: "x" });
+    const child = addTask({ company: "k641e", title: "child", by: "x" });
+    const rec = readTask("k641e", child.id)!;
+    delete rec.needs;
+    rec.parentIds = [parent.id, other.id]; // legacy-only, wrongly dep'd on the soon-to-be epic parent too
+    require("fs").writeFileSync(taskFilePath("k641e", child.id), JSON.stringify(rec));
+
+    const t = setTaskEpic("k641e", child.id, parent.id, "x")!;
+    expect(t.epic).toBe(parent.id);
+    expect(t.parentIds).toEqual([other.id]); // stale same-id dep dropped, stayed in the legacy field
+    expect(t.needs).toBeUndefined();
   });
 });
 
@@ -1213,20 +1299,20 @@ describe("explicit-block + dep-block unify to one exclusive lane (kobo-256 slice
 });
 
 describe("dep verbs (kobo-134 — setTaskDep edits parentIds after create)", () => {
-  test("add links a dep; rm unlinks; field dropped when the last dep goes", () => {
+  test("add links a dep; rm unlinks; field dropped when the last dep goes (writes canonical needs, kobo-641)", () => {
     const p = addTask({ company: "pgw", title: "parent", by: "x" });
     const c = addTask({ company: "pgw", title: "child", by: "x" });
-    expect(setTaskDep("pgw", c.id, p.id, "add", "x")!.parentIds).toEqual([p.id]);
+    expect(setTaskDep("pgw", c.id, p.id, "add", "x")!.needs).toEqual([p.id]);
     expect(isBlockedByDependency(readTask("pgw", c.id)!, parentStateResolver("pgw"))).toBe(true); // derived kicks in
-    expect(setTaskDep("pgw", c.id, p.id, "rm", "x")!.parentIds).toBeUndefined(); // last dep → field dropped
+    expect(setTaskDep("pgw", c.id, p.id, "rm", "x")!.needs).toBeUndefined(); // last dep → field dropped
     expect(isBlockedByDependency(readTask("pgw", c.id)!, parentStateResolver("pgw"))).toBe(false);
   });
 
   test("idempotent both ways: re-add keeps one link, rm of an absent link is a no-op", () => {
     const p = addTask({ company: "pgw", title: "parent", by: "x" });
     const c = addTask({ company: "pgw", title: "child", by: "x", parentIds: [p.id] });
-    expect(setTaskDep("pgw", c.id, p.id, "add", "x")!.parentIds).toEqual([p.id]); // no dupe
-    expect(setTaskDep("pgw", c.id, "pgw-ghost", "rm", "x")!.parentIds).toEqual([p.id]); // unchanged
+    expect(setTaskDep("pgw", c.id, p.id, "add", "x")!.needs).toEqual([p.id]); // no dupe
+    expect(setTaskDep("pgw", c.id, "pgw-ghost", "rm", "x")!.needs).toEqual([p.id]); // unchanged
   });
 
   test("guards: self-dep, containment-conflict (epic), and a dep cycle all throw", () => {
@@ -1240,7 +1326,7 @@ describe("dep verbs (kobo-134 — setTaskDep edits parentIds after create)", () 
 
   test("unresolvable parent id still links (backward-compat, board warns); missing card → null", () => {
     const c = addTask({ company: "pgw", title: "child", by: "x" });
-    expect(setTaskDep("pgw", c.id, "pgw-ghost", "add", "x")!.parentIds).toEqual(["pgw-ghost"]);
+    expect(setTaskDep("pgw", c.id, "pgw-ghost", "add", "x")!.needs).toEqual(["pgw-ghost"]);
     expect(setTaskDep("pgw", "pgw-999", "pgw-1", "add", "x")).toBeNull();
   });
 
@@ -1266,7 +1352,7 @@ describe("editTask (kobo-213 — non-destructive title/body reword, same id)", (
     expect(edited.title).toBe("new title");
     expect(edited.body).toBe("new body");
     // lineage untouched
-    expect(edited.parentIds).toEqual([p.id]);
+    expect(edited.needs).toEqual([p.id]);
     expect(edited.comments).toHaveLength(1);
     expect(edited.pr).toBe(77);
     expect(edited.state).toBe(before.state); // review — not changed
@@ -1318,7 +1404,7 @@ describe("editTask (kobo-213 — non-destructive title/body reword, same id)", (
     expect(edited.reviewer).toBe("worker"); // reviewer updated
     expect(edited.title).toBe("card v2"); // combinable with --title in one edit
     // lineage untouched
-    expect(edited.parentIds).toEqual([p.id]);
+    expect(edited.needs).toEqual([p.id]);
     expect(edited.pr).toBe(88);
     expect(edited.assignee).toBe("patchwork"); // assignee not touched (OUT of scope)
     // audit: old reviewer preserved in an append-only note (Nothing is Deleted)
@@ -1727,8 +1813,8 @@ describe("decomposeEpic (kobo-146 C7 — plan → child cards + links, option B)
     const kids = Object.fromEntries(epicChildren(epic.id, listTasks("dec")).map((k) => [k.title, k]));
     expect(kids.a.epic).toBe(epic.id);
     expect(kids.a.body).toBe("AC: given/when/then");
-    expect(kids.b.parentIds).toEqual([kids.a.id]); // $0 → a
-    expect(kids.c.parentIds).toEqual([kids.a.id, kids.b.id]); // $0,$1 → a,b
+    expect(kids.b.needs).toEqual([kids.a.id]); // $0 → a
+    expect(kids.c.needs).toEqual([kids.a.id, kids.b.id]); // $0,$1 → a,b
     expect(kids.c.reviewer).toBe("somsri");
     // parent promoted to an epic container
     expect(readTask("dec", epic.id)!.kind).toBe("epic");
@@ -1741,7 +1827,7 @@ describe("decomposeEpic (kobo-146 C7 — plan → child cards + links, option B)
     expect(r.created.map((c) => c.title)).toEqual(["b"]);
     expect(r.skipped.map((c) => c.title)).toEqual(["a"]);
     const kids = Object.fromEntries(epicChildren(epic.id, listTasks("dec")).map((k) => [k.title, k]));
-    expect(kids.b.parentIds).toEqual([kids.a.id]); // $0 resolved to the pre-existing a
+    expect(kids.b.needs).toEqual([kids.a.id]); // $0 resolved to the pre-existing a
   });
 
   test("unhappy path — a child throws → stop, report what landed (never silent)", () => {
@@ -1870,10 +1956,10 @@ describe("containment / epic (kobo-45)", () => {
     const child = addTask({ company: "pgw", title: "child", by: "eq3", parentIds: [parent.id, other.id] });
     const t = setTaskEpic("pgw", child.id, parent.id, "eq3")!;
     expect(t.epic).toBe(parent.id);
-    expect(t.parentIds).toEqual([other.id]); // stale same-id dep dropped, unrelated dep kept
-    // sole-dep re-link removes parentIds entirely
+    expect(t.needs).toEqual([other.id]); // stale same-id dep dropped, unrelated dep kept
+    // sole-dep re-link removes needs entirely
     const solo = addTask({ company: "pgw", title: "solo", by: "eq3", parentIds: [parent.id] });
-    expect(setTaskEpic("pgw", solo.id, parent.id, "eq3")!.parentIds).toBeUndefined();
+    expect(setTaskEpic("pgw", solo.id, parent.id, "eq3")!.needs).toBeUndefined();
   });
 
   test("guard a: archiving an epic with open children is BLOCKED + lists them", () => {

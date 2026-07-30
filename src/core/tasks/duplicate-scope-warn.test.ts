@@ -155,6 +155,18 @@ describe("findSimilarOpenCards — wiring (structural + lexical + batch-window),
     expect(warnings).toEqual([{ id: "kobo-1", title: "completely unrelated wording", reason: "shared-parent" }]);
   });
 
+  // kobo-641: an EXISTING board card written under the new canonical `needs`
+  // field must still be caught by the structural pass — before this fix,
+  // `t.parentIds?.some(...)` alone would silently stop matching against every
+  // dependency-linked card created after the rename (the candidate side is a
+  // separate transient input, unaffected either way).
+  test("shared needs (new canonical field on the EXISTING card) also fires the structural signal", () => {
+    const existing = task({ id: "kobo-1", title: "completely unrelated wording", needs: ["kobo-parent"] });
+    const candidate = { title: "totally different wording too", parentIds: ["kobo-parent"] };
+    const warnings = findSimilarOpenCards("kobo", candidate, { listTasks: () => [existing] });
+    expect(warnings).toEqual([{ id: "kobo-1", title: "completely unrelated wording", reason: "shared-parent" }]);
+  });
+
   test("shared epic (not just parentIds) also fires the structural signal", () => {
     const existing = task({ id: "kobo-1", title: "unrelated wording entirely", epic: "kobo-epic-1" });
     const candidate = { title: "completely different wording too", epic: "kobo-epic-1" };

@@ -74,6 +74,7 @@ import {
   reviewTask,
   setTaskDep,
   setTaskEpic,
+  taskNeeds,
   setTaskPr,
   clearTaskPr,
   signTask,
@@ -608,11 +609,14 @@ export async function runTask(
       }
       const addProg = checklistProgress(t.body);
       if (addProg) console.log(`  \x1b[35m↳ checklist: ${addProg.done}/${addProg.total}\x1b[0m`);
-      if (t.parentIds?.length) {
-        console.log(`  \x1b[90m↳ deps: ${t.parentIds.join(", ")}\x1b[0m`);
+      // kobo-641: taskNeeds() reads either shape — t.parentIds directly here would
+      // go silently blank for every new card once addTask starts writing t.needs.
+      const addDeps = taskNeeds(t);
+      if (addDeps.length) {
+        console.log(`  \x1b[90m↳ deps: ${addDeps.join(", ")}\x1b[0m`);
         // soft hint — a parent that resolves to nothing now will warn faintly on the board too
         const resolve = parentStateResolver(company);
-        const unknown = t.parentIds.filter((p) => resolve(p) === null);
+        const unknown = addDeps.filter((p) => resolve(p) === null);
         if (unknown.length) console.log(`  \x1b[33m⚠ parent ไม่พบ (ยัง add ได้): ${unknown.join(", ")}\x1b[0m`);
       }
       if (t.assignee && t.assignee !== me) {
@@ -1426,7 +1430,8 @@ export async function runTask(
       if (!company) return { ok: false, error: "no company — pass --company <c>" };
       const t = setTaskDep(company, id, parentId, op, me);
       if (!t) return { ok: false, error: `task not found: ${id}` };
-      const deps = t.parentIds?.join(", ") || "—";
+      // kobo-641: taskNeeds() reads either shape — see the `add` echo above for why.
+      const deps = taskNeeds(t).join(", ") || "—";
       console.log(op === "add"
         ? `\x1b[36m🔗 dep\x1b[0m ${t.id} 🚫→ ${parentId} \x1b[90m(deps: ${deps})\x1b[0m: ${t.title}`
         : `\x1b[36m✂ dep\x1b[0m ${t.id} ✂ ${parentId} \x1b[90m(deps: ${deps})\x1b[0m: ${t.title}`);

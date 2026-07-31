@@ -34,6 +34,8 @@ describe("cell command plugin standalone boundary", () => {
     const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/cell/spawn.ts"), "utf8");
     expect(spawnSrc).toContain('CELL_WORKERS_WINDOW = "cell-workers"');
     expect(spawnSrc).toContain("cmdWake");
+    expect(spawnSrc).toContain("noAttach: true");
+    expect(spawnSrc).toContain("noRehydrate: true");
     expect(spawnSrc).toContain("listSessions");
     expect(spawnSrc).toContain("findWindow");
     expect(spawnSrc).toContain("companyRoster");

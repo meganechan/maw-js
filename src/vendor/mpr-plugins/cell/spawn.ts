@@ -140,7 +140,7 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
     if (!resolved) {
       log(`${member.oracle}: no session found — waking (maw wake)`);
       try {
-        await cmdWake(member.oracle, {});
+        await cmdWake(member.oracle, { noAttach: true, noRehydrate: true });
       } catch (e: any) {
         log(`⚠ ${member.oracle}: wake failed (${e.message})`);
         refused++;

@@ -61,6 +61,7 @@ export function writeWakeBudBirthSignal(
 
 export interface ExistingSessionAttachOpts {
   attach?: boolean;
+  noAttach?: boolean;
   split?: boolean;
   bring?: boolean;
 }
@@ -87,6 +88,7 @@ export function shouldOfferExistingSessionAttach(
 ): boolean {
   return (
     !opts.attach &&
+    !opts.noAttach &&
     !opts.split &&
     !opts.bring &&
     Boolean(isTTY) &&

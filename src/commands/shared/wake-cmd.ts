@@ -410,6 +410,8 @@ export interface WakeOptions {
   /** Stable reusable worktree name used with --wt/--task (#1768). */
   name?: string;
   attach?: boolean;
+  /** Fire-and-forget/headless wake: never attach or prompt to attach. */
+  noAttach?: boolean;
   listWt?: boolean;
   dryRun?: boolean;
   noRehydrate?: boolean;

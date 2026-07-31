@@ -20,6 +20,7 @@ describe("maw bring existing-session behavior", () => {
 
   test("headless wake does not prompt", () => {
     expect(shouldOfferExistingSessionAttach({}, false, {} as NodeJS.ProcessEnv)).toBe(false);
+    expect(shouldOfferExistingSessionAttach({ noAttach: true }, true, {} as NodeJS.ProcessEnv)).toBe(false);
   });
 
   test("MAW_TEST_MODE disables attach prompts even on interactive terminals", () => {

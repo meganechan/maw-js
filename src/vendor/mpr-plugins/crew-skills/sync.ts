@@ -45,6 +45,9 @@ export interface SyncItem {
 
 /** Canonical asset → global .claude layout. */
 export const SYNC_ITEMS: SyncItem[] = [
+  { src: "skills/cell/SKILL.md", dest: "skills/cell/SKILL.md" },
+  { src: "skills/cell/contracts/worker.md", dest: "skills/cell/contracts/worker.md" },
+  { src: "skills/cell/contracts/reviewer.md", dest: "skills/cell/contracts/reviewer.md" },
   { src: "skills/crew/SKILL.md", dest: "skills/crew/SKILL.md" },
   // kobo-358 — contract text extracted from SKILL §4/4b/4c into standalone template
   // assets: single source for BOTH the human-readable SKILL prose (which now just

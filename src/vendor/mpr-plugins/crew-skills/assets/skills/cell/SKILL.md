@@ -39,7 +39,7 @@ Example:
 maw company cell spawn kobo
 ```
 
-The public spawn verb controls the company fleet: wake missing oracle sessions, locate each oracle session, then inject the local self-spawn into that oracle's pane so tmux layout is created in the correct place.
+The public spawn verb controls the company fleet: wake missing oracle sessions headlessly, locate each oracle session, then inject the local self-spawn into that oracle's pane so tmux layout is created in the correct place and the head pane launches Claude afterward.
 
 The hidden internal verb is:
 
@@ -75,11 +75,13 @@ Public company spawn is complete when the command prints:
 ✓ cell spawn <company>: <ready> ready, <repaired> repaired, <refused> refused/failed (<N> oracles)
 ```
 
-Each target pane's local self-spawn prints:
+Each target pane's local self-spawn prints before the head pane execs Claude:
 
 ```text
 ✓ cell spawned — head=<pane> worker=<pane> (<model>) reviewer=<pane>
 ```
+
+After that, the head pane should be a live Claude process, not a shell.
 
 If it reports a missing contract asset, run:
 

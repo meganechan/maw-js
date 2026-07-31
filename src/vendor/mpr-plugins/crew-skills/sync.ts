@@ -46,6 +46,7 @@ export interface SyncItem {
 /** Canonical asset → global .claude layout. */
 export const SYNC_ITEMS: SyncItem[] = [
   { src: "skills/cell/SKILL.md", dest: "skills/cell/SKILL.md" },
+  { src: "skills/cell/contracts/head.md", dest: "skills/cell/contracts/head.md" },
   { src: "skills/cell/contracts/worker.md", dest: "skills/cell/contracts/worker.md" },
   { src: "skills/cell/contracts/reviewer.md", dest: "skills/cell/contracts/reviewer.md" },
   { src: "skills/crew/SKILL.md", dest: "skills/crew/SKILL.md" },

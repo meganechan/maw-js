@@ -40,6 +40,10 @@ describe("cell command plugin standalone boundary", () => {
     expect(spawnSrc).toContain("findWindow");
     expect(spawnSrc).toContain("companyRoster");
     expect(spawnSrc).toContain("maw company cell self-spawn");
+    expect(spawnSrc).toContain("headLaunchCommand(company)");
+    expect(spawnSrc).toContain("head-contract.md");
+    expect(spawnSrc).toContain("exec claude");
+    expect(spawnSrc).toContain("CREW_ROLE=head");
     expect(spawnSrc).toContain('tmux set-option -p -t ${shellArg(head)} @role ${shellArg("👤 head")}');
     expect(spawnSrc).toContain("tmux new-window");
     expect(spawnSrc).toContain("split-window -h -p 50 -t ${shellArg(worker.paneId)}");

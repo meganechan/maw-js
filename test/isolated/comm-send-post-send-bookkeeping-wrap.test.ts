@@ -38,11 +38,23 @@
  * dependency on checkout depth.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { createHash } from "crypto";
+import { readFileSync } from "fs";
 import { join } from "path";
 import { pathToFileURL } from "url";
 
 const srcRoot = join(import.meta.dir, "../..");
 const snapshotPath = join(srcRoot, "src/commands/shared/comm-send.pre-1813-fix.snapshot.ts");
+
+// A committed snapshot is supposed to be frozen forever — the pin below is the
+// only thing that distinguishes "frozen on purpose" from "stale by neglect."
+// Without it, someone editing this file by accident (or "fixing" it to match
+// a later comm-send.ts) silently voids the negative control below: the test
+// would keep passing, correctly, about a source that no longer exists.
+// Recomputed directly from the file at review time, not copied from a report:
+// sha256 a656400a6be3c47e830be8fe667ef07a2dd6b6d89ea332e901d4c559ed24f0bd,
+// 104720 bytes, matches comm-send.ts at origin/alpha 32553051 byte-for-byte.
+const SNAPSHOT_SHA256 = "a656400a6be3c47e830be8fe667ef07a2dd6b6d89ea332e901d4c559ed24f0bd";
 
 type Session = { name: string; windows: Array<{ index: number; name: string; active: boolean }> };
 type ResolvedTarget =
@@ -193,6 +205,11 @@ afterAll(() => {
 });
 
 describe("kobo-1813 — post-send bookkeeping wrap (local-delivery branch)", () => {
+  test("negative-control fixture is frozen — sha256 pin catches an accidental (or well-meaning) edit", () => {
+    const actual = createHash("sha256").update(readFileSync(snapshotPath)).digest("hex");
+    expect(actual).toBe(SNAPSHOT_SHA256); // if this fails: the snapshot is stale — the negative control below is no longer comparing against real pre-fix source
+  });
+
   test("regression guard: happy path (config.node present) is unchanged by the wrap", async () => {
     await runCmd(() => cmdSend("local:session:oracle", "hello"));
 

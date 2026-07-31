@@ -196,6 +196,13 @@ describe("crew-skills global asset contract", () => {
     expect(hook).toContain('[ -n "$QUEUE" ] && MSG="$MSG · $QUEUE"'); // attached, not a separate hey
   });
 
+  test("Stop hook honors per-pane idle_notify override before legacy coord fallback", () => {
+    const hook = readFileSync(join(assetsDir, "hooks/crew-worker-stop.sh"), "utf8");
+    expect(hook).toContain("@idle_notify_pane");
+    expect(hook).toContain('TARGET_PANE="$CREW_COORD_PANE"');
+    expect(hook).toContain('tmux display-message -t "$TARGET_PANE"');
+  });
+
   // kobo-356: the conductor-contract prose (§4c) tells the conductor-LLM what to DO with
   // the idle-ping's next-ready signal — the CLI verb + hook only carry the board-read,
   // the DECISION (dispatch / suggest-teardown) lives here as behavioral contract.

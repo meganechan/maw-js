@@ -7,9 +7,17 @@
 # glob `worker*` matches bare "worker" (kobo-319 single-pane) AND any historical
 # worker-N pane still running mid-migration — both must keep signaling idle.
 case "$CREW_ROLE" in worker*|reviewer) ;; *) exit 0 ;; esac
-[ -n "$CREW_COORD_PANE" ] || exit 0
-# resolve coord addr fresh from stable pane-id (index shifts, pane-id doesn't)
-ADDR=$(tmux display-message -t "$CREW_COORD_PANE" -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)
+[ -n "$CREW_COORD_PANE" ] || [ -n "$TMUX_PANE" ] || exit 0
+# resolve notify target fresh from a stable pane-id (index shifts, pane-id doesn't).
+# Cell v2 overrides @idle_notify_pane so worker/reviewer notify each other and do
+# not spam head; legacy crew falls back to CREW_COORD_PANE (front/conductor).
+TARGET_PANE=""
+if [ -n "$TMUX_PANE" ]; then
+  TARGET_PANE=$(tmux show-option -p -q -v -t "$TMUX_PANE" @idle_notify_pane 2>/dev/null || true)
+fi
+[ -n "$TARGET_PANE" ] || TARGET_PANE="$CREW_COORD_PANE"
+[ -n "$TARGET_PANE" ] || exit 0
+ADDR=$(tmux display-message -t "$TARGET_PANE" -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)
 [ -z "$ADDR" ] && exit 0
 # kobo-356: attach the board-read next-ready queue to a WORKER's idle ping so the
 # conductor can dispatch immediately without a separate query round-trip

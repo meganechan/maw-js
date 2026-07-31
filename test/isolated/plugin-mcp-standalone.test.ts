@@ -141,7 +141,7 @@ describe("mcp plugin standalone boundary (#2113)", () => {
     expect(server).toContain("taskArgs");
     const tools = readFileSync(join(root, MCP_DIR, "tools.ts"), "utf8");
     expect(tools).toContain("export function taskArgs");
-    for (const verb of ['"add"', '"ls"', '"start"', '"move"', '"claim"', '"assign"', '"ask"', '"mentions"', '"comment"', '"comments"', '"review"', '"hold"', '"approve"', '"need-answer"', '"pr"', '"sign"', '"merge"', '"done"', '"deployed"', '"note"', '"edit"', '"epic"', '"dep"', '"decompose"', '"block"', '"unblock"', '"archive"']) {
+    for (const verb of ['"add"', '"ls"', '"start"', '"move"', '"claim"', '"assign"', '"ask"', '"mentions"', '"comment"', '"comments"', '"review"', '"hold"', '"approve"', '"need-answer"', '"pr"', '"sign"', '"merge"', '"done"', '"deployed"', '"external-wait"', '"evidence"', '"ready-for-review"', '"reopen"', '"note"', '"edit"', '"epic"', '"dep"', '"decompose"', '"block"', '"unblock"', '"archive"']) {
       expect(tools).toContain(verb);
     }
     // kobo-327: merge-gate — sign records a crew/head tier; merge is the gated merge path.
@@ -164,6 +164,22 @@ describe("mcp plugin standalone boundary (#2113)", () => {
     // kobo-275: deployed maps 1:1 to the CLI verb (manual wait-for-deploy → done drain).
     expect(tools).toContain('["company", "task", "deployed", needId("deployed")');
     expect(server).toContain('"deployed"'); // enum + description advertise the verb
+    // Cell v2: evidence/readiness/external-wait/reopen verbs are exposed through
+    // MCP and map 1:1 to the CLI. Also pin action-specific state guards so the
+    // broad schema enum cannot advertise add/move requests the CLI rejects.
+    expect(tools).toContain('["company", "task", "external-wait", wid, "--trigger", input.trigger');
+    expect(tools).toContain('["company", "task", "evidence", evid, "--scope", input.evidenceScope');
+    expect(tools).toContain('["company", "task", "ready-for-review", needId("ready-for-review")');
+    expect(tools).toContain('["company", "task", "reopen", rid');
+    expect(tools).toContain("task add state must be backlog, todo or approve");
+    expect(tools).toContain("task move state must be backlog, todo, ready, approve, need-answer or wait-for-deploy");
+    expect(server).toContain('"external-wait"');
+    expect(server).toContain('"evidence"');
+    expect(server).toContain('"ready-for-review"');
+    expect(server).toContain('"reopen"');
+    expect(server).toContain("evidenceScope");
+    expect(server).toContain("reviewerCell");
+    expect(server).toContain("trigger: z.string()");
     // kobo-213: edit = reword title/body in place (same id) → `maw company task edit <id> [--title] [--body]`.
     expect(tools).toContain('["company", "task", "edit", eid]');
     expect(server).toContain('"edit"'); // enum + title advertise the verb
@@ -213,7 +229,7 @@ describe("mcp plugin standalone boundary (#2113)", () => {
     // kobo-218: approve + need-answer join the move enum (Tony's two queues, reason
     // mandatory); tools forwards --reason for both. backlog|todo|ready still advertised.
     // kobo-273: wait-for-deploy joins the move enum (merged≠live park, manual target).
-    expect(server).toContain('z.enum(["backlog", "todo", "ready", "approve", "need-answer", "wait-for-deploy"])');
+    expect(server).toContain('z.enum(["backlog", "todo", "ready", "approve", "need-answer", "wait-for-deploy", "external-wait", "review"])');
     expect(tools).toContain("backlog|todo|ready");
     expect(tools).toContain('input.state === "approve" || input.state === "need-answer"'); // both forward a mandatory reason
     // kobo-39: append-only note verb — needs an id + text; taskArgs targets the

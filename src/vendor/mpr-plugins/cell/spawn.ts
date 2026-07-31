@@ -215,6 +215,7 @@ export async function cellSelfSpawn(company: string | undefined, emit: (line: st
   for (const f of STATE_FILES) { try { rmSync(join(stateDir, f)); } catch { /* absent */ } }
 
   await hostExec(`tmux set-option -p -t ${shellArg(head)} @role ${shellArg("👤 head")}`);
+  await hostExec(`tmux select-pane -t ${shellArg(head)} -T ${shellArg("👤 head")}`);
   writeFileSync(join(stateDir, "head-contract.md"), renderContract("head", { company, dept, board }));
   writeFileSync(join(stateDir, "worker-contract.md"), renderContract("worker", { company, dept, board }));
   writeFileSync(join(stateDir, "reviewer-contract.md"), renderContract("reviewer", { company, dept, board }));
@@ -233,9 +234,11 @@ export async function cellSelfSpawn(company: string | undefined, emit: (line: st
 
   await hostExec(`tmux rename-window -t ${shellArg(worker.paneId)} ${shellArg(CELL_WORKERS_WINDOW)}`);
   await hostExec(`tmux set-option -p -t ${shellArg(worker.paneId)} @role ${shellArg("⚒ worker")}`);
+  await hostExec(`tmux select-pane -t ${shellArg(worker.paneId)} -T ${shellArg("⚒ worker")}`);
   await hostExec(`tmux set-option -p -t ${shellArg(reviewer)} @role ${shellArg("🔎 reviewer")}`);
+  await hostExec(`tmux select-pane -t ${shellArg(reviewer)} -T ${shellArg("🔎 reviewer")}`);
   await hostExec(`tmux set-option -p -t ${shellArg(worker.paneId)} @idle_notify_pane ${shellArg(reviewer)}`);
-  await hostExec(`tmux set-option -p -t ${shellArg(reviewer)} @idle_notify_pane ${shellArg(worker.paneId)}`);
+  await hostExec(`tmux set-option -p -t ${shellArg(reviewer)} @idle_notify_pane ${shellArg(head)}`);
 
   emit(`✓ cell spawned — head=${head} worker=${worker.paneId} (${worker.model}) reviewer=${reviewer}`);
   return { ok: true, head, worker: worker.paneId, workerModel: worker.model, reviewer };

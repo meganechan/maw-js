@@ -132,6 +132,11 @@ function headLaunchCommand(company: string, stateDir = DEFAULT_STATE_DIR): strin
   ].join(" ");
 }
 
+async function showPaneLabels(target: string): Promise<void> {
+  await hostExec(`tmux set-window-option -t ${shellArg(target)} pane-border-status top`);
+  await hostExec(`tmux set-window-option -t ${shellArg(target)} pane-border-format ${shellArg("#{pane_title}")}`);
+}
+
 export interface CellSpawnResult {
   ok: boolean;
   error?: string;
@@ -216,6 +221,8 @@ export async function cellSelfSpawn(company: string | undefined, emit: (line: st
 
   await hostExec(`tmux set-option -p -t ${shellArg(head)} @role ${shellArg("👤 head")}`);
   await hostExec(`tmux select-pane -t ${shellArg(head)} -T ${shellArg("👤 head")}`);
+  await hostExec(`tmux rename-window -t ${shellArg(head)} ${shellArg("cell-head")}`);
+  await showPaneLabels(head);
   writeFileSync(join(stateDir, "head-contract.md"), renderContract("head", { company, dept, board }));
   writeFileSync(join(stateDir, "worker-contract.md"), renderContract("worker", { company, dept, board }));
   writeFileSync(join(stateDir, "reviewer-contract.md"), renderContract("reviewer", { company, dept, board }));
@@ -233,6 +240,7 @@ export async function cellSelfSpawn(company: string | undefined, emit: (line: st
   if (!reviewerBooted) emit("⚠ reviewer boot not confirmed — pane left up for manual inspection");
 
   await hostExec(`tmux rename-window -t ${shellArg(worker.paneId)} ${shellArg(CELL_WORKERS_WINDOW)}`);
+  await showPaneLabels(worker.paneId);
   await hostExec(`tmux set-option -p -t ${shellArg(worker.paneId)} @role ${shellArg("⚒ worker")}`);
   await hostExec(`tmux select-pane -t ${shellArg(worker.paneId)} -T ${shellArg("⚒ worker")}`);
   await hostExec(`tmux set-option -p -t ${shellArg(reviewer)} @role ${shellArg("🔎 reviewer")}`);

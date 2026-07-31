@@ -54,7 +54,7 @@ describe("task command plugin standalone boundary", () => {
       join(import.meta.dir, "../../src/vendor/mpr-plugins/task/index.ts"),
       "utf8",
     );
-    for (const sub of ['subcmd === "add"', 'subcmd === "ls"', 'subcmd === "next-ready"', 'subcmd === "start"', 'subcmd === "move"', 'subcmd === "claim"', 'subcmd === "assign"', 'subcmd === "ask"', 'subcmd === "mentions"', 'subcmd === "comment"', 'subcmd === "comments"', 'subcmd === "migrate-comments"', 'subcmd === "migrate-lanes"', 'subcmd === "review"', 'subcmd === "hold"', 'subcmd === "approve"', 'subcmd === "need-answer"', 'subcmd === "pr"', 'subcmd === "done"', 'subcmd === "deployed"', 'subcmd === "reject"', 'subcmd === "note"', 'subcmd === "edit"', 'subcmd === "epic"', 'subcmd === "dep"', 'subcmd === "decompose"', 'subcmd === "archive"', 'subcmd === "block"', 'subcmd === "unblock"', 'subcmd === "sign"', 'subcmd === "merge"']) {
+    for (const sub of ['subcmd === "add"', 'subcmd === "ls"', 'subcmd === "next-ready"', 'subcmd === "start"', 'subcmd === "move"', 'subcmd === "claim"', 'subcmd === "assign"', 'subcmd === "ask"', 'subcmd === "mentions"', 'subcmd === "comment"', 'subcmd === "comments"', 'subcmd === "migrate-comments"', 'subcmd === "migrate-lanes"', 'subcmd === "review"', 'subcmd === "hold"', 'subcmd === "approve"', 'subcmd === "need-answer"', 'subcmd === "pr"', 'subcmd === "done"', 'subcmd === "deployed"', 'subcmd === "reject"', 'subcmd === "evidence"', 'subcmd === "ready-for-review"', 'subcmd === "reopen"', 'subcmd === "external-wait"', 'subcmd === "note"', 'subcmd === "edit"', 'subcmd === "epic"', 'subcmd === "dep"', 'subcmd === "decompose"', 'subcmd === "archive"', 'subcmd === "block"', 'subcmd === "unblock"', 'subcmd === "sign"', 'subcmd === "merge"']) {
       expect(src).toContain(sub);
     }
     expect(src).toContain("setTaskDep"); // kobo-134: dep add/rm — edit parentIds post-create
@@ -121,6 +121,20 @@ describe("task command plugin standalone boundary", () => {
     expect(src).toContain("self-review banned"); // loud refuse, not a silent downgrade
     expect(src).toContain("no independent reviewer"); // visibility when the chain falls to human
     expect(src).toContain('"--reviewer"'); // add accepts a persistent per-card reviewer
+    // Cell v2 foundation: producer evidence/readiness, cross-cell reviewer routing,
+    // reopen, and explicit external-wait are first-class CLI verbs, not hidden state
+    // mutations. Pin strings here because the plugin coverage gate requires this
+    // boundary test to reflect every behavior-affecting task plugin touch.
+    expect(src).toContain("addTaskEvidence");
+    expect(src).toContain("markReadyForExternalReview");
+    expect(src).toContain("isReadyForExternalReview");
+    expect(src).toContain("externalWaitTask");
+    expect(src).toContain("reopenTask");
+    expect(src).toContain('"--reviewer-cell": String');
+    expect(src).toContain("reviewerCellId");
+    expect(src).toContain('"--trigger": String');
+    expect(src).toContain("task not found or missing producer evidence");
+    expect(src).toContain("❓ need-answer"); // repeated reject output reflects actual state
     // kobo-327: merge-gate — the 2-sign anti-race funnel enforced in software.
     expect(src).toContain("signTask"); // sign verb: record a crew/head gate sign (idempotent, who+ts)
     expect(src).toContain("missingSignTiers"); // merge refuses until every required tier is signed

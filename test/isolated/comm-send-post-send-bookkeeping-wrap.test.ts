@@ -25,35 +25,24 @@
  * logMessageCalls staying empty (the line right after the throw never
  * runs) in both the positive and negative-control runs.
  *
- * The pre-fix snapshot is generated at test time from an immutable git ref
- * (never from a moving branch tip) and written next to comm-send.ts so its
- * relative imports resolve identically and pick up the same mock.module
- * intercepts; it is deleted again in afterAll and is never staged/committed.
+ * The pre-fix snapshot (src/commands/shared/comm-send.pre-1813-fix.snapshot.ts)
+ * is a checked-in, byte-exact copy of comm-send.ts as of origin/alpha's tip
+ * immediately before this patch (commit 32553051), taken via
+ * `git show 32553051:src/commands/shared/comm-send.ts`. It lives next to
+ * comm-send.ts so its relative imports resolve identically and pick up the
+ * same mock.module intercepts below. It is NOT generated at test time:
+ * CI runners use a shallow checkout (fetch-depth default, no history beyond
+ * the PR head), so `git show <old-oid>` fails there with "path exists on
+ * disk, but not in <oid>" — a real failure hit and fixed while writing this
+ * test, not a hypothetical. A static, committed fixture has no such
+ * dependency on checkout depth.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { execSync } from "child_process";
-import { existsSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { pathToFileURL } from "url";
 
 const srcRoot = join(import.meta.dir, "../..");
-
-// origin/alpha tip immediately before the kobo-1813 fix (verified ancestor of
-// this branch, verified byte-identical for the target lines at fix time).
-// Pinned to a commit, not a branch ref, so this stays the "without the wrap"
-// source forever, regardless of what lands on alpha afterward.
-const BASE_OID = "3255305108688ab5fe1297d880975f0cc1676daa";
 const snapshotPath = join(srcRoot, "src/commands/shared/comm-send.pre-1813-fix.snapshot.ts");
-
-function removeSnapshot() {
-  if (existsSync(snapshotPath)) unlinkSync(snapshotPath);
-}
-
-removeSnapshot(); // clear any leftover from a previously killed run before writing a fresh one
-writeFileSync(
-  snapshotPath,
-  execSync(`git show ${BASE_OID}:src/commands/shared/comm-send.ts`, { cwd: srcRoot, encoding: "utf-8" }),
-);
 
 type Session = { name: string; windows: Array<{ index: number; name: string; active: boolean }> };
 type ResolvedTarget =
@@ -201,7 +190,6 @@ afterAll(() => {
   console.error = origErr;
   console.log = origLog;
   (process as unknown as { exit: typeof origExit }).exit = origExit;
-  removeSnapshot();
 });
 
 describe("kobo-1813 — post-send bookkeeping wrap (local-delivery branch)", () => {

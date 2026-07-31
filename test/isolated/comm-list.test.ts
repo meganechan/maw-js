@@ -998,19 +998,23 @@ describe("cmdSend — local target (happy path + error branches)", () => {
     expect(logMessageCalls[0].route).toBe("local");
   });
 
-  test("config.node missing but local delivery needed → throws (caught by harness)", async () => {
+  // kobo-1813: previously asserted the bug itself — a post-send throw
+  // escaping cmdSend after tmux send had already succeeded. The post-send
+  // bookkeeping tail is now wrapped in one try/catch (see
+  // test/isolated/comm-send-post-send-bookkeeping-wrap.test.ts for the
+  // positive/negative-control pair proving the wrap causes this difference);
+  // the fault is reported via console.error, not thrown, and no longer
+  // escapes cmdSend.
+  test("config.node missing after local delivery is caught and reported, not thrown", async () => {
     configOverride = {}; // no node
     resolveTargetReturn = { type: "local", target: "08-mawjs:0" };
     getPaneCommandMap = { "08-mawjs:0": "claude" };
 
-    let caught: unknown;
-    try {
-      await cmdSend("white:mawjs", "ping");
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught).toBeInstanceOf(Error);
-    expect((caught as Error).message).toContain("config.node is required");
+    await run(() => cmdSend("white:mawjs", "ping"));
+
+    expect(exitCode).toBeUndefined();
+    expect(sendKeysCalls).toEqual([{ target: "08-mawjs:0", text: "[local:test-oracle] ping" }]);
+    expect(errs.join("\n")).toContain("config.node is required");
   });
 
   test("pane resolution routes through resolveOraclePane (multi-pane → .N appended)", async () => {

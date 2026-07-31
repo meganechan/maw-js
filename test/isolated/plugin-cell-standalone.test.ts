@@ -47,6 +47,8 @@ describe("cell command plugin standalone boundary", () => {
     expect(spawnSrc).toContain('tmux set-option -p -t ${shellArg(head)} @role ${shellArg("👤 head")}');
     expect(spawnSrc).toContain("tmux new-window");
     expect(spawnSrc).toContain("split-window -h -p 50 -t ${shellArg(worker.paneId)}");
+    expect(spawnSrc).toContain('tmux set-option -p -t ${shellArg(worker.paneId)} @idle_notify_pane ${shellArg(reviewer)}');
+    expect(spawnSrc).toContain('tmux set-option -p -t ${shellArg(reviewer)} @idle_notify_pane ${shellArg(worker.paneId)}');
     expect(spawnSrc).toContain('CREW_STATE_DIR=${shellArg(stateDir)}');
     expect(spawnSrc).toContain('emit(`✓ cell spawned — head=${head} worker=${worker.paneId} (${worker.model}) reviewer=${reviewer}`)');
   });

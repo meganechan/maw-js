@@ -239,9 +239,11 @@ describe("crew-skills global asset contract", () => {
   // skill removal — the skill file is gone, the runtime survival path is not.
   test("head + crew ship; /warroom and /worker are fully removed (kobo-303/317 cutover)", () => {
     expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/SKILL.md")).toBeDefined();
+    expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/contracts/head.md")).toBeDefined();
     expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/contracts/worker.md")).toBeDefined();
     expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/contracts/reviewer.md")).toBeDefined();
     expect(existsSync(join(assetsDir, "skills/cell/SKILL.md"))).toBe(true);
+    expect(existsSync(join(assetsDir, "skills/cell/contracts/head.md"))).toBe(true);
     expect(SYNC_ITEMS.find((i) => i.dest === "skills/head/SKILL.md")).toBeDefined();
     expect(SYNC_ITEMS.find((i) => i.dest === "skills/crew/SKILL.md")).toBeDefined();
     // /warroom hard-removed: no sync item, no asset file
@@ -260,6 +262,8 @@ describe("crew-skills global asset contract", () => {
     expect(skill).toContain("maw company cell spawn <company>");
     expect(skill).toContain("maw company cell self-spawn <company>");
     expect(skill).toContain("This is NOT a caller-local split and NOT the older `/crew` 4-pane cell");
+    expect(skill).toContain("After that, the head pane should be a live Claude process, not a shell");
+    expect(readFileSync(join(assetsDir, "skills/cell/contracts/head.md"), "utf8")).toContain("You are the head pane");
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/worker.md"), "utf8")).toContain("Do not review your own work");
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/reviewer.md"), "utf8")).toContain("Do not implement fixes yourself");
   });

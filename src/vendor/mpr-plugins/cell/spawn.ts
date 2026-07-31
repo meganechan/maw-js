@@ -21,8 +21,9 @@ import { teardownCrewWindows } from "../crew/teardown";
 import { BRAIN_MODEL, DEFAULT_WORKER_MODEL, FALLBACK_WORKER_MODEL } from "../crew/spawn";
 
 const CELL_WORKERS_WINDOW = "cell-workers";
-const STATE_FILES = ["head.md", "worker.md", "reviewer.md", "worker-contract.md", "reviewer-contract.md"];
-type Role = "worker" | "reviewer";
+const DEFAULT_STATE_DIR = "ψ/active/cell";
+const STATE_FILES = ["head.md", "worker.md", "reviewer.md", "head-contract.md", "worker-contract.md", "reviewer-contract.md"];
+type Role = "head" | "worker" | "reviewer";
 
 function shellArg(s: string): string { return `'${s.replace(/'/g, "'\\''")}'`; }
 function sleep(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -116,6 +117,21 @@ async function injectCommand(target: string, command: string): Promise<void> {
   await hostExec(`tmux send-keys -t ${shellArg(target)} Enter`);
 }
 
+function headLaunchCommand(company: string, stateDir = DEFAULT_STATE_DIR): string {
+  const settingsPath = join(resolveHome(), ".claude", "crew-worker-settings.json");
+  return [
+    `MAW_ROOM_COMPANY=${shellArg(company)}`,
+    "CREW_ROLE=head",
+    'CREW_COORD_PANE="$TMUX_PANE"',
+    `CREW_STATE_DIR=${shellArg(stateDir)}`,
+    "exec claude",
+    `--model ${BRAIN_MODEL}`,
+    `--settings ${shellArg(settingsPath)}`,
+    "--dangerously-skip-permissions",
+    `--append-system-prompt "$(cat ${shellArg(join(stateDir, "head-contract.md"))})"`,
+  ].join(" ");
+}
+
 export interface CellSpawnResult {
   ok: boolean;
   error?: string;
@@ -163,7 +179,7 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
     const injectTarget = findRolePane(panes, "👤") ?? resolved;
     log(`${member.oracle}: cell incomplete/asleep — repairing (maw company cell self-spawn)`);
     try {
-      await injectCommand(injectTarget, `maw company cell self-spawn ${company}`);
+      await injectCommand(injectTarget, `maw company cell self-spawn ${company} && ${headLaunchCommand(company)}`);
       repaired++;
     } catch (e: any) {
       log(`⚠ ${member.oracle}: repair injection failed (${e.message})`);
@@ -182,7 +198,7 @@ export async function cellSelfSpawn(company: string | undefined, emit: (line: st
   const head = (process.env.TMUX_PANE || "").trim();
   if (!head) return { ok: false, error: "not inside a tmux pane (TMUX_PANE unset) — self-spawn must run inside the target oracle pane" };
 
-  for (const role of ["worker", "reviewer"] as Role[]) {
+  for (const role of ["head", "worker", "reviewer"] as Role[]) {
     if (!existsSync(contractAssetPath(role))) return { ok: false, error: `contract asset missing: ${contractAssetPath(role)} — run maw crew-skills sync first` };
   }
 
@@ -194,11 +210,12 @@ export async function cellSelfSpawn(company: string | undefined, emit: (line: st
   const scope = scopeOfOracle(oracle);
   const dept = scope?.dept ?? "";
   const board = company;
-  const stateDir = process.env.CREW_STATE_DIR || "ψ/active/cell";
+  const stateDir = process.env.CREW_STATE_DIR || DEFAULT_STATE_DIR;
   mkdirSync(stateDir, { recursive: true });
   for (const f of STATE_FILES) { try { rmSync(join(stateDir, f)); } catch { /* absent */ } }
 
   await hostExec(`tmux set-option -p -t ${shellArg(head)} @role ${shellArg("👤 head")}`);
+  writeFileSync(join(stateDir, "head-contract.md"), renderContract("head", { company, dept, board }));
   writeFileSync(join(stateDir, "worker-contract.md"), renderContract("worker", { company, dept, board }));
   writeFileSync(join(stateDir, "reviewer-contract.md"), renderContract("reviewer", { company, dept, board }));
   writeFileSync(join(stateDir, "head.md"), `# Head\n\ncompany=${company}\nstate-dir=${stateDir}\nactive-card=none\n`);

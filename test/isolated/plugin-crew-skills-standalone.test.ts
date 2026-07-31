@@ -252,12 +252,14 @@ describe("crew-skills global asset contract", () => {
     expect(existsSync(join(assetsDir, "skills/worker/SKILL.md"))).toBe(false);
   });
 
-  test("/cell skill is the simple Cell v2 trigger and points to the deterministic binary spawn", () => {
+  test("/cell skill is the oracle-based Cell v2 trigger and points to the deterministic binary spawn", () => {
     const skill = readFileSync(join(assetsDir, "skills/cell/SKILL.md"), "utf8");
     expect(skill).toContain("name: cell");
-    expect(skill).toContain("2 tmux windows, 3 panes");
+    expect(skill).toContain("head + reviewer|worker");
+    expect(skill).toContain("wakes every oracle in the company roster");
     expect(skill).toContain("maw company cell spawn <company>");
-    expect(skill).toContain("This is NOT the older `/head` strategic tier and NOT the older `/crew` 4-pane cell");
+    expect(skill).toContain("maw company cell self-spawn <company>");
+    expect(skill).toContain("This is NOT a caller-local split and NOT the older `/crew` 4-pane cell");
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/worker.md"), "utf8")).toContain("Do not review your own work");
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/reviewer.md"), "utf8")).toContain("Do not implement fixes yourself");
   });

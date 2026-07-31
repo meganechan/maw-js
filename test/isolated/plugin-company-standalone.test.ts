@@ -103,7 +103,7 @@ describe("company command plugin standalone boundary", () => {
     expect(indexSrc).toContain("|head|"); // usage string mentions the new verb
   });
 
-  test("company dispatches `cell` to the simple Cell v2 spawn runner", () => {
+  test("company dispatches `cell` to the oracle-based Cell v2 spawn runner", () => {
     const indexSrc = readFileSync(
       join(import.meta.dir, "../../src/vendor/mpr-plugins/company/index.ts"),
       "utf8",

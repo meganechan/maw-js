@@ -21,21 +21,28 @@ describe("cell command plugin standalone boundary", () => {
     expect(pluginSrc).toContain('"exports": ["runCell"]');
   });
 
-  test("index.ts exports runCell(args, emit) and dispatches spawn", () => {
+  test("index.ts exports runCell(args, emit), public spawn, and hidden self-spawn", () => {
     const indexSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/cell/index.ts"), "utf8");
     expect(indexSrc).toContain("export async function runCell");
     expect(indexSrc).toContain('subcmd === "spawn"');
-    expect(indexSrc).toContain("cellSpawn");
+    expect(indexSrc).toContain('subcmd === "self-spawn"');
+    expect(indexSrc).toContain("companyCellSpawn");
+    expect(indexSrc).toContain("cellSelfSpawn");
   });
 
-  test("spawn.ts implements the requested 2-window/3-pane Cell v2 shape", () => {
+  test("spawn.ts implements company/oracle Cell v2: wake roster, then local head|reviewer/worker", () => {
     const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/cell/spawn.ts"), "utf8");
     expect(spawnSrc).toContain('CELL_WORKERS_WINDOW = "cell-workers"');
-    expect(spawnSrc).toContain('tmux set-option -p -t ${shellArg(main)} @role ${shellArg("🧭 main")}');
+    expect(spawnSrc).toContain("cmdWake");
+    expect(spawnSrc).toContain("listSessions");
+    expect(spawnSrc).toContain("findWindow");
+    expect(spawnSrc).toContain("companyRoster");
+    expect(spawnSrc).toContain("maw company cell self-spawn");
+    expect(spawnSrc).toContain('tmux set-option -p -t ${shellArg(head)} @role ${shellArg("👤 head")}');
     expect(spawnSrc).toContain("tmux new-window");
     expect(spawnSrc).toContain("split-window -h -p 50 -t ${shellArg(worker.paneId)}");
     expect(spawnSrc).toContain('CREW_STATE_DIR=${shellArg(stateDir)}');
-    expect(spawnSrc).toContain('emit(`✓ cell spawned — main=${main} worker=${worker.paneId} (${worker.model}) reviewer=${reviewer}`)');
+    expect(spawnSrc).toContain('emit(`✓ cell spawned — head=${head} worker=${worker.paneId} (${worker.model}) reviewer=${reviewer}`)');
   });
 
   test("company/index.ts wires `cell` to runCell", () => {

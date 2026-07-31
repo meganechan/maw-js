@@ -1,33 +1,33 @@
 ---
 name: cell
-description: Spawn a Cell v2 work cell: 2 tmux windows, 3 panes — main + review|worker. Use when user says /cell, "สร้าง cell", or wants a one-card execution cell.
+description: Spawn Cell v2 for a company roster: each oracle gets head + reviewer|worker tmux panes. Use when user says /cell, "สร้าง cell", or wants oracle-based cells.
 ---
 
-# /cell — Cell v2: main + review|worker
+# /cell — Cell v2: head + reviewer|worker
 
-Use this when Tony asks for “cell”, “สร้าง cell”, “กดสร้าง cell”, or an oracle needs the simple Cell v2 shape.
+Use this when Tony asks for “cell”, “สร้าง cell”, “กดสร้าง cell”, or an oracle/company needs the simple Cell v2 shape.
 
 ## What this creates
 
-One oracle session with exactly the Cell v2 operating shape:
+`maw company cell spawn <company>` is company/oracle based. It wakes every oracle in the company roster and repairs each oracle's tmux session to this shape:
 
 ```text
-Window/Page 1: main
+Window/Page 1: head
   - talks to human
   - owns routing/reporting
   - keeps only one active card in the cell
 
-Window/Page 2: review | worker
+Window/Page 2: reviewer | worker
   - worker executes only
   - reviewer reviews only
   - worker and reviewer are separate panes
 ```
 
-This is NOT the older `/head` strategic tier and NOT the older `/crew` 4-pane cell.
+This is NOT a caller-local split and NOT the older `/crew` 4-pane cell.
 
 ## Run
 
-From the pane that should become `main`:
+From any controlling pane:
 
 ```bash
 maw company cell spawn <company>
@@ -39,16 +39,24 @@ Example:
 maw company cell spawn kobo
 ```
 
-The binary verb is the source of truth for tmux layout. Do not hand-compose tmux split commands unless the verb fails.
+The public spawn verb controls the company fleet: wake missing oracle sessions, locate each oracle session, then inject the local self-spawn into that oracle's pane so tmux layout is created in the correct place.
+
+The hidden internal verb is:
+
+```bash
+maw company cell self-spawn <company>
+```
+
+Do not run `self-spawn` by hand unless debugging a single target pane.
 
 ## Cell rules
 
-1. One active card per cell.
-2. Main assigns the card to worker.
+1. One active card per oracle cell.
+2. Head assigns the card to worker.
 3. Worker executes and records evidence.
 4. Worker sends to reviewer.
-5. Reviewer either accepts back to main or rejects to worker on the same card.
-6. Main starts the next card only after review passes and handoff is complete.
+5. Reviewer either accepts back to head or rejects to worker on the same card.
+6. Head starts the next card only after review passes and handoff is complete.
 
 ## Evidence commands
 
@@ -61,10 +69,16 @@ maw company task reopen <id>
 
 ## Completion signal
 
-Spawn is complete only when the command prints:
+Public company spawn is complete when the command prints:
 
 ```text
-✓ cell spawned — main=<pane> worker=<pane> (<model>) reviewer=<pane>
+✓ cell spawn <company>: <ready> ready, <repaired> repaired, <refused> refused/failed (<N> oracles)
+```
+
+Each target pane's local self-spawn prints:
+
+```text
+✓ cell spawned — head=<pane> worker=<pane> (<model>) reviewer=<pane>
 ```
 
 If it reports a missing contract asset, run:

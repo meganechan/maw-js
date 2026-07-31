@@ -103,6 +103,17 @@ describe("company command plugin standalone boundary", () => {
     expect(indexSrc).toContain("|head|"); // usage string mentions the new verb
   });
 
+  test("company dispatches `cell` to the simple Cell v2 spawn runner", () => {
+    const indexSrc = readFileSync(
+      join(import.meta.dir, "../../src/vendor/mpr-plugins/company/index.ts"),
+      "utf8",
+    );
+    expect(indexSrc).toContain('from "../cell/index"');
+    expect(indexSrc).toContain("runCell");
+    expect(indexSrc).toContain('=== "cell"');
+    expect(indexSrc).toContain("|cell|");
+  });
+
   // kobo-362: `maw company up/down <co>` — fleet wake+teardown for a whole
   // company, same sibling-plugin delegation pattern as crew above.
   test("company dispatches `up`/`down` to company-fleet (kobo-362)", () => {

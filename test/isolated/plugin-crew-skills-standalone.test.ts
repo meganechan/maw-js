@@ -238,6 +238,10 @@ describe("crew-skills global asset contract", () => {
   // warroom-dir AND worker-dir support (asserted above) so any still-running pane survives the
   // skill removal — the skill file is gone, the runtime survival path is not.
   test("head + crew ship; /warroom and /worker are fully removed (kobo-303/317 cutover)", () => {
+    expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/SKILL.md")).toBeDefined();
+    expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/contracts/worker.md")).toBeDefined();
+    expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/contracts/reviewer.md")).toBeDefined();
+    expect(existsSync(join(assetsDir, "skills/cell/SKILL.md"))).toBe(true);
     expect(SYNC_ITEMS.find((i) => i.dest === "skills/head/SKILL.md")).toBeDefined();
     expect(SYNC_ITEMS.find((i) => i.dest === "skills/crew/SKILL.md")).toBeDefined();
     // /warroom hard-removed: no sync item, no asset file
@@ -246,6 +250,16 @@ describe("crew-skills global asset contract", () => {
     // kobo-317 — /worker hard-removed: no sync item, no asset file
     expect(SYNC_ITEMS.find((i) => i.dest === "skills/worker/SKILL.md")).toBeUndefined();
     expect(existsSync(join(assetsDir, "skills/worker/SKILL.md"))).toBe(false);
+  });
+
+  test("/cell skill is the simple Cell v2 trigger and points to the deterministic binary spawn", () => {
+    const skill = readFileSync(join(assetsDir, "skills/cell/SKILL.md"), "utf8");
+    expect(skill).toContain("name: cell");
+    expect(skill).toContain("2 tmux windows, 3 panes");
+    expect(skill).toContain("maw company cell spawn <company>");
+    expect(skill).toContain("This is NOT the older `/head` strategic tier and NOT the older `/crew` 4-pane cell");
+    expect(readFileSync(join(assetsDir, "skills/cell/contracts/worker.md"), "utf8")).toContain("Do not review your own work");
+    expect(readFileSync(join(assetsDir, "skills/cell/contracts/reviewer.md"), "utf8")).toContain("Do not implement fixes yourself");
   });
 
   // kobo-574 — the comm pane's split direction was wrong TWICE before landing right

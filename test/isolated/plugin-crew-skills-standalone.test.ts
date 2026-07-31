@@ -270,7 +270,8 @@ describe("crew-skills global asset contract", () => {
     expect(skill).toContain("maw company cell self-spawn <company>");
     expect(skill).toContain("This is NOT a caller-local split and NOT the older `/crew` 4-pane cell");
     expect(skill).toContain("After that, the head pane should be a live Claude process, not a shell");
-    expect(readFileSync(join(assetsDir, "skills/cell/contracts/head.md"), "utf8")).toContain("You are the head pane");
+    expect(readFileSync(join(assetsDir, "skills/cell/contracts/head.md"), "utf8")).toContain("spawn/supervise a background implementation agent");
+    expect(readFileSync(join(assetsDir, "skills/cell/contracts/worker.md"), "utf8")).toContain("Act as execution supervisor by default");
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/worker.md"), "utf8")).toContain("Do not review your own work");
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/reviewer.md"), "utf8")).toContain("Do not implement fixes yourself");
   });

@@ -58,23 +58,20 @@ describe("company command plugin standalone boundary", () => {
     expect(indexSrc).toContain('sub === "hooks"');      // re-homed status/repair/prune verb
   });
 
-  // cli-reorg (ADR docs/company/0001): `maw company home|worklog|task` delegate to
-  // their plugins' shared runners (one logic copy each). Sibling-plugin imports,
-  // dispatched like the async `attach` verb.
-  test("company dispatches `home`, `worklog` and `task` to their plugins' shared runners", () => {
+  test("company keeps home/worklog delegation but no longer exposes the removed task surface", () => {
     const indexSrc = readFileSync(
       join(import.meta.dir, "../../src/vendor/mpr-plugins/company/index.ts"),
       "utf8",
     );
-    expect(indexSrc).toContain('from "../home/index"'); // sibling-plugin delegation
+    expect(indexSrc).toContain('from "../home/index"');
     expect(indexSrc).toContain("runHome");
     expect(indexSrc).toContain('=== "home"');
     expect(indexSrc).toContain('from "../watch/index"');
     expect(indexSrc).toContain("runWorklog");
     expect(indexSrc).toContain('=== "worklog"');
-    expect(indexSrc).toContain('from "../task/index"');
-    expect(indexSrc).toContain("runTask");
-    expect(indexSrc).toContain('=== "task"');
+    expect(indexSrc).not.toContain('from "../task/index"');
+    expect(indexSrc).not.toContain("runTask");
+    expect(indexSrc).not.toContain('=== "task"');
   });
 
   // kobo-358: `maw company crew spawn <co>` — deterministic idempotent crew-cell

@@ -22,7 +22,6 @@ import {
 // imports (not core/* reaches), so outside the boundary guard.
 import { runHome } from "../home/index";
 import { runWorklog } from "../watch/index";
-import { runTask } from "../task/index";
 import { runCrew } from "../crew/index";
 import { runHead } from "../head/index";
 import { runCell } from "../cell/index";
@@ -530,7 +529,6 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
     // cli-reorg: `maw company home|worklog|task <verb>` → the plugin's shared runner (async).
     const isHome = !asDept && args[0]?.toLowerCase() === "home";
     const isWorklog = !asDept && args[0]?.toLowerCase() === "worklog";
-    const isTask = !asDept && args[0]?.toLowerCase() === "task";
     // kobo-358: `maw company crew spawn <co>` — deterministic idempotent crew-cell spawn.
     const isCrew = !asDept && args[0]?.toLowerCase() === "crew";
     // kobo-364: `maw company head spawn <co>` — deterministic idempotent head-cell spawn.
@@ -548,9 +546,7 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
         ? (await runHome(args.slice(1), (l) => logs.push(l))).error
         : isWorklog
           ? (await runWorklog(args.slice(1), (l) => logs.push(l))).error
-          : isTask
-            ? (await runTask(args.slice(1), (l) => logs.push(l))).error
-            : isCrew
+          : isCrew
               ? (await runCrew(args.slice(1), (l) => logs.push(l))).error
               : isHead
                 ? (await runHead(args.slice(1), (l) => logs.push(l))).error

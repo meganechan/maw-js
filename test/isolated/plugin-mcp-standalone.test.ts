@@ -52,6 +52,8 @@ describe("live MCP tool registry", () => {
 
     expect(Object.keys(tools)).not.toContain("maw_task");
     expect(Object.keys(tools)).toContain("maw_hey");
+    const mapperSource = readFileSync(join(root, MCP_DIR, "tools.ts"), "utf8");
+    expect(mapperSource).not.toContain("taskArgs");
   });
 });
 

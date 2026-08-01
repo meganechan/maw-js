@@ -103,9 +103,10 @@ describe("company command plugin standalone boundary", () => {
     expect(indexSrc).toContain("|head|"); // usage string mentions the new verb
   });
 
-  // kobo-362: `maw company up/down <co>` — fleet wake+teardown for a whole
-  // company, same sibling-plugin delegation pattern as crew above.
-  test("company dispatches `up`/`down` to company-fleet (kobo-362)", () => {
+  // kobo-362/xxxx: `maw company up` and `maw company cell down <co>` — fleet
+  // wake/teardown for a whole company, same sibling-plugin delegation pattern as
+  // crew above.
+  test("company dispatches `up` and `cell down` to company-fleet (kobo-362)", () => {
     const indexSrc = readFileSync(
       join(import.meta.dir, "../../src/vendor/mpr-plugins/company/index.ts"),
       "utf8",
@@ -113,9 +114,12 @@ describe("company command plugin standalone boundary", () => {
     expect(indexSrc).toContain('from "./company-fleet"');
     expect(indexSrc).toContain("runCompanyUp");
     expect(indexSrc).toContain("runCompanyDown");
+    expect(indexSrc).toContain("runCompanyCellDown");
+    expect(indexSrc).toContain("runCompanyTeardown");
     expect(indexSrc).toContain('=== "up"');
     expect(indexSrc).toContain('=== "down"');
-    expect(indexSrc).toContain("|up|down|"); // usage string mentions the new verbs
+    expect(indexSrc).toContain('=== "cell"'); // canonical cell surface
+    expect(indexSrc).toContain('|up|cell|down|'); // usage string includes the new surface
   });
 
   // kobo-362/366: pin the design-blessed contract on the fleet module itself —

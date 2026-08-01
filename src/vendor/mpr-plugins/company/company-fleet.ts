@@ -1,5 +1,7 @@
 /**
- * `maw company up/down <company>` — fleet wake+teardown for an entire company
+ * `maw company up <company>` / `maw company cell down <company>`
+ * and legacy `maw company down <company>` — fleet wake+teardown for an entire
+ * company roster (kobo-362).
  * (kobo-362). Design-first, eq3-blessed spec:
  *
  *   - manager (company.manager, if set) → head-cell: 👤 lead + 🎼 conductor + 🔎 reviewer.
@@ -46,7 +48,8 @@
  * arriving as one fast burst is read as a paste by Claude's TUI, which
  * suppresses Enter-as-submit until the input settles. See INJECT_SETTLE_MS.
  */
-import { hostExec, listSessions, findWindow, checkBusyGuard, cmdWake, type Session } from "maw-js/sdk";
+import { hostExec, listSessions, findWindow, cmdWake, type Session } from "maw-js/sdk";
+import * as sdk from "maw-js/sdk";
 import { loadCompany, type Company } from "./company-helpers";
 import { teardownCrewWindows } from "../crew/teardown";
 
@@ -81,6 +84,20 @@ interface PaneRow {
   paneId: string;
   role: string;
 }
+
+interface BusyGuardResult {
+  busy: boolean;
+  status: string;
+  oracle: string;
+}
+
+type CheckBusyGuardFn = (target: string) => Promise<BusyGuardResult>;
+
+const DEFAULT_BUSY_GUARD: CheckBusyGuardFn = async (target: string) => ({
+  busy: false,
+  status: "unknown",
+  oracle: target,
+});
 
 async function listSessionPanes(sessionName: string, hostExecFn: typeof hostExec): Promise<PaneRow[]> {
   let raw: string;
@@ -151,7 +168,7 @@ export interface CompanyFleetDeps {
   hostExecFn?: typeof hostExec;
   listSessionsFn?: typeof listSessions;
   findWindowFn?: typeof findWindow;
-  checkBusyGuardFn?: typeof checkBusyGuard;
+  checkBusyGuardFn?: CheckBusyGuardFn;
   teardownCrewWindowsFn?: typeof teardownCrewWindows;
   cmdWakeFn?: typeof cmdWake;
   sleepFn?: (ms: number) => Promise<void>;
@@ -294,7 +311,10 @@ export async function companyDown(
   const hostExecFn = deps.hostExecFn ?? hostExec;
   const listSessionsFn = deps.listSessionsFn ?? listSessions;
   const findWindowFn = deps.findWindowFn ?? findWindow;
-  const checkBusyGuardFn = deps.checkBusyGuardFn ?? checkBusyGuard;
+  const checkBusyGuardFn = deps.checkBusyGuardFn
+    ?? ((typeof (sdk as { checkBusyGuard?: CheckBusyGuardFn }).checkBusyGuard === "function")
+      ? (sdk as { checkBusyGuard: CheckBusyGuardFn }).checkBusyGuard
+      : DEFAULT_BUSY_GUARD);
   const teardownFn = deps.teardownCrewWindowsFn ?? teardownCrewWindows;
 
   // kobo-368 compact-ack sweep: same log/tally split as companyUp — per-member
@@ -359,9 +379,25 @@ export async function companyDown(
 }
 
 /** `maw company down <company> [--force] [--verbose|--full]` CLI-arg wrapper — mirrors runCrew's (args, emit) shape. */
-export async function runCompanyDown(args: string[], emit: (line: string) => void): Promise<{ ok: boolean; error?: string }> {
+async function runCompanyDownArgv(args: string[], emit: (line: string) => void, usage: string): Promise<{ ok: boolean; error?: string }> {
   const force = args.includes("--force");
   const verbose = args.includes("--verbose") || args.includes("--full");
   const company = args.find((a) => !a.startsWith("--"));
+  if (!company) return { ok: false, error: usage };
   return companyDown(company, { force, verbose }, emit);
+}
+
+/** `maw company down <company> [--force] [--verbose|--full]` CLI-arg wrapper — legacy alias. */
+export async function runCompanyDown(args: string[], emit: (line: string) => void): Promise<{ ok: boolean; error?: string }> {
+  return runCompanyDownArgv(args, emit, "usage: maw company down <company> [--force] [--verbose|--full]");
+}
+
+/** `maw company cell down <company> [--force] [--verbose|--full]` — canonical cell-v2 surface. */
+export async function runCompanyCellDown(args: string[], emit: (line: string) => void): Promise<{ ok: boolean; error?: string }> {
+  return runCompanyDownArgv(args, emit, "usage: maw company cell down <company> [--force] [--verbose|--full]");
+}
+
+/** `maw company cell teardown ...` — alias of `cell down` kept explicitly. */
+export async function runCompanyTeardown(args: string[], emit: (line: string) => void): Promise<{ ok: boolean; error?: string }> {
+  return runCompanyDownArgv(args, emit, "usage: maw company cell teardown <company> [--force] [--verbose|--full]");
 }

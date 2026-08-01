@@ -176,12 +176,12 @@ describe("crewSpawn (kobo-358)", () => {
     expect(commands.some(c => c.includes("tmux"))).toBe(false);
   });
 
-  test("default worker model is the literal claude-sonnet-5 (kobo-358 Tony directive — no normalization)", () => {
-    expect(DEFAULT_WORKER_MODEL).toBe("claude-sonnet-5");
-    expect(FALLBACK_WORKER_MODEL).toBe("sonnet");
+  test("default worker model is the literal claude-opus-5 (kobo-358 Opus pin)", () => {
+    expect(DEFAULT_WORKER_MODEL).toBe("claude-opus-5");
+    expect(FALLBACK_WORKER_MODEL).toBe("claude-opus-5");
   });
 
-  test("happy path: boots claude-sonnet-5 on first try, no fallback fires", async () => {
+  test("happy path: boots claude-opus-5 on first try, no fallback fires", async () => {
     paneListForSession = "%front|||🧭 coord|||main\n";
     bootTranscript = {}; // filled lazily by new-window handler; pre-seed after first spawn is tricky, so poll via queued lines keyed post-hoc
     // Seed a queue for the FIRST allocated worker pane id (%w1, since nextPane starts at 1 and
@@ -193,7 +193,7 @@ describe("crewSpawn (kobo-358)", () => {
     const newWindowCalls = commands.filter(c => c.includes("tmux new-window"));
     expect(newWindowCalls.length).toBe(1);
     expect(newWindowCalls[0]).toContain("--model");
-    expect(newWindowCalls[0]).toContain("claude-sonnet-5");
+    expect(newWindowCalls[0]).toContain("claude-opus-5");
     expect(commands.some(c => c.includes("kill-window"))).toBe(false);
   });
 
@@ -221,7 +221,7 @@ describe("crewSpawn (kobo-358)", () => {
     expect(typeof r.conductor).toBe("string");
     expect(r.conductor).not.toBe("");
     expect(r.worker).toBe("%w1");
-    expect(r.workerModel).toBe("claude-sonnet-5");
+    expect(r.workerModel).toBe("claude-opus-5");
     expect(typeof r.reviewer).toBe("string");
     expect(r.reviewer).not.toBe("");
   });
@@ -268,18 +268,18 @@ describe("crewSpawn (kobo-358)", () => {
     expect(splitCalls[1]).not.toContain("split-window -h -t '%front'");
   });
 
-  test("boot-fail → kills orphan window, retries with plain sonnet, poll-verifies retry", async () => {
+  test("boot-fail → kills orphan window, retries with Opus, poll-verifies retry", async () => {
     paneListForSession = "%front|||🧭 coord|||main\n";
-    bootTranscript["%w1"] = ["not available for your account"]; // first (sonnet-5) attempt fails fast
-    bootTranscript["%w2"] = ["", "claude code — bypass permissions on"]; // retry (plain sonnet) succeeds
+    bootTranscript["%w1"] = ["not available for your account"]; // first Opus attempt fails fast
+    bootTranscript["%w2"] = ["", "claude code — bypass permissions on"]; // retry Opus succeeds
     const r = await crewSpawn("kobo", emit);
     expect(r.ok).toBe(true);
     const newWindowCalls = commands.filter(c => c.includes("tmux new-window"));
     expect(newWindowCalls.length).toBe(2);
-    expect(newWindowCalls[0]).toContain("claude-sonnet-5");
+    expect(newWindowCalls[0]).toContain("claude-opus-5");
     expect(newWindowCalls[1]).toContain("--model");
-    expect(newWindowCalls[1]).not.toContain("claude-sonnet-5");
-    expect(newWindowCalls[1]).toContain("sonnet");
+    expect(newWindowCalls[1]).toContain("claude-opus-5");
+    expect(newWindowCalls[1]).not.toContain("sonnet");
     expect(commands.some(c => c.includes("kill-window -t '%w1'"))).toBe(true);
   });
 

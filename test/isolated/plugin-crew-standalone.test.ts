@@ -34,10 +34,10 @@ describe("crew command plugin standalone boundary", () => {
     expect(indexSrc).toContain("crewSpawn");
   });
 
-  test("spawn.ts: worker defaults to the literal claude-sonnet-5 (kobo-358 Tony directive — not normalized)", () => {
+  test("spawn.ts: worker defaults to the literal claude-opus-5 (kobo-358 Opus pin)", () => {
     const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/crew/spawn.ts"), "utf8");
-    expect(spawnSrc).toContain('DEFAULT_WORKER_MODEL = "claude-sonnet-5"');
-    expect(spawnSrc).toContain('FALLBACK_WORKER_MODEL = "sonnet"');
+    expect(spawnSrc).toContain('DEFAULT_WORKER_MODEL = "claude-opus-5"');
+    expect(spawnSrc).toContain("FALLBACK_WORKER_MODEL = DEFAULT_WORKER_MODEL");
   });
 
   test("spawn.ts: self-heal poll-verify + kill-orphan-then-retry present (ported from kobo-352)", () => {
@@ -79,9 +79,9 @@ describe("crew command plugin standalone boundary", () => {
     expect(spawnSrc).toContain('claude --model ${BRAIN_MODEL} --dangerously-skip-permissions --append-system-prompt "$(cat ${shellArg(join(stateDir, "conductor-contract.md"))})"');
     expect(spawnSrc).toContain('claude --model ${BRAIN_MODEL} --settings ${shellArg(settingsPath)} --dangerously-skip-permissions --append-system-prompt "$(cat ${shellArg(join(stateDir, "reviewer-contract.md"))})"');
     expect(spawnSrc).toContain("claude --model ${shellArg(model)} --settings"); // worker: parameterized self-heal, unchanged
-    // AC: the literal string appears ONLY at the const definition, nowhere else in src/
+    // AC: Opus appears exactly at DEFAULT_WORKER_MODEL and BRAIN_MODEL in this file.
     const literalHits = (spawnSrc.match(/claude-opus-5/g) || []).length;
-    expect(literalHits).toBe(1);
+    expect(literalHits).toBe(2);
   });
 
   test("teardown.ts: session-scoped (list-panes -s), never server-wide -a — protects other oracles' live crew cells", () => {

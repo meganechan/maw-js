@@ -1,5 +1,5 @@
 /**
- * `maw company up/down <company>` — behavior tests (kobo-362). Dependency
+ * `maw company up / cell down <company>` — behavior tests (kobo-362). Dependency
  * injection (not mock.module) — mirrors room-client.ts's DI-deps style, no
  * global module mocking needed.
  */
@@ -7,7 +7,15 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { companyUp, companyDown, runCompanyUp, runCompanyDown, type CompanyFleetDeps } from "./company-fleet";
+import {
+  companyDown,
+  companyUp,
+  runCompanyCellDown,
+  runCompanyDown,
+  runCompanyTeardown,
+  runCompanyUp,
+  type CompanyFleetDeps,
+} from "./company-fleet";
 import { _setCompaniesDir, saveCompany, COMPANIES_DIR } from "./company-helpers";
 import type { Session } from "maw-js/sdk";
 import { teardownCrewWindows, type TeardownResult } from "../crew/teardown";
@@ -454,6 +462,23 @@ describe("companyDown (kobo-362)", () => {
     const r2 = await runCompanyDown(["--force", "kobo"], () => {});
     expect(r1.ok).toBe(true);
     expect(r2.ok).toBe(true);
+  });
+
+  test("runCompanyCellDown CLI-arg wrapper parses --force/company positional and emits the cell usage when missing", async () => {
+    saveCompany({ name: "kobo", teams: {} });
+    const r1 = await runCompanyCellDown(["kobo", "--force"], () => {});
+    const r2 = await runCompanyCellDown(["--force", "kobo"], () => {});
+    const rUsage = await runCompanyCellDown(["--force"], () => {});
+    expect(r1.ok).toBe(true);
+    expect(r2.ok).toBe(true);
+    expect(rUsage.ok).toBe(false);
+    expect(rUsage.error).toContain("usage: maw company cell down <company> [--force] [--verbose|--full]");
+  });
+
+  test("runCompanyTeardown alias routes to cell down semantics", async () => {
+    saveCompany({ name: "kobo", teams: {} });
+    const r = await runCompanyTeardown(["kobo"], () => {});
+    expect(r.ok).toBe(true);
   });
 
   // kobo-368 compact-ack sweep

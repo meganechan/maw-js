@@ -21,12 +21,11 @@ import { loadCompany } from "../company/company-helpers";
 import { scopeOfOracle } from "../../../core/worklog/company-scope";
 import { teardownCrewWindows } from "./teardown";
 
-// kobo-358 Tony directive (post-cutoff model, DO NOT normalize/correct to a
-// pre-cutoff string): default the worker to claude-sonnet-5 verbatim. Self-heal
-// (ported from kobo-352) makes the exact string non-critical — an unavailable
-// model degrades to plain `sonnet`, never a hard-fail/deadlock.
-export const DEFAULT_WORKER_MODEL = "claude-sonnet-5";
-export const FALLBACK_WORKER_MODEL = "sonnet";
+// Cell worker model is Opus-first and stays Opus on fallback too. Previous
+// fallback-to-sonnet behavior was useful for old experiments, but this crew-cell
+// contract now pins Opus in both primary and fallback attempts.
+export const DEFAULT_WORKER_MODEL = "claude-opus-5";
+export const FALLBACK_WORKER_MODEL = DEFAULT_WORKER_MODEL;
 // kobo-389: single source for the brain tier (conductor/reviewer, both crew and head) —
 // the literal id, not the `opus` alias (kobo-382: `opus` resolves to Opus 4.8, not 5).
 // head/spawn.ts imports this rather than duplicating the string a 3rd/4th time.

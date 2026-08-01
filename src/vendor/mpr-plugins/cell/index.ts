@@ -7,7 +7,7 @@
  * shape to `head | reviewer/worker`. `self-spawn` is an internal injected verb
  * that runs inside a target oracle pane and owns only that local tmux layout.
  */
-import { companyCellSpawn, cellSelfSpawn, type CellSpawnResult } from "./spawn";
+import { companyCellDown, companyCellSpawn, cellSelfSpawn, parseCellCompanyArg, type CellSpawnResult } from "./spawn";
 
 export async function runCell(
   args: string[],
@@ -17,12 +17,16 @@ export async function runCell(
   const verbose = args.includes("--verbose") || args.includes("--full");
 
   if (subcmd === "spawn") {
-    return await companyCellSpawn(args.find((a, i) => i > 0 && !a.startsWith("--")), emit, verbose);
+    return await companyCellSpawn(parseCellCompanyArg(args), emit, verbose);
+  }
+
+  if (subcmd === "down" || subcmd === "teardown") {
+    return await companyCellDown(parseCellCompanyArg(args), { force: args.includes("--force"), verbose }, emit);
   }
 
   if (subcmd === "self-spawn") {
-    return await cellSelfSpawn(args.find((a, i) => i > 0 && !a.startsWith("--")), emit);
+    return await cellSelfSpawn(parseCellCompanyArg(args), emit);
   }
 
-  return { ok: false, error: "usage: maw company cell spawn <company> [--verbose|--full]" };
+  return { ok: false, error: "usage: maw company cell <spawn|down> <company> [--force] [--verbose|--full]" };
 }

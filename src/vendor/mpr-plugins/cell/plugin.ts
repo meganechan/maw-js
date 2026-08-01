@@ -5,7 +5,7 @@ export default definePlugin({
   "version": "1.0.0",
   "entry": "./index.ts",
   "sdk": "^1.0.0",
-  "description": "Deterministic Cell v2 spawn: 2 tmux windows, 3 panes (main + review|worker). Module surface — `runCell` is invoked by `maw company cell`.",
+  "description": "Deterministic Cell v2 spawn/down: 2 tmux windows, 3 panes (head + reviewer|worker). Module surface — `runCell` is invoked by `maw company cell`.",
   "author": "meganechan:hermes",
   "module": {
     "path": "./index.ts",

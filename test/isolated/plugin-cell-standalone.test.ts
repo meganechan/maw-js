@@ -21,17 +21,20 @@ describe("cell command plugin standalone boundary", () => {
     expect(pluginSrc).toContain('"exports": ["runCell"]');
   });
 
-  test("index.ts exports runCell(args, emit), public spawn, and hidden self-spawn", () => {
+  test("index.ts exports runCell(args, emit), public spawn/down, and hidden self-spawn", () => {
     const indexSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/cell/index.ts"), "utf8");
     expect(indexSrc).toContain("export async function runCell");
     expect(indexSrc).toContain('subcmd === "spawn"');
+    expect(indexSrc).toContain('subcmd === "down" || subcmd === "teardown"');
     expect(indexSrc).toContain('subcmd === "self-spawn"');
     expect(indexSrc).toContain("companyCellSpawn");
+    expect(indexSrc).toContain("companyCellDown");
     expect(indexSrc).toContain("cellSelfSpawn");
   });
 
   test("spawn.ts implements company/oracle Cell v2: wake roster, then local head|reviewer/worker", () => {
     const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/cell/spawn.ts"), "utf8");
+    expect(spawnSrc).toContain("checkBusyGuard");
     expect(spawnSrc).toContain('CELL_WORKERS_WINDOW = "cell-workers"');
     expect(spawnSrc).toContain("cmdWake");
     expect(spawnSrc).toContain("noAttach: true");
@@ -49,6 +52,8 @@ describe("cell command plugin standalone boundary", () => {
     expect(spawnSrc).toContain('tmux rename-window -t ${shellArg(head)} ${shellArg("cell-head")}');
     expect(spawnSrc).toContain("pane-border-status top");
     expect(spawnSrc).toContain("pane-border-format");
+    expect(spawnSrc).toContain("let model = BRAIN_MODEL");
+    expect(spawnSrc).toContain("model = DEFAULT_WORKER_MODEL");
     expect(spawnSrc).toContain("tmux new-window");
     expect(spawnSrc).toContain("split-window -h -p 50 -t ${shellArg(worker.paneId)}");
     expect(spawnSrc).toContain('tmux select-pane -t ${shellArg(worker.paneId)} -T ${shellArg("⚒ worker")}');
@@ -57,6 +62,12 @@ describe("cell command plugin standalone boundary", () => {
     expect(spawnSrc).toContain('tmux set-option -p -t ${shellArg(reviewer)} @idle_notify_pane ${shellArg(head)}');
     expect(spawnSrc).toContain('CREW_STATE_DIR=${shellArg(stateDir)}');
     expect(spawnSrc).toContain('emit(`✓ cell spawned — head=${head} worker=${worker.paneId} (${worker.model}) reviewer=${reviewer}`)');
+    expect(spawnSrc).toContain("export async function companyCellDown");
+    expect(spawnSrc).toContain("usage: maw company cell down <company> [--force] [--verbose|--full]");
+    expect(spawnSrc).toContain("no cell head pane found");
+    expect(spawnSrc).toContain("BUSY — refusing cell teardown");
+    expect(spawnSrc).toContain("tmux kill-pane -t ${shellArg(pane.paneId)}");
+    expect(spawnSrc).toContain("✓ cell down");
   });
 
   test("company/index.ts wires `cell` to runCell", () => {

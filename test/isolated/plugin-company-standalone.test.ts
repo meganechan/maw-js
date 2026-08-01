@@ -72,6 +72,7 @@ describe("company command plugin standalone boundary", () => {
     expect(indexSrc).not.toContain('from "../task/index"');
     expect(indexSrc).not.toContain("runTask");
     expect(indexSrc).not.toContain('=== "task"');
+    expect(indexSrc).not.toContain("|task|");
   });
 
   // kobo-358: `maw company crew spawn <co>` — deterministic idempotent crew-cell

@@ -174,7 +174,7 @@ function runCompany(args: string[], logs: string[]): string | undefined {
   }
 
   logs.push(`unknown company subcommand: ${sub}`);
-  logs.push("usage: maw company <create|add-team|add-dept|ls|tree|attach|detach|sync|migrate|hooks|home|worklog|task|crew|head|cell|up|down|rm-team|rm-dept|delete>");
+  logs.push("usage: maw company <create|add-team|add-dept|ls|tree|attach|detach|sync|migrate|hooks|home|worklog|crew|head|cell|up|down|rm-team|rm-dept|delete>");
   return `unknown subcommand: ${sub}`;
 }
 

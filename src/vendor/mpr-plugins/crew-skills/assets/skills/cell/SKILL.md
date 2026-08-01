@@ -31,6 +31,7 @@ From any controlling pane:
 
 ```bash
 maw company cell spawn <company>
+maw company cell down <company> [--force]
 ```
 
 Example:
@@ -40,6 +41,8 @@ maw company cell spawn kobo
 ```
 
 The public spawn verb controls the company fleet: wake missing oracle sessions headlessly, locate each oracle session, then inject the local self-spawn into that oracle's pane so tmux layout is created in the correct place and the head pane launches Claude afterward.
+
+The public down verb controls Cell v2 teardown for the company roster: it resolves each oracle session, requires an identifiable cell head pane before killing anything, honors busy guard unless `--force` is passed, and tears down cell-owned panes/windows only.
 
 The hidden internal verb is:
 

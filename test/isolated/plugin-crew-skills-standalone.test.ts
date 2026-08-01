@@ -267,6 +267,8 @@ describe("crew-skills global asset contract", () => {
     expect(skill).toContain("head + reviewer|worker");
     expect(skill).toContain("wakes every oracle in the company roster");
     expect(skill).toContain("maw company cell spawn <company>");
+    expect(skill).toContain("maw company cell down <company> [--force]");
+    expect(skill).toContain("requires an identifiable cell head pane before killing anything");
     expect(skill).toContain("maw company cell self-spawn <company>");
     expect(skill).toContain("This is NOT a caller-local split and NOT the older `/crew` 4-pane cell");
     expect(skill).toContain("After that, the head pane should be a live Claude process, not a shell");

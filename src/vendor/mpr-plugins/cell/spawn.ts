@@ -13,12 +13,12 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { cmdWake, findWindow, hostExec, listSessions, type Session } from "maw-js/sdk";
+import { checkBusyGuard, cmdWake, findWindow, hostExec, listSessions, type Session } from "maw-js/sdk";
 import { loadConfig } from "maw-js/config";
 import { loadCompany, type Company } from "../company/company-helpers";
 import { scopeOfOracle } from "../../../core/worklog/company-scope";
 import { teardownCrewWindows } from "../crew/teardown";
-import { BRAIN_MODEL, DEFAULT_WORKER_MODEL, FALLBACK_WORKER_MODEL } from "../crew/spawn";
+import { BRAIN_MODEL, DEFAULT_WORKER_MODEL } from "../crew/spawn";
 
 const CELL_WORKERS_WINDOW = "cell-workers";
 const DEFAULT_STATE_DIR = "ψ/active/cell";
@@ -78,18 +78,18 @@ function companyRoster(co: Company): RosterMember[] {
   return out;
 }
 
-interface PaneRow { paneId: string; role: string }
+interface PaneRow { paneId: string; role: string; windowName: string }
 
 async function listSessionPanes(sessionName: string): Promise<PaneRow[]> {
   let raw: string;
   try {
-    raw = await hostExec(`tmux list-panes -t ${shellArg(sessionName)} -F '#{pane_id}|||#{@role}'`);
+    raw = await hostExec(`tmux list-panes -s -t ${shellArg(sessionName)} -F '#{pane_id}|||#{@role}|||#{window_name}'`);
   } catch {
     return [];
   }
   return raw.split("\n").filter(Boolean).map((line) => {
-    const [paneId = "", role = ""] = line.split("|||");
-    return { paneId, role };
+    const [paneId = "", role = "", windowName = ""] = line.split("|||");
+    return { paneId, role, windowName };
   });
 }
 
@@ -99,6 +99,21 @@ function hasRole(panes: PaneRow[], prefix: string): boolean {
 
 function findRolePane(panes: PaneRow[], prefix: string): string | undefined {
   return panes.find((p) => p.role.startsWith(prefix))?.paneId;
+}
+
+function isCellOwnedPane(p: PaneRow): boolean {
+  if (p.role.startsWith("👤") || p.role.startsWith("⚒") || p.role.startsWith("🔎")) return true;
+  if (p.windowName === "cell-head" || p.windowName === CELL_WORKERS_WINDOW) return true;
+  return false;
+}
+
+function killOrder(p: PaneRow): number {
+  if (p.role.startsWith("👤") || p.windowName === "cell-head") return 2;
+  return 1;
+}
+
+function parseCompanyArg(args: string[]): string | undefined {
+  return args.find((a, i) => i > 0 && !a.startsWith("--"));
 }
 
 function sessionNameOf(resolved: string): string {
@@ -196,6 +211,66 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
   return { ok: true };
 }
 
+export async function companyCellDown(company: string | undefined, opts: { force?: boolean; verbose?: boolean }, emit: (line: string) => void): Promise<CellSpawnResult> {
+  if (!company) return { ok: false, error: "usage: maw company cell down <company> [--force] [--verbose|--full]" };
+  const co = loadCompany(company);
+  if (!co) return { ok: false, error: `company not found: ${company}` };
+
+  const log = (line: string) => { if (opts.verbose) emit(line); };
+  let torn = 0, skipped = 0, refused = 0;
+  const roster = companyRoster(co);
+  const sessions = await listSessions();
+  const invokerPane = (process.env.TMUX_PANE || "").trim();
+
+  for (const member of roster) {
+    const resolved = resolveMemberSession(member.oracle, sessions);
+    if (!resolved) { log(`${member.oracle}: no session found — nothing to tear down`); skipped++; continue; }
+    const sessionName = sessionNameOf(resolved);
+    const panes = await listSessionPanes(sessionName);
+    const headPane = findRolePane(panes, "👤") ?? panes.find((p) => p.windowName === "cell-head")?.paneId;
+
+    if (!headPane) {
+      log(`⚠ ${member.oracle}: no cell head pane found in session ${sessionName} — skipping teardown fail-closed`);
+      skipped++;
+      continue;
+    }
+
+    if (!opts.force) {
+      const guard = await checkBusyGuard(member.oracle);
+      if (guard.busy) {
+        log(`⚠ ${member.oracle}: BUSY — refusing cell teardown (pass --force to override)`);
+        refused++;
+        continue;
+      }
+    }
+
+    const toKill = panes
+      .filter(isCellOwnedPane)
+      .filter((p) => p.paneId && p.paneId !== invokerPane)
+      .sort((a, b) => killOrder(a) - killOrder(b));
+
+    if (toKill.length === 0) { log(`${member.oracle}: no killable cell panes (invoker/head protected?)`); skipped++; continue; }
+
+    let killed = 0;
+    for (const pane of toKill) {
+      try {
+        await hostExec(`tmux kill-pane -t ${shellArg(pane.paneId)}`);
+        killed++;
+      } catch {
+        /* already gone — race with manual teardown is fine */
+        killed++;
+      }
+    }
+    log(`${member.oracle}: killed ${killed}/${toKill.length} cell pane(s)`);
+    torn++;
+  }
+
+  emit(`✓ cell down ${company}: ${torn} torn, ${skipped} skipped, ${refused} refused (${roster.length} oracle${roster.length === 1 ? "" : "s"})`);
+  return { ok: true };
+}
+
+export function parseCellCompanyArg(args: string[]): string | undefined { return parseCompanyArg(args); }
+
 export async function cellSelfSpawn(company: string | undefined, emit: (line: string) => void): Promise<CellSpawnResult> {
   if (!company) return { ok: false, error: "usage: maw company cell self-spawn <company>" };
   if (!loadCompany(company)) return { ok: false, error: `company not found: ${company} — no partial spawn` };
@@ -257,20 +332,20 @@ interface WorkerSpawnResult { ok: boolean; error?: string; paneId?: string; mode
 async function spawnWorkerSelfHeal(opts: { cwd: string; company: string; stateDir: string; settingsPath: string; head: string; emit: (line: string) => void }): Promise<WorkerSpawnResult> {
   const { cwd, company, stateDir, settingsPath, head, emit } = opts;
   const buildCmd = (model: string) => `cd ${shellArg(cwd)} && MAW_ROOM_COMPANY=${shellArg(company)} CREW_ROLE=worker CREW_COORD_PANE=${shellArg(head)} CREW_STATE_DIR=${shellArg(stateDir)} claude --model ${shellArg(model)} --settings ${shellArg(settingsPath)} --dangerously-skip-permissions --append-system-prompt "$(cat ${shellArg(join(stateDir, "worker-contract.md"))})"`;
-  let model = DEFAULT_WORKER_MODEL;
+  let model = BRAIN_MODEL;
   let paneId = (await hostExec(`tmux new-window -P -F '#{pane_id}' -n ${shellArg(CELL_WORKERS_WINDOW)} ${shellArg(buildCmd(model))}`)).trim();
   if (!paneId) return { ok: false, error: "worker spawn produced no pane-id" };
   if (await pollBoot(paneId, BOOT_POLL_MAX)) return { ok: true, paneId, model };
 
   try { await hostExec(`tmux kill-window -t ${shellArg(paneId)}`); } catch { /* already gone */ }
-  model = FALLBACK_WORKER_MODEL;
+  model = DEFAULT_WORKER_MODEL;
   paneId = (await hostExec(`tmux new-window -P -F '#{pane_id}' -n ${shellArg(CELL_WORKERS_WINDOW)} ${shellArg(buildCmd(model))}`)).trim();
   if (!paneId) return { ok: false, error: "worker retry-spawn produced no pane-id" };
   if (await pollBoot(paneId, RETRY_POLL_MAX)) return { ok: true, paneId, model };
 
   try {
     const headAddr = (await hostExec(`tmux display-message -t ${shellArg(head)} -p '#{session_name}:#{window_index}.#{pane_index}'`)).trim();
-    await hostExec(`maw hey ${shellArg(headAddr)} ${shellArg(`[cell spawn double-fail] worker failed ${DEFAULT_WORKER_MODEL}+${FALLBACK_WORKER_MODEL} boot — manual recovery needed`)}`);
+    await hostExec(`maw hey ${shellArg(headAddr)} ${shellArg(`[cell spawn double-fail] worker failed ${BRAIN_MODEL}+${DEFAULT_WORKER_MODEL} boot — manual recovery needed`)}`);
   } catch { /* best-effort */ }
   emit("⚠ worker double-fail — surfaced to head, pane left up for manual inspection");
   return { ok: true, paneId, model };

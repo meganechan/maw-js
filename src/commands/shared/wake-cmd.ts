@@ -716,8 +716,8 @@ function isClaudeEngine(engine: string | undefined): boolean {
 // kobo-373/376: `tmux send-keys -t target prompt Enter` in ONE call is the same
 // paste-residual class as kobo-371 — Claude Code's TUI reads a fast back-to-back
 // text+Enter burst as a paste and suppresses Enter-as-submit. Mirrors kobo-371's
-// injectCommand fix (company-fleet.ts): text and Enter are two separate `run`
-// calls with a settle delay between them.
+// injectCommand fix: text and Enter are two separate `run` calls with a settle
+// delay between them.
 //
 // ⚠️ CEILING (heuristic, not a real readiness signal, same caveat as kobo-371):
 // a fixed delay is not a poll for actual submission — a slow/loaded machine, or

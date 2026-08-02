@@ -49,21 +49,8 @@ export const SYNC_ITEMS: SyncItem[] = [
   { src: "skills/cell/contracts/head.md", dest: "skills/cell/contracts/head.md" },
   { src: "skills/cell/contracts/worker.md", dest: "skills/cell/contracts/worker.md" },
   { src: "skills/cell/contracts/reviewer.md", dest: "skills/cell/contracts/reviewer.md" },
-  { src: "skills/crew/SKILL.md", dest: "skills/crew/SKILL.md" },
-  // kobo-358 — contract text extracted from SKILL §4/4b/4c into standalone template
-  // assets: single source for BOTH the human-readable SKILL prose (which now just
-  // references these files) and `maw company crew spawn` (which CATs + substitutes
-  // {{COMPANY}}/{{DEPT}}/{{BOARD}} — no LLM-fill, no version-skew).
-  { src: "skills/crew/contracts/conductor.md", dest: "skills/crew/contracts/conductor.md" },
-  { src: "skills/crew/contracts/worker.md", dest: "skills/crew/contracts/worker.md" },
-  { src: "skills/crew/contracts/reviewer.md", dest: "skills/crew/contracts/reviewer.md" },
-  { src: "skills/head/SKILL.md", dest: "skills/head/SKILL.md" }, // kobo-299 — /head 3-tier strategic cell (kobo-303: replaced /warroom, hard-removed)
-  // kobo-364 — same treatment as 358's crew contracts: conductor/reviewer contract
-  // text extracted from head SKILL.md into standalone templates. NO lead.md — lead
-  // is the invoking pane, never spawned, never gets --append-system-prompt (matches
-  // the head SKILL's own spawn recipe, which only cats contract files for conductor/reviewer).
-  { src: "skills/head/contracts/conductor.md", dest: "skills/head/contracts/conductor.md" },
-  { src: "skills/head/contracts/reviewer.md", dest: "skills/head/contracts/reviewer.md" },
+  // crew + head skills dropped with their cell topologies — the kobo-566 prune
+  // removes the installed copies on the next sync (intended).
   { src: "skills/teardown/SKILL.md", dest: "skills/teardown/SKILL.md" }, // kobo-343 — /teardown lifecycle close (spin↔teardown); safety-critical pane killer
   // kobo-317 — /worker skill removed: worker is no longer a self-defined standalone role, only a /crew-spawned in-cell pane (crew §4 inline contract).
   { src: "hooks/crew-worker-stop.sh", dest: "hooks/crew-worker-stop.sh", exec: true },

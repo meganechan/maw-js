@@ -61,6 +61,7 @@ function standaloneTestFor(plugin: string): string {
 
 function analyzeChangedFiles(files: string[]): GateResult {
   const pluginChanges = new Map<string, string[]>();
+  const pluginDirs = new Map<string, string>();
   const pluginNonManifestChanges = new Set<string>();
   const pluginOnlyGeneratedChanges = new Set<string>();
   const sdkChanges: string[] = [];
@@ -73,6 +74,7 @@ function analyzeChangedFiles(files: string[]): GateResult {
     const pluginMatch = file.match(/^src\/(?:vendor\/mpr-plugins|vendor-plugins)\/([^/]+)\//);
     if (pluginMatch) {
       const plugin = pluginMatch[1];
+      pluginDirs.set(plugin, pluginMatch[0]);
       if (!pluginChanges.has(plugin)) pluginChanges.set(plugin, []);
       pluginChanges.get(plugin)!.push(file);
       const isPluginTs = /\/plugin\.ts$/.test(file);
@@ -91,6 +93,11 @@ function analyzeChangedFiles(files: string[]): GateResult {
   }
 
   for (const [plugin, changed] of pluginChanges) {
+    // kobo-358 — a RETIRED plugin (whole dir deleted) can't carry a boundary
+    // test, so demanding one would make retirement impossible. A live plugin
+    // always has its dir on disk, so this can't hide extraction drift.
+    if (!existsSync(pluginDirs.get(plugin)!)) continue;
+
     const onlyGeneratedFiles = changed.length > 0
       && changed.every((file) => /\/plugin\.ts$/.test(file));
     if (onlyGeneratedFiles && !pluginNonManifestChanges.has(plugin)) {

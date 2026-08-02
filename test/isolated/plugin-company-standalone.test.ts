@@ -87,30 +87,16 @@ describe("company command plugin standalone boundary", () => {
     expect(manifest.cli.help).toContain("maw company worklog <log|inject|");
   });
 
-  // kobo-358: `maw company crew spawn <co>` — deterministic idempotent crew-cell
-  // spawn, same delegation pattern as home/worklog/task above.
-  test("company dispatches `crew` to its plugin's shared runner (kobo-358)", () => {
+  // crew, head and up/down are retired — only the cell topology is in use. Pin
+  // their ABSENCE so a dispatch arm can't quietly return without its runner.
+  test("company no longer dispatches `crew`, `head`, `up` or `down` (retired)", () => {
     const indexSrc = readFileSync(
       join(import.meta.dir, "../../src/vendor/mpr-plugins/company/index.ts"),
       "utf8",
     );
-    expect(indexSrc).toContain('from "../crew/index"');
-    expect(indexSrc).toContain("runCrew");
-    expect(indexSrc).toContain('=== "crew"');
-    expect(indexSrc).toContain("|crew|"); // usage string mentions the new verb
-  });
-
-  // kobo-364: `maw company head spawn <co>` — deterministic idempotent head-cell
-  // spawn, same delegation pattern as crew above (mirrors 358's shape exactly).
-  test("company dispatches `head` to its plugin's shared runner (kobo-364)", () => {
-    const indexSrc = readFileSync(
-      join(import.meta.dir, "../../src/vendor/mpr-plugins/company/index.ts"),
-      "utf8",
-    );
-    expect(indexSrc).toContain('from "../head/index"');
-    expect(indexSrc).toContain("runHead");
-    expect(indexSrc).toContain('=== "head"');
-    expect(indexSrc).toContain("|head|"); // usage string mentions the new verb
+    for (const gone of ["runCrew", "runHead", "runCompanyUp", "runCompanyDown", "company-fleet", '=== "crew"', '=== "head"', '=== "up"', '=== "down"', "|crew|", "|head|", "|up|down|"]) {
+      expect(indexSrc).not.toContain(gone);
+    }
   });
 
   test("company dispatches `cell` to the oracle-based Cell v2 spawn runner", () => {
@@ -122,75 +108,6 @@ describe("company command plugin standalone boundary", () => {
     expect(indexSrc).toContain("runCell");
     expect(indexSrc).toContain('=== "cell"');
     expect(indexSrc).toContain("|cell|");
-  });
-
-  // kobo-362: `maw company up/down <co>` — fleet wake+teardown for a whole
-  // company, same sibling-plugin delegation pattern as crew above.
-  test("company dispatches `up`/`down` to company-fleet (kobo-362)", () => {
-    const indexSrc = readFileSync(
-      join(import.meta.dir, "../../src/vendor/mpr-plugins/company/index.ts"),
-      "utf8",
-    );
-    expect(indexSrc).toContain('from "./company-fleet"');
-    expect(indexSrc).toContain("runCompanyUp");
-    expect(indexSrc).toContain("runCompanyDown");
-    expect(indexSrc).toContain('=== "up"');
-    expect(indexSrc).toContain('=== "down"');
-    expect(indexSrc).toContain("|up|down|"); // usage string mentions the new verbs
-  });
-
-  // kobo-362/366: pin the design-blessed contract on the fleet module itself —
-  // 2-tier up (session-tier cmdWake cold-start, cell-tier repair-via-injection)
-  // applied SYMMETRICALLY to manager (head spawn, kobo-366 — closed the moment
-  // kobo-364 shipped the verb) and crew-front (crew spawn) alike. down reuses
-  // kobo-358's teardownCrewWindows + refuse-if-busy/--force.
-  test("company-fleet: 2-tier up (manager+crew symmetric) + down reuses 358 teardown + busy-gate", () => {
-    const fleetSrc = readFileSync(
-      join(import.meta.dir, "../../src/vendor/mpr-plugins/company/company-fleet.ts"),
-      "utf8",
-    );
-    expect(fleetSrc).toContain('from "../crew/teardown"'); // reuses kobo-358 AS-IS, doesn't re-port it
-    expect(fleetSrc).toContain("cmdWake"); // session-tier cold-start (empirically verified, eq3 2-tier ruling)
-    expect(fleetSrc).toContain("maw company head spawn"); // kobo-366: manager repairs via the head-spawn verb
-    expect(fleetSrc).toContain("maw company crew spawn"); // crew-front repairs via the crew-spawn verb
-    expect(fleetSrc).toContain("checkBusyGuard"); // down's refuse-if-busy default
-    expect(fleetSrc).toContain("opts.force"); // --force override
-    expect(fleetSrc).toContain("invokerPane"); // global-invoker protection (never kill the calling pane)
-    // no silent core-lead fallback when a company has no manager — a dept lead ≠ company head
-    expect(fleetSrc).toContain("no company head");
-  });
-
-  // kobo-368 compact-ack sweep: up/down default to ONE tally line; --verbose/--full
-  // reproduce the pre-368 per-member log stream (regression pin, Principle 1).
-  test("company-fleet up/down: compact tally by default, --verbose/--full opt into per-member detail (kobo-368)", () => {
-    const fleetSrc = readFileSync(
-      join(import.meta.dir, "../../src/vendor/mpr-plugins/company/company-fleet.ts"),
-      "utf8",
-    );
-    expect(fleetSrc).toContain("const log = (line: string) => { if (verbose) emit(line); };");
-    expect(fleetSrc).toContain("const log = (line: string) => { if (opts.verbose) emit(line); };");
-    expect(fleetSrc).toContain("✓ up ${company}:");
-    expect(fleetSrc).toContain("✓ down ${company}:");
-    expect(fleetSrc).toContain('args.includes("--verbose") || args.includes("--full")');
-  });
-
-  // kobo-371 design-first fix: text and Enter must be SEPARATE send-keys calls
-  // with a settle delay between them — combined text+Enter in one call was
-  // reproducibly swallowed by Claude's TUI paste-detection (kobo-369/371
-  // evidence: identical failure on a fresh cold pane AND the same pane 20s
-  // later — session age was never the variable). Pin the fixed shape.
-  test("company-fleet: injectCommand splits text/Enter into separate send-keys calls with a settle delay (kobo-371)", () => {
-    const fleetSrc = readFileSync(
-      join(import.meta.dir, "../../src/vendor/mpr-plugins/company/company-fleet.ts"),
-      "utf8",
-    );
-    expect(fleetSrc).toContain("INJECT_SETTLE_MS");
-    const injectFn = fleetSrc.slice(fleetSrc.indexOf("async function injectCommand"), fleetSrc.indexOf("export interface CompanyFleetDeps"));
-    expect(injectFn).toContain("C-u");
-    expect(injectFn).toContain("await sleepFn(INJECT_SETTLE_MS)"); // settle delay BETWEEN text and Enter
-    // the text-typing call must NOT carry Enter combined — the exact bug reproduced (kobo-369/371)
-    expect(injectFn).toContain("await hostExecFn(`tmux send-keys -t ${shellArg(target)} ${shellArg(command)}`)");
-    expect(injectFn).toContain("await hostExecFn(`tmux send-keys -t ${shellArg(target)} Enter`)"); // Enter sent as its own separate call
   });
 
   // kobo-363: departments → teams vocab rename. add-team/rm-team are canonical;

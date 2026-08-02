@@ -42,7 +42,7 @@ export const SENSITIVE_PATHS: Array<{ category: string; match: (path: string) =>
   // src/commands/shared/comm-send.ts:259 (kobo-335: an unauthenticated --from
   // forges sign state). Both matched — the caller AND the root.
   { category: "resolve actor / sign auth", match: (p) => p === "src/vendor/mpr-plugins/task/index.ts" || p === "src/commands/shared/comm-send.ts" },
-  { category: "teardown / kill helper", match: (p) => p === "src/vendor/mpr-plugins/crew/teardown.ts" },
+  { category: "teardown / kill helper", match: (p) => p === "src/core/agent-panes.ts" },
   { category: "route.ts / board projection", match: (p) => p === "src/core/tasks/route.ts" },
   { category: "hook provisioning (~/.config/maw/hooks)", match: (p) => p === "src/core/worklog/hook-setup.ts" },
 ];

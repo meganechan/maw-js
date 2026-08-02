@@ -73,6 +73,18 @@ describe("company command plugin standalone boundary", () => {
     expect(indexSrc).not.toContain("runTask");
     expect(indexSrc).not.toContain('=== "task"');
     expect(indexSrc).not.toContain("|task|");
+
+    // The manifest is the OTHER advertised surface (`maw --help` reads plugin.json,
+    // not index.ts) — it must not offer the removed verb either, while the verbs
+    // that survived stay listed.
+    const manifest = JSON.parse(readFileSync(
+      join(import.meta.dir, "../../src/vendor/mpr-plugins/company/plugin.json"),
+      "utf8",
+    ));
+    expect(manifest.cli.help).not.toContain("task");
+    expect(manifest.cli.help).toContain("|hooks|home|worklog|");
+    expect(manifest.cli.help).toContain("maw company home <init|commit>");
+    expect(manifest.cli.help).toContain("maw company worklog <log|inject|");
   });
 
   // kobo-358: `maw company crew spawn <co>` — deterministic idempotent crew-cell

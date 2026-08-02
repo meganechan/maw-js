@@ -5,7 +5,22 @@ set -euo pipefail
 
 log() { printf '[e2e] %s\n' "$*" >&2; }
 
-mkdir -p "$E2E_STATE" "$KOBO_BOARD_ROOT"
+mkdir -p "$E2E_STATE" "$KOBO_RUNTIME_DIR"
+
+# 0. taskd. Every kobo verb goes through the runtime socket — bin/kobo refuses to
+#    run without one — so this is a hard precondition, not a background nicety.
+#    KOBO_RUNTIME_SHA is the repo's own HEAD, the same value bin/kobo derives; the
+#    daemon refuses to start without all three vars (runtime/main.ts:7-10).
+KOBO_RUNTIME_SHA="$(git -C "$KOBO_REPO" rev-parse HEAD)"
+export KOBO_RUNTIME_SHA
+log "kobo taskd (sha=${KOBO_RUNTIME_SHA:0:8})"
+bun "$KOBO_REPO/src/runtime/main.ts" >"$E2E_STATE/taskd.log" 2>&1 &
+
+for _ in $(seq 1 100); do
+  [ -S "$KOBO_RUNTIME_SOCKET" ] && break
+  sleep 0.1
+done
+[ -S "$KOBO_RUNTIME_SOCKET" ] || { log "taskd never bound its socket"; cat "$E2E_STATE/taskd.log" >&2; exit 1; }
 
 # 1. maw config. `node` has no default and cmdSend throws without it
 #    (comm-send.ts:1813) — after the message has already landed, so a missing

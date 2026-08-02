@@ -24,11 +24,12 @@ services:
     # container leaks zombies on every run.
     init: true
     volumes:
-      # kobo-board has no package.json and nothing to build — it runs straight
-      # from the checkout. Read-only: the repo ships a committed kobo-board.db
-      # (the real board), and the sandbox must not be able to write to it. The DB
-      # under test lives at $KOBO_BOARD_ROOT inside the container.
-      - ${KOBO_REPO:?set KOBO_REPO to a kobo-board checkout (run.sh does this)}:/home/maw/ghq/github.com/meganechan/kobo-board:ro
+      # A clone pinned to a ref by run.sh, never a working checkout — a checkout
+      # sits on whatever branch someone last left it on. kobo has no package.json
+      # and nothing to build; it runs straight from the tree. Read-only: the repo
+      # ships a committed kobo-board.db (the real board) and the sandbox must not
+      # be able to write it. The DB under test lives at $KOBO_RUNTIME_DB.
+      - ${KOBO_MOUNT:?set KOBO_MOUNT to a pinned kobo clone (run.sh does this)}:/home/maw/kobo-board-runtime:ro
     # No named volumes and no ports. State is throwaway by construction — it lives
     # in the container's own layer and dies with `run --rm`. A named volume would
     # survive `down` and reintroduce "last run's state leaked into this one",

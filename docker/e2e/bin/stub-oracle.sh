@@ -17,20 +17,24 @@
 # commands are out of scope here. See docker/e2e/README.md.
 set -uo pipefail
 
-# maw signs ordinary bodies with a "[node:oracle] " prefix (comm-send.ts:644-657),
-# so both parsers match on a substring and never on a line prefix. `--self-check`
-# exercises them without a container — the only non-trivial logic in this file.
-dispatch_id() { local s="${1##*E2E-DISPATCH }"; printf '%s' "${s%% *}"; }
-request_id()  { local s="${1#*\[request:}";     printf '%s' "${s%%]*}"; }
+# kobo dispatches a JSON payload — {dispatchId,cardId,kind,recipient,target,title,
+# story,lane} built at kobo cli.ts:157-168 — and maw prefixes ordinary bodies with
+# "[node:oracle] " (comm-send.ts:644-657). So recover the payload from the first
+# brace rather than treating the line as JSON, then read the field with jq.
+# `--self-check` exercises both without a container.
+payload_of() { local s="${1#*\{}"; [ "$s" = "$1" ] && return 1; printf '{%s' "$s"; }
+card_id()    { payload_of "$1" | jq -er '.cardId' 2>/dev/null; }
+request_id() { local s="${1#*\[request:}"; printf '%s' "${s%%]*}"; }
 
 if [ "${1:-}" = "--self-check" ]; then
   f=0
   t() { [ "$2" = "$3" ] || { printf 'FAIL %s: got %q want %q\n' "$1" "$2" "$3"; f=1; }; }
-  t "bare"       "$(dispatch_id 'E2E-DISPATCH card-1')"              "card-1"
-  t "signed"     "$(dispatch_id '[e2e:harness] E2E-DISPATCH card-1')" "card-1"
-  t "trailing"   "$(dispatch_id '[e2e:harness] E2E-DISPATCH card-1 please')" "card-1"
-  t "request"    "$(request_id  '[request:req-1-abc] do the thing')" "req-1-abc"
-  t "req+signed" "$(request_id  '[e2e:x] [request:req-9] hi')"       "req-9"
+  P='{"dispatchId":"dispatch-abc","cardId":"card-1","kind":"assigned","lane":"todo"}'
+  t "bare json"   "$(card_id "$P")"                  "card-1"
+  t "maw-signed"  "$(card_id "[e2e:harness] $P")"    "card-1"
+  t "title brace" "$(card_id "[e2e:h] {\"cardId\":\"card-2\",\"title\":\"fix {x}\"}")" "card-2"
+  t "not json"    "$(card_id 'hello there' || echo NONE)" "NONE"
+  t "request"     "$(request_id '[request:req-1-abc] do it')" "req-1-abc"
   [ $f -eq 0 ] && echo "stub-oracle self-check: ok"
   exit $f
 fi
@@ -55,19 +59,18 @@ while :; do
 
   printf '%s\n' "$line" >>"$RECEIVED"
 
-  case "$line" in
-    *E2E-DISPATCH*)
-      id="$(dispatch_id "$line")"
-      {
-        printf '=== dispatch %s ===\n' "$id"
-        kobo claim "$id" --holder "$E2E_ORACLE" 2>&1
-        kobo move "$id" doing 2>&1
-      } >>"$KOBO_LOG"
-      # Written last and only after the verbs return, so the tests can poll one
-      # file instead of racing the board.
-      printf 'HANDLED %s\n' "$id" >>"$RECEIVED"
-      ;;
-  esac
+  if id="$(card_id "$line")" && [ -n "$id" ]; then
+    {
+      printf '=== dispatch %s ===\n' "$id"
+      # `start` is the owner's verb: taskd refuses it unless actor == assignee and
+      # lane == todo (runtime/server.ts:284-291), so this exercises the ownership
+      # gate rather than just writing a lane.
+      kobo task start "$id" --actor "$E2E_ORACLE" 2>&1
+    } >>"$KOBO_LOG"
+    # Written last and only after the verb returns, so the tests can poll one file
+    # instead of racing the board.
+    printf 'HANDLED %s\n' "$id" >>"$RECEIVED"
+  fi
 
   # The shape kobo's supervisor sends today and confirms against — it watches for
   # the DESTINATION pane to run `maw reply`, so a send succeeding proves nothing

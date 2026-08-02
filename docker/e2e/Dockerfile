@@ -97,13 +97,33 @@ ENV MAW_PORT=3456 \
     E2E_NODE=e2e \
     E2E_SESSION=01-stub \
     E2E_ORACLE=stub \
-    E2E_STATE=/home/maw/e2e/state \
-    KOBO_CHECKOUT=/home/maw/ghq/github.com/meganechan/kobo-board \
-    KOBO_BOARD_ROOT=/home/maw/e2e/kobo-root
+    E2E_STATE=/home/maw/e2e/state
+
+# kobo's own launcher (bin/kobo) is the entry point under test, so the sandbox
+# uses it rather than reimplementing it. It derives KOBO_RUNTIME_SHA by running
+# `git -C $KOBO_REPO rev-parse HEAD`, which is why the mount must be a real git
+# repo and not a bare tree — run.sh clones one.
+ENV KOBO_REPO=/home/maw/kobo-board-runtime \
+    KOBO_RUNTIME_DIR=/home/maw/e2e/kobo-runtime \
+    KOBO_RUNTIME_SOCKET=/home/maw/e2e/kobo-runtime/kobo-taskd.sock \
+    KOBO_RUNTIME_DB=/home/maw/e2e/kobo-runtime/kobo-board.db
+
+# The board actor for CLI verbs that need one (resolveActor, cli.ts:115-129).
+ENV KOBO_BOARD_SESSION_ACTOR=harness
+
+# dispatch-run shells out to `maw hey` with no --from (kobo cli.ts:201), so maw
+# has to resolve a sender identity on its own or it exits 1 before sending
+# (comm-send.ts:1474-1478). Outside a tmux pane, CLAUDE_AGENT_NAME is that seam.
+ENV CLAUDE_AGENT_NAME=harness
+
+# The kobo mount is owned by the host uid, not by `maw`, so git refuses to read it
+# as "dubious ownership" — and bin/kobo dies on the SHA lookup before doing
+# anything. Container-only; nothing here is shared with a host git config.
+RUN git config --global --add safe.directory '*'
 
 # Prepend, never replace: the base image puts bun on PATH and a literal list would
-# silently drop it.
-ENV PATH=/home/maw/e2e/bin:$PATH
+# silently drop it. $KOBO_REPO/bin is where the real `kobo` launcher lives.
+ENV PATH=/home/maw/e2e/bin:/home/maw/kobo-board-runtime/bin:$PATH
 
 # Cell contracts must exist on disk or self-spawn hard-fails before any pane is
 # created (cell/spawn.ts:280-282). Installs into $HOME/.claude — an image prereq,

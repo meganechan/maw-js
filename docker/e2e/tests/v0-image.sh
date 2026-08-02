@@ -29,7 +29,22 @@ check "jq present (statusline presence hook)" 'jq --version'
 check "git present (plugin bootstrap)" 'git --version'
 
 check "maw runs" 'maw --version'
-check "kobo runs" 'kobo ls'
+
+# The ref guard. The kobo half of this sandbox was once built against a checkout
+# that happened to sit on a stale feature branch, and every "that code does not
+# exist" conclusion drawn from it was wrong. Assert the mounted tree really is the
+# runtime — a wrong ref now fails here, loudly, instead of silently reshaping what
+# the suite appears to prove.
+check "kobo mount has bin/kobo" '[ -x "$KOBO_REPO/bin/kobo" ]'
+check "kobo mount has the taskd entry" '[ -f "$KOBO_REPO/src/runtime/main.ts" ]'
+check "kobo mount is a git repo (bin/kobo derives the SHA from it)" \
+  'git -C "$KOBO_REPO" rev-parse HEAD'
+check "kobo task CLI has the dispatch verbs" \
+  'grep -q "dispatch-run" "$KOBO_REPO/src/cli.ts"'
+
+check "taskd socket is bound" '[ -S "$KOBO_RUNTIME_SOCKET" ]'
+check "kobo runs through taskd" 'kobo task ls'
+check "kobo health" 'kobo health'
 
 # Cell contracts must exist on disk or self-spawn hard-fails before a single pane
 # is created (cell/spawn.ts:280-282).
@@ -56,15 +71,15 @@ for v in MAW_DATA_DIR MAW_STATE_DIR MAW_CONFIG_DIR MAW_CACHE_DIR; do
   check "$v unset (pr-watch.ts:43-58)" "[ -z \"\${$v:-}\" ]"
 done
 
-# The mounted checkout ships a committed kobo-board.db — the real board. The DB
-# under test must not be that file.
-check "kobo DB is not the mounted checkout's" \
-  '[ "$KOBO_BOARD_ROOT" != "$KOBO_CHECKOUT" ] && [ -w "$KOBO_BOARD_ROOT" ]'
+# The runtime DB must live outside the mounted repo — the repo ships a committed
+# kobo-board.db, and the sandbox must never be pointed at it.
+check "runtime DB is outside the kobo mount" \
+  'case "$KOBO_RUNTIME_DB" in "$KOBO_REPO"/*) false ;; *) [ -w "$KOBO_RUNTIME_DIR" ] ;; esac'
 # Asserted by reading the mount flags, NOT by attempting a write. A write probe
 # that unexpectedly SUCCEEDS leaves a file in the host's real checkout — the probe
 # would cause the exact contamination it is meant to rule out.
-check "kobo checkout mounted read-only" \
-  'awk -v d="$KOBO_CHECKOUT" '"'"'$2 == d { print $4 }'"'"' /proc/mounts | grep -qw ro'
+check "kobo repo mounted read-only" \
+  'awk -v d="$KOBO_REPO" '"'"'$2 == d { print $4 }'"'"' /proc/mounts | grep -qw ro'
 
 check "maw serve answers /api/plugins" \
   'curl -fsS "http://127.0.0.1:$MAW_PORT/api/plugins"'

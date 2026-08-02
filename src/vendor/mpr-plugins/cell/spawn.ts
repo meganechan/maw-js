@@ -124,11 +124,43 @@ function resolveMemberSession(oracle: string, sessions: Session[]): string | nul
   try { return findWindow(sessions, oracle); } catch { return null; }
 }
 
-async function injectCommand(target: string, command: string): Promise<void> {
+/**
+ * tmux `pane_current_command` basenames that will actually EXECUTE a typed
+ * line. Allowlist, not denylist: a pane running an agent REPL (claude/node/…)
+ * swallows the line as PROMPT TEXT and never runs it, and any command we
+ * cannot name gets the same treatment — refuse rather than type blind.
+ */
+const SHELL_CMDS = new Set(["zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh"]);
+
+function paneCommandBasename(raw: string): string {
+  const first = raw.trim().split(/\s+/)[0] ?? "";
+  const base = first.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
+  return base.replace(/^-/, "").replace(/\.(exe|cmd|bat)$/i, "").toLowerCase();
+}
+
+async function paneCurrentCommand(target: string): Promise<string | null> {
+  try {
+    const raw = (await hostExec(`tmux display-message -p -t ${shellArg(target)} '#{pane_current_command}'`)).trim();
+    return raw || null;
+  } catch {
+    return null;
+  }
+}
+
+type InjectResult = { ok: true } | { ok: false; reason: string };
+
+async function injectCommand(target: string, command: string): Promise<InjectResult> {
+  // Classify HERE, in the same call that sends the keys — never from an earlier
+  // pane listing: what a pane is running goes stale in seconds. Even the C-u
+  // must wait for the verdict; in a REPL it edits the prompt box.
+  const current = await paneCurrentCommand(target);
+  if (current === null) return { ok: false, reason: `cannot read pane_current_command for ${target}` };
+  if (!SHELL_CMDS.has(paneCommandBasename(current))) return { ok: false, reason: `pane ${target} is running '${current}', not a shell` };
   await hostExec(`tmux send-keys -t ${shellArg(target)} C-u`);
   await hostExec(`tmux send-keys -t ${shellArg(target)} ${shellArg(command)}`);
   await sleep(INJECT_SETTLE_MS);
   await hostExec(`tmux send-keys -t ${shellArg(target)} Enter`);
+  return { ok: true };
 }
 
 function headLaunchCommand(company: string, stateDir = DEFAULT_STATE_DIR): string {
@@ -198,7 +230,14 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
     const injectTarget = findRolePane(panes, "👤") ?? resolved;
     log(`${member.oracle}: cell incomplete/asleep — repairing (maw company cell self-spawn)`);
     try {
-      await injectCommand(injectTarget, `maw company cell self-spawn ${company} && ${headLaunchCommand(company)}`);
+      const injected = await injectCommand(injectTarget, `maw company cell self-spawn ${company} && ${headLaunchCommand(company)}`);
+      if (!injected.ok) {
+        // Loud on purpose (emit, not log): this used to count as repaired while
+        // the pane did nothing — the summary said the opposite of the truth.
+        emit(`⚠ ${member.oracle}: REFUSED repair injection — ${injected.reason}; a typed command would land as prompt text, not run. Fix by running \`maw company cell self-spawn ${company}\` inside that pane.`);
+        refused++;
+        continue;
+      }
       repaired++;
     } catch (e: any) {
       log(`⚠ ${member.oracle}: repair injection failed (${e.message})`);

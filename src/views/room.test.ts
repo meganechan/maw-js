@@ -15,7 +15,6 @@ describe("Brainstorm Room 2-pane chat view (kobo-258)", () => {
     expect(html).toContain("/api/room/send"); // hey to the lead (kobo-245/248)
     expect(html).toContain("/api/room/activity"); // who's-here strip (kobo-242)
     expect(html).toContain("/api/room/open"); // new topic
-    expect(html).toContain("/api/room/distill"); // room → card (kobo-244)
     expect(html).toContain("/api/room/merge"); // consolidate (kobo-243)
     expect(html).toContain("/api/room/invite"); // kobo-260 pull a teammate in
     expect(html).not.toContain("/api/feed"); // never the ephemeral feed
@@ -114,15 +113,14 @@ describe("Brainstorm Room 2-pane chat view (kobo-258)", () => {
     expect(html).toContain("createElement('a')");
   });
 
-  test("kobo-396/397/398/527: only 3 KNOWN innerHTML sinks — escape-first renderNoteBody (x2) + mermaid's own trusted SVG", () => {
+  test("kobo-396/397/398: only 2 KNOWN innerHTML sinks — escape-first renderNoteBody + mermaid's own trusted SVG", () => {
     expect(html).toContain("function mdToHtml"); // shared renderer (src/views/md.ts) injected verbatim
     expect(html).toContain("function escapeHtml");
     expect(html).toContain("function renderNoteBody"); // kobo-397: markdown + maw:// image-ref swap
     expect(html).toContain("bodyEl.innerHTML = renderNoteBody(m.text || '')"); // sink 1: escape-first, message body
-    expect(html).toContain("bodyDiv.innerHTML = renderNoteBody(t.body)"); // sink 3 (kobo-527): SAME escape-first renderer, card-ref modal body
     expect(html).toContain("p.block.innerHTML = p.svg"); // sink 2: mermaid's OWN output (strict mode), not user text — one write site for both cache-hit and freshly-rendered
     const innerHtmlAssignments = (html.match(/\.innerHTML\s*=/g) || []).length;
-    expect(innerHtmlAssignments).toBe(3); // no OTHER innerHTML= sink anywhere in the view
+    expect(innerHtmlAssignments).toBe(2); // no OTHER innerHTML= sink anywhere in the view
   });
 
   // kobo-398 review fix (B3): check 11 (strict must be hardcoded, no flag/env
@@ -958,92 +956,6 @@ describe("Brainstorm Room 2-pane chat view (kobo-258)", () => {
     }
   });
 
-  // kobo-527 — "kobo-N" card refs in message text → clickable chip that opens
-  // the card in the shared #mermaidModal instance. kobo-513 lesson applied:
-  // the main risk is OVER-matching (this room pastes card numbers in URLs and
-  // code blocks constantly), so these tests target that risk directly with
-  // the hardest cases, not just the happy path.
-  function loadCardLinkify() {
-    const start = html.indexOf("const CARD_REF_RE");
-    const end = html.indexOf("function cardLinkifyDom", start);
-    const src = html.slice(start, end);
-    return new Function(`${src}; return { cardLinkify };`)();
-  }
-  function loadCardLinkifyDom() {
-    const start = html.indexOf("const CARD_REF_RE");
-    const end = html.indexOf("async function openCardModal", start);
-    const src = html.slice(start, end);
-    return new Function(`${src}; return { cardLinkify, cardLinkifyDom };`)();
-  }
-  function stubCardDoc() {
-    return {
-      createTextNode: (text: string) => ({ kind: "text", text }),
-      createElement: (tag: string) => ({ kind: "el", tag, textContent: "", className: "", _attrs: {} as Record<string, string>, setAttribute(n: string, v: string) { this._attrs[n] = v; } }),
-    };
-  }
-  function withCardGlobals(companyVal: string, fn: () => void) {
-    const prevDoc = (globalThis as any).document;
-    const prevCompany = (globalThis as any).company;
-    (globalThis as any).document = stubCardDoc();
-    (globalThis as any).company = companyVal;
-    try { fn(); } finally {
-      (globalThis as any).document = prevDoc;
-      if (prevCompany === undefined) delete (globalThis as any).company; else (globalThis as any).company = prevCompany;
-    }
-  }
-
-  test("kobo-527: a card ref matching the CURRENT company becomes a clickable chip (button, not <a> — no real navigation target)", () => {
-    withCardGlobals("kobo", () => {
-      const { cardLinkify } = loadCardLinkify();
-      const container = { nodes: [] as any[], appendChild(n: any) { this.nodes.push(n); } };
-      cardLinkify(container, "see kobo-9 for detail");
-      const chips = container.nodes.filter((n) => n.kind === "el" && n.tag === "button");
-      expect(chips.length).toBe(1);
-      expect(chips[0].textContent).toBe("kobo-9");
-      expect(chips[0].className).toContain("card-ref-chip");
-      expect(chips[0]._attrs["data-card-id"]).toBe("kobo-9");
-    });
-  });
-
-  test("kobo-527 Q3 (narrow to same company first): a DIFFERENT company's card id never becomes a chip", () => {
-    withCardGlobals("kobo", () => {
-      const { cardLinkify } = loadCardLinkify();
-      const container = { nodes: [] as any[], appendChild(n: any) { this.nodes.push(n); } };
-      cardLinkify(container, "see eq3-9 and mawjs-3, not our card");
-      expect(container.nodes.filter((n) => n.kind === "el" && n.tag === "button").length).toBe(0);
-      const text = container.nodes.filter((n) => n.kind === "text").map((n: any) => n.text).join("");
-      expect(text).toContain("eq3-9");
-      expect(text).toContain("mawjs-3");
-    });
-  });
-
-  test("kobo-527: no company selected yet → never linkifies (defensive — nothing to scope the match to)", () => {
-    withCardGlobals("", () => {
-      const { cardLinkify } = loadCardLinkify();
-      const container = { nodes: [] as any[], appendChild(n: any) { this.nodes.push(n); } };
-      cardLinkify(container, "kobo-9");
-      expect(container.nodes.filter((n) => n.kind === "el" && n.tag === "button").length).toBe(0);
-    });
-  });
-
-  // kobo-513 pattern: over-match is the real risk, not under-match. A trailing
-  // word char blocks the match entirely (no partial chip on "kobo-9x"), and a
-  // token that merely LOOKS like <company>-N ("prekobo-9") is correctly
-  // rejected by the company check even though the shape matched.
-  test("kobo-527 (kobo-513 pattern, hardest case): word-boundary + company check both hold under adjacent text", () => {
-    withCardGlobals("kobo", () => {
-      const { cardLinkify } = loadCardLinkify();
-      const container = { nodes: [] as any[], appendChild(n: any) { this.nodes.push(n); } };
-      cardLinkify(container, "(kobo-9), kobo-9x, prekobo-9 done");
-      const chips = container.nodes.filter((n) => n.kind === "el" && n.tag === "button");
-      expect(chips.length).toBe(1); // only the clean "(kobo-9)" occurrence
-      expect(chips[0].textContent).toBe("kobo-9");
-      const text = container.nodes.filter((n) => n.kind === "text").map((n: any) => n.text).join("");
-      expect(text).toContain("kobo-9x"); // trailing word-char blocks the match — never a partial chip
-      expect(text).toContain("prekobo-9"); // shape matched, prefix didn't — stays plain text
-    });
-  });
-
   function fakeTreeWalker(nodes: any[]) {
     let i = 0;
     return { nextNode: () => (i < nodes.length ? nodes[i++] : null) };
@@ -1057,33 +969,23 @@ describe("Brainstorm Room 2-pane chat view (kobo-258)", () => {
     return { closest: (sel: string) => (closestTags[sel] ? { tag: sel } : null) };
   }
 
-  // kobo-537 — linkifyDom (kobo-380) has the SAME shape of skip guard as
-  // kobo-527's cardLinkifyDom, and room.ts has BOTH of them as
-  // byte-identical lines (`if (p && (p.closest('a') || p.closest('code') ||
-  // p.closest('pre'))) continue;`) at two different line numbers — one per
-  // function. A text-based mutation/replace targeting "the guard line"
-  // can't tell which one it hit; two separate mutation attempts on this
-  // exact card already landed on the WRONG one by accident (one broke
-  // linkifyDom while meaning to test cardLinkifyDom; the other's fix
-  // pattern deleted the wrong occurrence entirely and reported a false
-  // "0 fail", which would have wrongly closed cardLinkifyDom's real guard
-  // as unwatched). This extraction is anchored on the UNIQUE function-name
-  // boundaries (const URL_RE ... const CARD_REF_RE), never on the guard
-  // text itself, specifically so it can only ever touch linkifyDom.
+  // kobo-537 — linkifyDom (kobo-380) used to share its skip-guard line
+  // byte-for-byte with kobo-527's cardLinkifyDom, so a text-based mutation
+  // targeting "the guard line" could not tell which one it hit; two mutation
+  // attempts on that card landed on the wrong one. cardLinkifyDom retired with
+  // the task subsystem, so linkifyDom now owns the only such guard in the file —
+  // the extraction stays anchored on unique boundaries anyway, and the
+  // exactly-one assertion below is what would catch a second copy reappearing.
   function loadLinkifyDomIsolated() {
     const start = html.indexOf("const URL_RE =");
-    const end = html.indexOf("const CARD_REF_RE", start);
+    const end = html.indexOf("// kobo-398 — mermaid, lazy-loaded", start);
     const src = html.slice(start, end);
-    // kobo-537: confirm at load time — from the ACTUALLY SERVED string, not
-    // by assumption — that this slice contains linkifyDom's guard exactly
-    // once and contains NONE of cardLinkifyDom (name, guard, or otherwise).
-    // If a future edit moves code across this boundary, this throws instead
-    // of silently testing the wrong (or an empty) function.
+    // kobo-537: confirm at load time — from the ACTUALLY SERVED string, not by
+    // assumption — that this slice contains the guard exactly once. If a future
+    // edit moves code across this boundary, this throws instead of silently
+    // testing the wrong (or an empty) function.
     if ((src.match(/p\.closest\('a'\) \|\| p\.closest\('code'\) \|\| p\.closest\('pre'\)/g) || []).length !== 1) {
       throw new Error("kobo-537: expected exactly ONE code/pre/a guard line in the linkifyDom-only slice");
-    }
-    if (src.includes("cardLinkifyDom") || src.includes("CARD_REF_RE")) {
-      throw new Error("kobo-537: linkifyDom extraction slice leaked cardLinkifyDom content — boundary drifted");
     }
     return new Function(`${src}; return { linkify, linkifyDom };`)();
   }
@@ -1150,267 +1052,6 @@ describe("Brainstorm Room 2-pane chat view (kobo-258)", () => {
     } finally {
       (globalThis as any).document = prevDoc;
       (globalThis as any).NodeFilter = prevNF;
-    }
-  });
-
-  // kobo-513's actual review finding was exactly this shape: a mutation test
-  // proved the string was there but nothing was WATCHING it stay correct.
-  // This drives real text nodes through the real TreeWalker-walk + skip logic
-  // (not just a grep for the skip condition), so deleting the skip, or
-  // running cardLinkifyDom before linkifyDom, fails this test.
-  test("kobo-527 (kobo-513 pattern): cardLinkifyDom skips text already inside <a>/<code>/<pre> — the exact over-match risk this room hits daily (card # pasted inside a URL or code block)", () => {
-    const prevDoc = (globalThis as any).document;
-    const prevNF = (globalThis as any).NodeFilter;
-    const prevCompany = (globalThis as any).company;
-    (globalThis as any).NodeFilter = { SHOW_TEXT: 4 };
-    (globalThis as any).company = "kobo";
-    const plainNode = fakeTextNode("see kobo-9 for detail", fakeParent({}));
-    const inLinkNode = fakeTextNode("kobo-9", fakeParent({ a: true })); // e.g. inside a URL that happens to contain the card id
-    const inCodeNode = fakeTextNode("kobo-9", fakeParent({ code: true }));
-    const inPreNode = fakeTextNode("kobo-9", fakeParent({ pre: true }));
-    const nodes = [plainNode, inLinkNode, inCodeNode, inPreNode];
-    (globalThis as any).document = {
-      createTreeWalker: () => fakeTreeWalker(nodes),
-      createDocumentFragment: () => ({ kind: "frag", children: [] as any[], appendChild(c: any) { this.children.push(c); } }),
-      createTextNode: (t: string) => ({ kind: "text", text: t }),
-      createElement: (tag: string) => ({ kind: "el", tag, textContent: "", className: "", _attrs: {} as Record<string, string>, setAttribute(n: string, v: string) { this._attrs[n] = v; } }),
-    };
-    try {
-      const { cardLinkifyDom } = loadCardLinkifyDom();
-      cardLinkifyDom({}); // the fake TreeWalker ignores the root arg
-      expect(plainNode.replacedWith).not.toBe(null); // only the plain node was touched
-      expect(inLinkNode.replacedWith).toBe(null);
-      expect(inCodeNode.replacedWith).toBe(null);
-      expect(inPreNode.replacedWith).toBe(null);
-      const chipsInPlain = plainNode.replacedWith.children.filter((c: any) => c.kind === "el" && c.tag === "button");
-      expect(chipsInPlain.length).toBe(1); // and the plain one actually got a real chip, not just "was touched"
-    } finally {
-      (globalThis as any).document = prevDoc;
-      (globalThis as any).NodeFilter = prevNF;
-      if (prevCompany === undefined) delete (globalThis as any).company; else (globalThis as any).company = prevCompany;
-    }
-  });
-
-  test("kobo-527: card-ref chips run AFTER url linkify in the message render path (so a card # already wrapped in <a> by URL linkify is never double-linked)", () => {
-    const linkifyIdx = html.indexOf("linkifyDom(bodyEl)");
-    const cardLinkifyIdx = html.indexOf("cardLinkifyDom(bodyEl)");
-    expect(linkifyIdx).toBeGreaterThan(-1);
-    expect(cardLinkifyIdx).toBeGreaterThan(linkifyIdx);
-  });
-
-  test("kobo-527: clicking a card-ref chip opens the card in the SAME shared modal (no second modal instance)", async () => {
-    const { content, modal, mmdModalContent, mermaidModal, mmdModalClose } = modalElements();
-    const prevDoc = (globalThis as any).document;
-    const prevCompany = (globalThis as any).company;
-    const prevEl = (globalThis as any).el;
-    const prevGetJson = (globalThis as any).getJson;
-    (globalThis as any).document = { activeElement: { focus() {} } };
-    (globalThis as any).company = "kobo";
-    (globalThis as any).el = (tag: string, cls?: string, txt?: string) => ({ tag, cls, textContent: txt, children: [] as any[], appendChild(c: any) { this.children.push(c); }, replaceChildren() { this.children = []; } });
-    (globalThis as any).getJson = async () => ({ body: { ok: true, task: { id: "kobo-9", title: "fix thing", state: "in-progress", assignee: "stitch" } } });
-    try {
-      const start = html.indexOf("const CARD_REF_RE");
-      const end = html.indexOf("// ── wire", start);
-      const src = html.slice(start, end);
-      const { onThreadClick } = new Function("$", `${src}; return { onThreadClick };`)((id: string) => ({ mmdModalContent, mermaidModal, mmdModalClose }[id]));
-      const chip = { getAttribute: (n: string) => (n === "data-card-id" ? "kobo-9" : null) };
-      const target = { closest: (sel: string) => (sel === ".card-ref-chip" ? chip : null) };
-      await onThreadClick({ target });
-      expect(content.children.length).toBe(1); // populated the SAME #mermaidModal content slot the diagram zoom uses
-      expect(modal.style.display).toBe(""); // and it's actually shown
-    } finally {
-      (globalThis as any).document = prevDoc;
-      if (prevCompany === undefined) delete (globalThis as any).company; else (globalThis as any).company = prevCompany;
-      if (prevEl === undefined) delete (globalThis as any).el; else (globalThis as any).el = prevEl;
-      if (prevGetJson === undefined) delete (globalThis as any).getJson; else (globalThis as any).getJson = prevGetJson;
-    }
-  });
-
-  // kobo-538 — kobo-446 has 434 notes → the card-ref modal used to fetch the FULL
-  // task (1.5MB) and use only id/title/state/assignee/body. Two fixes, both tested
-  // BEHAVIORALLY (kobo-445's lesson, %8 caught this exact class of mistake there:
-  // a test that only asserts "the guard LINE exists in the served string" stays
-  // green even after the guard is mutated into a no-op — so these extract the real
-  // openCardModal via `new Function`, same technique kobo-445's overlap test uses,
-  // and drive it with a fetch stub that can be made to hang or tracked by call count).
-  function clickChip(onThreadClick: (ev: unknown) => unknown, id: string) {
-    const chip = { getAttribute: (n: string) => (n === "data-card-id" ? id : null) };
-    const target = { closest: (sel: string) => (sel === ".card-ref-chip" ? chip : null) };
-    return onThreadClick({ target });
-  }
-  function loadOnThreadClick($resolve: (id: string) => unknown) {
-    const start = html.indexOf("const CARD_REF_RE");
-    const end = html.indexOf("// ── wire", start);
-    const src = html.slice(start, end);
-    return new Function("$", `${src}; return { onThreadClick };`)($resolve).onThreadClick;
-  }
-  // kobo-538 round 2 — same extraction, but the close path is needed too: the
-  // dead-click bug lives in the interaction BETWEEN openCardModal and
-  // closeMermaidModal, so a test that can only click can never see it.
-  function loadCardModalApi($resolve: (id: string) => unknown) {
-    const start = html.indexOf("const CARD_REF_RE");
-    const end = html.indexOf("// ── wire", start);
-    const src = html.slice(start, end);
-    return new Function("$", `${src}; return { onThreadClick, closeMermaidModal };`)($resolve);
-  }
-
-  test("kobo-538: shows a loading placeholder immediately, before the fetch resolves", async () => {
-    const { content, modal, mmdModalContent, mermaidModal, mmdModalClose } = modalElements();
-    const prevDoc = (globalThis as any).document;
-    const prevCompany = (globalThis as any).company;
-    const prevEl = (globalThis as any).el;
-    const prevGetJson = (globalThis as any).getJson;
-    (globalThis as any).document = { activeElement: { focus() {} } };
-    (globalThis as any).company = "kobo";
-    (globalThis as any).el = (tag: string, cls?: string, txt?: string) => ({ tag, cls, textContent: txt, children: [] as any[], appendChild(c: any) { this.children.push(c); }, replaceChildren() { this.children = []; } });
-    let releaseFetch: (v: unknown) => void = () => {};
-    (globalThis as any).getJson = () => new Promise((resolve) => { releaseFetch = resolve; }); // hangs until released
-    try {
-      const onThreadClick = loadOnThreadClick((id) => ({ mmdModalContent, mermaidModal, mmdModalClose }[id]));
-      const clickPromise = clickChip(onThreadClick, "kobo-446");
-      // the fetch is still hanging — the modal must ALREADY be showing something, not nothing
-      expect(modal.style.display).toBe("");
-      expect(content.children.length).toBe(1);
-      const box = content.children[0];
-      expect(box.children.some((c: any) => c.cls === "card-ref-modal-loading")).toBe(true);
-
-      releaseFetch({ body: { ok: true, task: { id: "kobo-446", title: "chatty card", state: "review" } } });
-      await clickPromise;
-      expect(box.children.some((c: any) => c.cls === "card-ref-modal-loading")).toBe(false); // replaced once real data arrived
-      expect(box.children.some((c: any) => c.cls === "card-ref-modal-title")).toBe(true);
-    } finally {
-      (globalThis as any).document = prevDoc;
-      if (prevCompany === undefined) delete (globalThis as any).company; else (globalThis as any).company = prevCompany;
-      if (prevEl === undefined) delete (globalThis as any).el; else (globalThis as any).el = prevEl;
-      if (prevGetJson === undefined) delete (globalThis as any).getJson; else (globalThis as any).getJson = prevGetJson;
-    }
-  });
-
-  test("kobo-538: a repeat click on the SAME still-loading card does not fire a second fetch", async () => {
-    const { mmdModalContent, mermaidModal, mmdModalClose } = modalElements();
-    const prevDoc = (globalThis as any).document;
-    const prevCompany = (globalThis as any).company;
-    const prevEl = (globalThis as any).el;
-    const prevGetJson = (globalThis as any).getJson;
-    (globalThis as any).document = { activeElement: { focus() {} } };
-    (globalThis as any).company = "kobo";
-    (globalThis as any).el = (tag: string, cls?: string, txt?: string) => ({ tag, cls, textContent: txt, children: [] as any[], appendChild(c: any) { this.children.push(c); }, replaceChildren() { this.children = []; } });
-    let fetchCalls = 0;
-    const releasers: Array<(v: unknown) => void> = [];
-    (globalThis as any).getJson = (_url: string) => { fetchCalls++; return new Promise((resolve) => releasers.push(resolve)); };
-    try {
-      const onThreadClick = loadOnThreadClick((id) => ({ mmdModalContent, mermaidModal, mmdModalClose }[id]));
-      const first = clickChip(onThreadClick, "kobo-446"); // runs synchronously up to its `await getJson(...)`, sets the in-flight marker, then suspends
-      const second = clickChip(onThreadClick, "kobo-446"); // repeat click on the SAME card — must be a no-op, not a second fetch
-      expect(fetchCalls).toBe(1);
-
-      releasers.forEach((r) => r({ body: { ok: true, task: { id: "kobo-446", title: "x", state: "review" } } }));
-      await Promise.all([first, second]);
-    } finally {
-      (globalThis as any).document = prevDoc;
-      if (prevCompany === undefined) delete (globalThis as any).company; else (globalThis as any).company = prevCompany;
-      if (prevEl === undefined) delete (globalThis as any).el; else (globalThis as any).el = prevEl;
-      if (prevGetJson === undefined) delete (globalThis as any).getJson; else (globalThis as any).getJson = prevGetJson;
-    }
-  });
-
-  test("kobo-538: switching to a DIFFERENT card while one is still loading opens the new one, not a stale response", async () => {
-    const { mmdModalContent, mermaidModal, mmdModalClose } = modalElements();
-    const prevDoc = (globalThis as any).document;
-    const prevCompany = (globalThis as any).company;
-    const prevEl = (globalThis as any).el;
-    const prevGetJson = (globalThis as any).getJson;
-    (globalThis as any).document = { activeElement: { focus() {} } };
-    (globalThis as any).company = "kobo";
-    (globalThis as any).el = (tag: string, cls?: string, txt?: string) => ({ tag, cls, textContent: txt, children: [] as any[], appendChild(c: any) { this.children.push(c); }, replaceChildren() { this.children = []; } });
-    const releasers: Record<string, (v: unknown) => void> = {};
-    (globalThis as any).getJson = (url: string) => new Promise((resolve) => {
-      const id = url.includes("id=kobo-446") ? "kobo-446" : "kobo-9";
-      releasers[id] = resolve;
-    });
-    try {
-      const onThreadClick = loadOnThreadClick((id) => ({ mmdModalContent, mermaidModal, mmdModalClose }[id]));
-      const first = clickChip(onThreadClick, "kobo-446"); // starts loading, suspends on its fetch
-      const second = clickChip(onThreadClick, "kobo-9"); // switches to a different card before the first resolves — allowed
-
-      // the OLD card's fetch finally resolves — its response must be dropped, not shown
-      releasers["kobo-446"]({ body: { ok: true, task: { id: "kobo-446", title: "stale", state: "review" } } });
-      await first;
-      const box = mmdModalContent.children[0];
-      expect(box.children.some((c: any) => c.textContent === "kobo-446 · stale")).toBe(false);
-
-      releasers["kobo-9"]({ body: { ok: true, task: { id: "kobo-9", title: "fresh", state: "todo" } } });
-      await second;
-      expect(box.children.some((c: any) => c.textContent === "kobo-9 · fresh")).toBe(true);
-    } finally {
-      (globalThis as any).document = prevDoc;
-      if (prevCompany === undefined) delete (globalThis as any).company; else (globalThis as any).company = prevCompany;
-      if (prevEl === undefined) delete (globalThis as any).el; else (globalThis as any).el = prevEl;
-      if (prevGetJson === undefined) delete (globalThis as any).getJson; else (globalThis as any).getJson = prevGetJson;
-    }
-  });
-
-  test("kobo-538: closing the modal mid-load leaves that card clickable again", async () => {
-    const { mmdModalContent, mermaidModal, mmdModalClose } = modalElements();
-    const prevDoc = (globalThis as any).document;
-    const prevCompany = (globalThis as any).company;
-    const prevEl = (globalThis as any).el;
-    const prevGetJson = (globalThis as any).getJson;
-    (globalThis as any).document = { activeElement: { focus() {} } };
-    (globalThis as any).company = "kobo";
-    (globalThis as any).el = (tag: string, cls?: string, txt?: string) => ({ tag, cls, textContent: txt, children: [] as any[], appendChild(c: any) { this.children.push(c); }, replaceChildren() { this.children = []; } });
-    let fetchCalls = 0;
-    const releasers: Array<(v: unknown) => void> = [];
-    (globalThis as any).getJson = (_url: string) => { fetchCalls++; return new Promise((resolve) => releasers.push(resolve)); };
-    try {
-      const { onThreadClick, closeMermaidModal } = loadCardModalApi((id) => ({ mmdModalContent, mermaidModal, mmdModalClose }[id]));
-      const first = clickChip(onThreadClick, "kobo-446"); // starts loading, suspends on its fetch
-      expect(fetchCalls).toBe(1);
-
-      closeMermaidModal(); // reader gives up on the ~1.1s wait and closes — the first fetch is still outstanding
-      const second = clickChip(onThreadClick, "kobo-446"); // clicking that SAME card again must work, not silently do nothing
-      expect(fetchCalls).toBe(2);
-
-      // the abandoned first request settles LAST. It must not clear the second
-      // request's marker on its way out, or the next click double-fetches.
-      releasers[0]({ body: { ok: true, task: { id: "kobo-446", title: "stale", state: "review" } } });
-      await first;
-      clickChip(onThreadClick, "kobo-446"); // second request is still in flight — this one IS a repeat click
-      expect(fetchCalls).toBe(2);
-
-      releasers[1]({ body: { ok: true, task: { id: "kobo-446", title: "fresh", state: "review" } } });
-      await second;
-      const box = mmdModalContent.children[0];
-      expect(box.children.some((c: any) => c.textContent === "kobo-446 · fresh")).toBe(true); // the reopened modal actually rendered
-    } finally {
-      (globalThis as any).document = prevDoc;
-      if (prevCompany === undefined) delete (globalThis as any).company; else (globalThis as any).company = prevCompany;
-      if (prevEl === undefined) delete (globalThis as any).el; else (globalThis as any).el = prevEl;
-      if (prevGetJson === undefined) delete (globalThis as any).getJson; else (globalThis as any).getJson = prevGetJson;
-    }
-  });
-
-  test("kobo-538: the card-ref detail fetch opts out of notes/comments (?notes=0) — this modal never renders them", async () => {
-    const { mmdModalContent, mermaidModal, mmdModalClose } = modalElements();
-    const prevDoc = (globalThis as any).document;
-    const prevCompany = (globalThis as any).company;
-    const prevEl = (globalThis as any).el;
-    const prevGetJson = (globalThis as any).getJson;
-    (globalThis as any).document = { activeElement: { focus() {} } };
-    (globalThis as any).company = "kobo";
-    (globalThis as any).el = (tag: string, cls?: string, txt?: string) => ({ tag, cls, textContent: txt, children: [] as any[], appendChild(c: any) { this.children.push(c); }, replaceChildren() { this.children = []; } });
-    let calledUrl = "";
-    (globalThis as any).getJson = async (url: string) => { calledUrl = url; return { body: { ok: true, task: { id: "kobo-446", title: "x", state: "review" } } }; };
-    try {
-      const onThreadClick = loadOnThreadClick((id) => ({ mmdModalContent, mermaidModal, mmdModalClose }[id]));
-      await clickChip(onThreadClick, "kobo-446");
-      expect(calledUrl).toContain("/api/tasks/detail?company=kobo&id=kobo-446");
-      expect(calledUrl).toContain("notes=0");
-    } finally {
-      (globalThis as any).document = prevDoc;
-      if (prevCompany === undefined) delete (globalThis as any).company; else (globalThis as any).company = prevCompany;
-      if (prevEl === undefined) delete (globalThis as any).el; else (globalThis as any).el = prevEl;
-      if (prevGetJson === undefined) delete (globalThis as any).getJson; else (globalThis as any).getJson = prevGetJson;
     }
   });
 

@@ -14,9 +14,9 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { checkBusyGuard, cmdWake, findWindow, hostExec, listSessions, type Session } from "maw-js/sdk";
-import { loadConfig } from "maw-js/config";
 import { loadCompany, type Company } from "../company/company-helpers";
 import { scopeOfOracle } from "../../../core/worklog/company-scope";
+import { resolveAgentSelf } from "../../../commands/shared/comm-send";
 import { teardownCrewWindows, BRAIN_MODEL, DEFAULT_WORKER_MODEL } from "../../../core/agent-panes";
 
 const CELL_WORKERS_WINDOW = "cell-workers";
@@ -44,6 +44,22 @@ function contractAssetPath(role: Role): string {
 function renderContract(role: Role, vars: { company: string; dept: string; board: string }): string {
   const tpl = readFileSync(contractAssetPath(role), "utf8");
   return tpl.replaceAll("{{COMPANY}}", vars.company).replaceAll("{{DEPT}}", vars.dept).replaceAll("{{BOARD}}", vars.board);
+}
+
+/**
+ * kobo-cell-spawn-dept-resolve: resolve the CURRENT pane's own dept for the
+ * rendered contract. Was reading `loadConfig().oracle` — a generic maw-js
+ * family identity that defaults to "mawjs" everywhere it's consumed — never
+ * the specific oracle instance name a company roster keys on, so the lookup
+ * always missed. resolveAgentSelf() reads the pane's own tmux session name
+ * (or CLAUDE_AGENT_NAME), matching how the roster loop above resolves
+ * sessions via findWindow(sessions, member.oracle). An oracle genuinely
+ * outside any dept (or an unresolvable identity) renders explicitly rather
+ * than a blank.
+ */
+export function resolveSelfDept(): string {
+  const oracle = resolveAgentSelf() ?? "";
+  return scopeOfOracle(oracle)?.dept || "(none)";
 }
 
 async function capturePane(paneId: string): Promise<string> {
@@ -324,9 +340,7 @@ export async function cellSelfSpawn(company: string | undefined, emit: (line: st
   for (const line of teardown.logs) emit(line);
   if (!teardown.ok) return { ok: false, error: teardown.error };
 
-  const oracle = ((loadConfig() as unknown as Record<string, unknown>).oracle as string) || "";
-  const scope = scopeOfOracle(oracle);
-  const dept = scope?.dept ?? "";
+  const dept = resolveSelfDept();
   const board = company;
   const stateDir = process.env.CREW_STATE_DIR || DEFAULT_STATE_DIR;
   mkdirSync(stateDir, { recursive: true });

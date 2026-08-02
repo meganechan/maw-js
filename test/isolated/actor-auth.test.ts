@@ -1,14 +1,14 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
+import { describe, expect, test } from "bun:test";
 import { authenticateActor, resolveAgentSelf } from "../../src/commands/shared/comm-send";
-import { runTask } from "../../src/vendor/mpr-plugins/task/index";
-import { readTask } from "../../src/core/tasks/store";
 
-// kobo-335: actor-auth — a task-write actor is bound to the local agent self
+// kobo-335: actor-auth — an actor is bound to the local agent self
 // (CLAUDE_AGENT_NAME or tmux); a --from/MAW_SENDER claim naming a DIFFERENT oracle is
 // refused. env is injected so these are deterministic (no real tmux / process env).
+//
+// The end-to-end half of this file drove a real task WRITE verb (`runTask`) to prove
+// the guard held at the verb boundary; that verb retired with the task subsystem. The
+// surviving in-process caller of authenticateActor is the `[request:<id>]` hook in
+// src/cli/route-comm.ts, which refuses a forged claim the same way (catch → skip).
 
 describe("kobo-335 resolveAgentSelf", () => {
   test("CLAUDE_AGENT_NAME wins", () => {
@@ -50,60 +50,5 @@ describe("kobo-335 authenticateActor", () => {
   });
   test("malformed claim → invalid error (not a silent pass)", () => {
     expect(() => authenticateActor("eq3", eq3)).toThrow(/invalid actor/); // bare, not <node>:<oracle>
-  });
-});
-
-// Integration: the auth is enforced END-TO-END through a real task WRITE verb — a
-// forged --from is refused by the verb (runTask top-level catch → {ok:false}), and a
-// self-matching --from stamps the actor. Covers the card AC at the verb level.
-describe("kobo-335 actor-auth via runTask (real verb)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "maw-actorauth-"));
-  const prevDir = process.env.MAW_DATA_DIR;
-  const prevAgent = process.env.CLAUDE_AGENT_NAME;
-  const prevTest = process.env.MAW_TEST_MODE;
-  beforeAll(() => {
-    process.env.MAW_DATA_DIR = dir;
-    process.env.MAW_TEST_MODE = "1"; // kobo-335: suppress real notify/ping delivery to live panes
-    mkdirSync(join(dir, "companies"), { recursive: true });
-    writeFileSync(join(dir, "companies", "kobo.json"),
-      JSON.stringify({ name: "kobo", departments: { core: { members: [{ oracle: "eq3" }], lead: "eq3" } } }));
-  });
-  afterAll(() => {
-    if (prevDir === undefined) delete process.env.MAW_DATA_DIR; else process.env.MAW_DATA_DIR = prevDir;
-    if (prevAgent === undefined) delete process.env.CLAUDE_AGENT_NAME; else process.env.CLAUDE_AGENT_NAME = prevAgent;
-    if (prevTest === undefined) delete process.env.MAW_TEST_MODE; else process.env.MAW_TEST_MODE = prevTest;
-    rmSync(dir, { recursive: true, force: true });
-  });
-  afterEach(() => rmSync(join(dir, "companies", "kobo", "tasks"), { recursive: true, force: true }));
-  const run = (args: string[]) => runTask([...args, "--company", "kobo"], () => {});
-
-  test("--from names a DIFFERENT oracle than the agent self → verb REFUSES", async () => {
-    process.env.CLAUDE_AGENT_NAME = "eq3";
-    const r = await run(["add", "forge", "--from", "mba:tony"]);
-    expect(r.ok).toBe(false);
-    expect(r.error).toContain("can't act as \"tony\"");
-  });
-
-  test("--from matches the agent self → verb stamps that actor as by", async () => {
-    process.env.CLAUDE_AGENT_NAME = "eq3";
-    const r = await run(["add", "legit", "--from", "local:eq3"]);
-    expect(r.ok).toBe(true);
-    expect(readTask("kobo", "kobo-1")!.by).toBe("eq3");
-  });
-
-  test("no --from → auto-resolves to the agent self (unchanged path)", async () => {
-    process.env.CLAUDE_AGENT_NAME = "eq3";
-    const r = await run(["add", "auto"]);
-    expect(r.ok).toBe(true);
-    expect(readTask("kobo", "kobo-1")!.by).toBe("eq3");
-  });
-
-  test("forged sign can't stamp a merge-gate signer as another oracle", async () => {
-    process.env.CLAUDE_AGENT_NAME = "eq3";
-    await run(["add", "c", "--from", "local:eq3"]);
-    const r = await run(["sign", "kobo-1", "--role", "head", "--from", "mba:tony"]);
-    expect(r.ok).toBe(false);
-    expect(r.error).toContain("can't act as \"tony\"");
-    expect(readTask("kobo", "kobo-1")!.headSignedBy).toBeUndefined(); // no forged signer persisted
   });
 });

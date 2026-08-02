@@ -17,7 +17,7 @@ import { companyOracles } from "../../../core/worklog/company-scope";
 import {
   deptLearn, deptKnowledge, deptShare, deptSync,
 } from "./company-knowledge";
-// cli-reorg (ADR docs/company/0001): `maw company home|worklog|task` delegate to
+// cli-reorg (ADR docs/company/0001): `maw company home|worklog` delegate to
 // their plugins' shared runners — one logic copy, no duplication. Sibling-plugin
 // imports (not core/* reaches), so outside the boundary guard.
 import { runHome } from "../home/index";
@@ -523,7 +523,7 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
     const asDept = ctx.matchedName === "team" || ctx.matchedName === "dept";
     // `attach` is an async company verb (shells out to maw attach / maw bud).
     const isAttach = !asDept && args[0]?.toLowerCase() === "attach";
-    // cli-reorg: `maw company home|worklog|task <verb>` → the plugin's shared runner (async).
+    // cli-reorg: `maw company home|worklog <verb>` → the plugin's shared runner (async).
     const isHome = !asDept && args[0]?.toLowerCase() === "home";
     const isWorklog = !asDept && args[0]?.toLowerCase() === "worklog";
     // Cell v2: `maw company cell spawn <co>` — uniform 2-window/3-pane cell.

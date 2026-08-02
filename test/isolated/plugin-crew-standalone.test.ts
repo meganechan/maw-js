@@ -1,13 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expectStandalonePluginBoundary } from "./helpers/plugin-standalone-boundary";
 
-// kobo-358 plugin-coverage-gate: the `crew` plugin is a MODULE surface
+// kobo-358 plugin-coverage-gate: `crew` here is a MODULE surface
 // (mirrors home/worklog/task — `runCrew` invoked by `maw company crew`, not a
 // top-level command). It shells hostExec (tmux) + reads oracle/company config
 // on purpose — this test pins exactly which boundaries it may cross, so
 // extraction/refactor drift is visible instead of silent.
+//
+// It is deliberately NOT a bundled plugin package: the manifest was dropped so
+// the plugin NAME `crew` belongs solely to the separately installed
+// Soul-Brews-Studio/maw-crew (which owns the top-level `maw crew` command).
 
 describe("crew command plugin standalone boundary", () => {
   test("crew keeps explicit import boundaries (SDK + maw-js/config + core/worklog/company-scope)", () => {
@@ -21,10 +25,16 @@ describe("crew command plugin standalone boundary", () => {
     expect(imports).toContain("maw-js/config");
   });
 
-  test("module surface only — no top-level `cli.command` (mirrors home/worklog/task, cli-reorg pattern)", () => {
-    const pluginSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/crew/plugin.ts"), "utf8");
-    expect(pluginSrc).not.toContain("cli:");
-    expect(pluginSrc).toContain('"exports": ["runCrew"]');
+  // kobo-358 removal: no manifest => plugin-bootstrap's isPluginDir() is false,
+  // so linkBundledPlugins() skips this dir and healOrPruneBrokenSymlinks() finds
+  // no `replacement` for the entry `crew`. That is what keeps ~/.maw/plugins/crew
+  // pointing at the installed maw-crew instead of being claimed/re-pointed here.
+  // Reached as a plain sibling MODULE import from company/index.ts, which needs
+  // no manifest — so dropping it costs nothing at the `maw company crew` seam.
+  test("no plugin manifest — the bundled-plugin name `crew` is left free for maw-crew", () => {
+    const crewDir = join(import.meta.dir, "../../src/vendor/mpr-plugins/crew");
+    expect(existsSync(join(crewDir, "plugin.json"))).toBe(false);
+    expect(existsSync(join(crewDir, "plugin.ts"))).toBe(false);
   });
 
   test("index.ts exports runCrew(args, emit) — the shared runner contract (home/task pattern)", () => {

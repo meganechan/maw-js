@@ -150,8 +150,14 @@ mock.module(join(root, "src/commands/shared/wake-pane-size"), () => ({
   },
 }));
 
-export const { cmdSleep, cmdWakeAll } = await import("../../src/commands/shared/fleet-wake");
-export const { HostExecError } = await import("../../src/core/transport/ssh");
+// `require`, not `await import`: under `bun test --isolate` an IMPORTED module's
+// body halts at its first top-level await and never resumes, so every export
+// below it — plus the beforeEach/afterEach hooks — stays uninitialized and the
+// test file dies with "Cannot access 'cmdWakeAll' before initialization". Top-
+// level await is only safe in the entry test file itself. The mock.module calls
+// above are synchronous, so a plain require sees them all.
+export const { cmdSleep, cmdWakeAll } = require("../../src/commands/shared/fleet-wake") as typeof import("../../src/commands/shared/fleet-wake");
+export const { HostExecError } = require("../../src/core/transport/ssh") as typeof import("../../src/core/transport/ssh");
 
 beforeEach(resetState);
 

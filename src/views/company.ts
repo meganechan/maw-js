@@ -1698,7 +1698,7 @@ async function openDetail(task) {
   renderDetailFamily(task); // kobo-136: family tree (root → descendants, current marked)
   const bodyEl = $('detail-body');
   if (task.body) { bodyEl.replaceChildren(renderCardBody(task.body)); } // kobo-60: structured field/scope blocks + prose
-  else { const p = el('p', '', '(no detail — add one with: maw company task add ... --body)'); p.style.color = 'var(--muted)'; bodyEl.replaceChildren(p); }
+  else { const p = el('p', '', '(no detail — this card was created without a body)'); p.style.color = 'var(--muted)'; bodyEl.replaceChildren(p); }
   // kobo-141: the ask/answer comment thread (Board Truth rule 10) sits above the
   // notes log — comments are the primary channel now, notes are evidence/log.
   renderDetailComments(task);

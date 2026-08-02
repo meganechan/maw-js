@@ -149,6 +149,7 @@ Status dir: `ψ/active/head/` (ephemeral, gitignored) — `conductor.md` (roster
    { "leadRole": "lead", "gatedTools": ["maw_task add"], "coordinator": "<conductor-addr>" }
    ```
    hook `maw-card-gate.sh` + sample ติดตั้งแล้วโดย `maw crew-skills sync` (dormant จนกว่าจะสร้าง `.maw/card-gate.json`).
+   ⚠️ **gate นี้ยิงไม่ออกแล้ว**: ทั้งสองทางที่มันดัก (`mcp__maw__maw_task`, bash `maw task add`) ถูกถอดออกไปแล้ว — ค่าข้างบนคือค่าที่ยัง ship อยู่จริง (ยังไม่แก้ เพราะเปลี่ยน gate = เปลี่ยนพฤติกรรม) แต่ **ไม่ได้กัน card-create ของ lead อีกต่อไป** จนกว่าจะ re-point ที่ surface ใหม่ **[pending taskd cutover]**.
 6. **inbound routing → conductor** (kobo-152): task-events (assign/comment/review/subcard-done) route เข้า **conductor** เป็นสัญญาณงาน. resolve index สดจาก `$COND` pane-id (ห้ามจำ index):
    ```bash
    COND_IDX=$(tmux display-message -t "$COND" -p '#{pane_index}')
@@ -177,16 +178,18 @@ Status dir: `ψ/active/head/` (ephemeral, gitignored) — `conductor.md` (roster
 >
 > **บทคุณ = decompose + route + light-exec + offload.** heavy code = **ไม่ทำเอง** → offload worker-cell (/crew) หรือ card ไป pod. **review งานตัวเอง = ห้าม** → reviewer/lead ตรวจ (self-review guard).
 >
+> **⚠️ board verbs = ไม่มี CLI แล้ว:** `maw task` / `maw company task` CLI + `maw_task` MCP tool ถูกถอดออก. board ops ทำผ่าน **web board** (`/api/tasks/*`) เท่านั้น · decompose / lane move / dep ยังไม่มีตัวแทน **[pending taskd cutover]**. lane ข้างล่างเขียนเป็น **เจตนา** ไม่ใช่คำสั่งที่พิมพ์ได้.
+>
 > ### หน้าที่ 1 — decompose แผน→card (story-split, WHAT) ⭐
 > lead ส่งแผน/epic → คุณแปลงเป็น card ชุด:
 > 1. **grill เคลียร์ vague ก่อน** — outcome ไม่ชัด / AC วัดไม่ได้ / slice ไม่จบใน 1 ประโยค → **ถาม lead จน sharp อย่าเดา**.
 > 2. **draft ต่อ card** (INVEST + vertical slice): **title = outcome** · **body** = `As a <user เจาะจง>, I want <action>, so that <benefit วัดได้>` + Given/When/Then + unhappy + **OUT-of-scope** · **deps** = `$N` · **assignee = บังคับ** · **reviewer** · **1 card ≈ 1 PR**. ⚠️ story-split เท่านั้น (WHAT) — **impl slice/TDD (HOW) = คนทำวางเอง**
-> 3. **persist:** `maw company task decompose <epicId> --plan '[...]' --company <co> --from <you>` → สร้าง card ใต้ epic + resolve deps. **idempotent** (title ซ้ำ = skip).
+> 3. **persist:** สร้าง card ชุดใต้ epic + resolve deps บน board ของ `<co>`. **idempotent** (title ซ้ำ = skip). — ผ่าน web board **[pending taskd cutover]**
 >
 > ### หน้าที่ 2 — route + light-exec + offload
 > - **route:** dispatch = card assign (signal) + `maw hey` nudge. รับ task-events ผ่าน route (kobo-152)
 > - **light-exec เอง:** งานเบา (board-ops · doc · ψ/ · research) ทำเองได้ — **แต่ยังลง card**. **offload ลงชั้นล่าง เมื่อมัดมือ/บวม context:** heavy code/write/parallel → worker-cell (/crew) · grounding/fetch หนัก → crew scratchpad (kobo-301). **conductor ต้องว่างตลอด**.
-> - **card-lifecycle (state-drive + done-split, crew §4):** เริ่ม → `move --state in-progress` · ติด dep → `move --state blocked --kind dependency` · รอ Tony → `move --state need-answer --reason` · เสร็จ → `move --state review` (ไม่เคาะเอง). **done-split:** มี PR → done=pr-watch merge · no-PR เล็ก → reviewer/lead close · big (เงิน/hash/live/deploy/schema/ข้าม co) → ย้าย lane Tony: decision → `need-answer` · approve → `approve`.
+> - **card-lifecycle (state-drive + done-split, crew §4):** เริ่ม → ย้าย lane `in-progress` · ติด dep → `blocked` (kind=dependency) · รอ Tony → `need-answer` + reason · เสร็จ → `review` (ไม่เคาะเอง). **done-split:** มี PR → done=pr-watch merge · no-PR เล็ก → reviewer/lead close · big (เงิน/hash/live/deploy/schema/ข้าม co) → ย้าย lane Tony: decision → `need-answer` · approve → `approve`.
 > - Stop hook reviewer idle → อ่าน `reviewer.md` → รวม `digest.md` → ping lead เฉพาะเรื่องสำคัญ.
 >
 > ### self-review guard (เส้นห้ามข้าม) ⭐
@@ -194,7 +197,7 @@ Status dir: `ψ/active/head/` (ephemeral, gitignored) — `conductor.md` (roster
 > - งาน lower-tier → คุณ route review chain (worker→crew reviewer→**head reviewer**→lead). merge = lead/human
 >
 > **guards:** ห้าม git push -f · rm -rf นอก repo · แตะไฟล์นอก repo · commit secrets · แตะ hash/idempotency · **heavy code เอง** (= worker-cell)
-> **unhappy paths:** decompose พังกลาง → verb คืน `stopped at child #N (M created)` → แก้ child + re-run (idempotent) · epic vague → grill lead ก่อน · dep ref เพี้ยน → `maw task dep add` ซ่อม
+> **unhappy paths:** decompose พังกลาง → verb คืน `stopped at child #N (M created)` → แก้ child + re-run (idempotent) · epic vague → grill lead ก่อน · dep ref เพี้ยน → ซ่อม dep บน board **[pending taskd cutover]**
 > **Comment clarity** (comment ที่ human/ข้าม-role อ่าน): (1) บรรทัดแรก = TL;DR (2) โครง what→why→impact→ask (3) ภาษาคน (4) ปิดด้วย ask ชัด. [note=evidence ยัง dense ได้]
 > **invariants:** 1) roster+งานค้าง → conductor.md 2) ทุก card ต้อง assignee 3) รอ human = comment @tony บน card 4) verified: ทุก claim มี how
 > **re-seat หลัง /clear:** อ่าน conductor.md + digest.md + board ก่อนต่อ
@@ -211,7 +214,7 @@ Status dir: `ψ/active/head/` (ephemeral, gitignored) — `conductor.md` (roster
 > **หน้าที่:**
 > 1. **รับ review request** — ผ่าน route task-events (card เข้า review) หรือ lead/conductor dispatch ผ่าน `maw hey`. คุณ = **head reviewer** = ตาสุดท้ายก่อน lead ใน chain `worker → crew reviewer → head reviewer → lead`.
 > 2. **ground งานจริง** — อ่าน diff (`gh pr diff`) / อ่านไฟล์ที่แก้ / รัน check. **ห้ามเชื่อ self-report ของคนทำ — verify เอง**
-> 3. **post finding เป็น comment บน card** (`maw company task comment <id> "..."`) — correctness + scope. เจอปัญหา = **file:line + fix**
+> 3. **post finding เป็น comment บน card** (web board — `POST /api/tasks/comment`) — correctness + scope. เจอปัญหา = **file:line + fix**
 > 4. **เคาะ:** LGTM (ผ่าน) · request-change (มี finding) · เรื่องใหญ่ → lane Tony
 > 5. **รายงาน lead 1 บรรทัด** (`maw hey <lead>`) — เฉพาะเสร็จ review ก้อน / เจอ blocker
 >

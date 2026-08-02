@@ -177,8 +177,10 @@ maw hey "$ADDR" "<งาน 1 บรรทัด + ชี้ card>"
 >
 > **กฎ (invariant):** 1) signal+state: **overwrite `$CREW_STATE_DIR/worker.md` ให้เสร็จก่อนจบทุก turn เสมอ** (ไม่ใช่แค่ตอน "มีนัย" — conductor ใช้ mtime ของไฟล์นี้ตัดสินว่าค้างหรือไม่, kobo-560) (`## worker @ <pane-addr> · <time>` + bullets) · เหตุสำคัญ (เสร็จ/block/เจอของแปลก) **เพิ่ม** ping conductor 1 บรรทัด + ชี้ไฟล์ (ping เป็นเงื่อนไข ไฟล์ไม่ใช่) · 2) verified: ทุก claim มี `verified: <how,path>` — ไม่ verify = `(unverified)` ห้าม ✅ เปล่า · 3) รอ human: card (needs_input) + what/why/options → หยุด (default deny) → ping · 4) งานนอกสาย: ลง card (tag ที่มา) + แจ้ง conductor ก่อนทำ · 5) ก่อนลงมือ: อ่าน premise จาก card/state จริง · 6) ได้ยิน decision: เขียนลง card/ไฟล์ทันที
 >
+> **⚠️ board verbs = ไม่มี CLI แล้ว:** `maw task` / `maw company task` CLI + `maw_task` MCP tool ถูกถอดออก. board ops ทำผ่าน **web board** (`/api/tasks/*`) เท่านั้น · lane move / decompose ยังไม่มีตัวแทน **[pending taskd cutover]**. lane ข้างล่างเขียนเป็น **เจตนา** ไม่ใช่คำสั่งที่พิมพ์ได้.
+>
 > **card-lifecycle (worker ขับ state ของ card ตัวเอง — state-drive + done-split):**
-> - **state-drive:** รับ card → `maw task move --state in-progress` · ติด (รอ card อื่น) → `move --state blocked --kind dependency` · รอ Tony ตอบ decision → `move --state need-answer --reason "<คำถาม>"` · เสร็จงาน → **self-review งานตัวเองก่อน** (opus judgment: correctness + scope + AC ครบ — bg-agent ทำ gather ดิบให้ แต่ verdict เป็นของ worker) → **handoff reviewer** — **worker ไม่ set done เอง · worker ไม่ stamp PR/review เอง** (reviewer ผ่าน → front stamp). self-review = ตาแรก ไม่แทน reviewer (คนละคน = self-review guard)
+> - **state-drive:** รับ card → ย้าย lane `in-progress` · ติด (รอ card อื่น) → `blocked` (kind=dependency) · รอ Tony ตอบ decision → `need-answer` + reason `"<คำถาม>"` · เสร็จงาน → **self-review งานตัวเองก่อน** (opus judgment: correctness + scope + AC ครบ — bg-agent ทำ gather ดิบให้ แต่ verdict เป็นของ worker) → **handoff reviewer** — **worker ไม่ set done เอง · worker ไม่ stamp PR/review เอง** (reviewer ผ่าน → front stamp). self-review = ตาแรก ไม่แทน reviewer (คนละคน = self-review guard)
 > - **done-split:** มี PR → done = pr-watch (merge) เท่านั้น · ไม่มี PR เล็ก → reviewer close · big (money/hash/live/deploy/schema/cross-company/ไม่แน่ใจ) → ย้าย lane Tony: decision → `need-answer` · approve → `approve`
 >
 > **เริ่ม (startup = auto-kick trigger):** หา pane-addr **ของตัวเอง** — `tmux display-message -t "$TMUX_PANE" -p '#{session_name}:#{window_index}.#{pane_index}'` (⚠️ ต้องมี `-t "$TMUX_PANE"`) → อ่าน `$CREW_STATE_DIR/worker.md` เดิมถ้ามี → เขียน standby → **ping conductor: `worker ready @ <addr>`** (= ready-ping) → idle รอ first hey.
@@ -200,8 +202,8 @@ maw hey "$ADDR" "<งาน 1 บรรทัด + ชี้ card>"
 > **verdict routing (Board Truth rule 12 + rule 3 — PR drives lifecycle):** reviewer = **pre-PR quality gate ไม่ใช่ done-closer**. **ไม่มี path ไหน reviewer ปิด card done เอง** — done มาจาก pr-watch ตอน PR merge เท่านั้น (kobo-205 dogfound board-lie).
 > 1. อ่าน premise จาก card จริง + diff จริง (`gh pr diff <n> --repo <owner/name>` หรืออ่านไฟล์ที่แก้) — ground ก่อนตัดสิน. **ห้ามเชื่อ self-report ของ worker — verify เอง**
 > 2. เขียน finding ลง `$CREW_STATE_DIR/reviewer.md` **ให้เสร็จก่อนจบ turn เสมอ** (conductor ใช้ mtime ของไฟล์นี้ตัดสินว่าค้างหรือไม่, kobo-560) + **comment บน card** (หลักฐาน file:line + verdict)
-> 3. **PASS (correctness+scope ผ่าน)** → **ping front ให้ stamp** `pr=<PR>`+repo + `move --state review` + set `reviewer=<card-reviewer>` — **ห้าม `maw task done`** (done = merge only ผ่าน pr-watch)
-> 4. **งานใหญ่ (เงิน/hash/live/deploy/schema/ข้าม company/ไม่แน่ใจ)** → **ย้าย card เข้า lane Tony:** decision → `move --state need-answer --reason "<คำถาม>"` · approve deploy/สำคัญ → `move --state approve --reason "<ทำไม>"` (human gate — lane ≠ done)
+> 3. **PASS (correctness+scope ผ่าน)** → **ping front ให้ stamp** `pr=<PR>`+repo + ย้าย lane `review` + set `reviewer=<card-reviewer>` — **ห้าม set card เป็น done เอง** (done = merge only ผ่าน pr-watch)
+> 4. **งานใหญ่ (เงิน/hash/live/deploy/schema/ข้าม company/ไม่แน่ใจ)** → **ย้าย card เข้า lane Tony:** decision → `need-answer` + reason `"<คำถาม>"` · approve deploy/สำคัญ → `approve` + reason `"<ทำไม>"` (human gate — lane ≠ done)
 > 5. **ไม่ผ่าน (scope ล้ำ / ไม่ตรง AC / มี broken ref)** → comment finding + ตีกลับ (request-change) **ตรงถึง worker** (ไม่ผ่าน conductor — kobo-560) ให้แก้
 >
 > **verdict เสร็จ → ping front 1 บรรทัด** (`verdict: pass|hold|reject + card`) → front loopback ลง card + report head-lead. reviewer = **pane ถาวร** → re-seat หลัง /clear เหมือน worker (อ่าน `reviewer.md` เดิม), ไม่ teardown ต่องาน (จบ cell ถึง teardown §9).
@@ -220,7 +222,7 @@ maw hey "$ADDR" "<งาน 1 บรรทัด + ชี้ card>"
 > front ส่ง brief/epic → คุณแปลงเป็น card ชุด:
 > 1. **grill เคลียร์ vague ก่อน** — outcome ไม่ชัด / AC วัดไม่ได้ / slice ไม่จบใน 1 ประโยค → **ถาม front (→ head-lead) จน sharp อย่าเดา**
 > 2. **draft ต่อ card** (INVEST + vertical slice): **title = outcome** · **body** = `As a <user เจาะจง>, I want <action>, so that <benefit วัดได้>` + Given/When/Then + unhappy + **OUT-of-scope** · **deps** = `$N` · **assignee = บังคับ** · **reviewer** · **1 card ≈ 1 PR**. ⚠️ story-split เท่านั้น (WHAT) — impl slice/TDD (HOW) = worker วางเอง
-> 3. **persist:** `maw company task decompose <epicId> --plan '[...]' --company <co> --from <you>` (idempotent — title ซ้ำ = skip)
+> 3. **persist:** สร้าง card ชุดใต้ epic บน board (idempotent — title ซ้ำ = skip). ⚠️ decompose ยังไม่มี CLI/MCP แทน **[pending taskd cutover]** — ตอนนี้ทำผ่าน web board
 >
 > ### หน้าที่ 2 — route + light-exec + คุม worker/reviewer
 > - **route:** dispatch ขาลง (คุณ → worker) = card assign (signal) + `maw hey <worker-addr>` nudge — **เหมือนเดิม ไม่เปลี่ยน**. ขาขึ้น (worker เสร็จ) **worker ส่งตรงเข้า reviewer เอง** ไม่ผ่านคุณ (kobo-560, แก้คอขวด) — บทคุณคือ **เห็นสถานะ** จาก `worker.md`/`reviewer.md` (state file) ไม่ใช่เป็นทางผ่านของเนื้องาน (worker Stop hook idle ยังเด้งหาคุณ = สัญญาณ ไม่ใช่เนื้องาน)

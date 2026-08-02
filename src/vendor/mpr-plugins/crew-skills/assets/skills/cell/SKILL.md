@@ -61,14 +61,17 @@ Do not run `self-spawn` by hand unless debugging a single target pane.
 5. Reviewer either accepts back to head or rejects to worker on the same card.
 6. Head starts the next card only after review passes and handoff is complete.
 
-## Evidence commands
+## Evidence steps
 
-```bash
-maw company task evidence <id> --scope producer --changed "..." --verified "..." --locus "..." --limitations "..."
-maw company task ready-for-review <id>
-maw company task external-wait <id> --trigger <signal>
-maw company task reopen <id>
-```
+**⚠️ no CLI — [pending taskd cutover].** The `maw task` / `maw company task` CLI and the
+`maw_task` MCP tool were removed; `evidence`, `ready-for-review`, `external-wait` and
+`reopen` have **no replacement invocation yet**. Record them on the **web board**
+(`/api/tasks/*`) until the taskd cutover lands:
+
+- **evidence** — scope (producer/consumer) + what changed · what was verified (and how) · locus · limitations
+- **ready-for-review** — hand the card to the reviewer
+- **external-wait** — park the card, naming the trigger signal it waits on
+- **reopen** — pull a closed card back for rework
 
 ## Completion signal
 

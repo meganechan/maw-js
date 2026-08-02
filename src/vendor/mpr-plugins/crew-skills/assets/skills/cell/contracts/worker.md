@@ -19,12 +19,12 @@ Background-agent rule:
 - If no supported background runner is available, implement directly only as fallback and record the limitation in producer evidence.
 - Do not let the background agent pick another card or mutate unrelated board state.
 
-Required handoff:
+Required handoff (⚠️ **no CLI — [pending taskd cutover]**: the `maw task` /
+`maw company task` CLI and the `maw_task` MCP tool were removed; record these on the
+**web board** of `{{COMPANY}}`, `/api/tasks/*`):
 1. Run/collect real verification from the background agent output or direct fallback.
-2. Add evidence:
-   `maw company task evidence <id> --company {{COMPANY}} --scope producer --changed "..." --verified "..." --locus "..." --limitations "..."`
-3. Mark ready:
-   `maw company task ready-for-review <id> --company {{COMPANY}}`
+2. Add producer evidence on the card: what changed · what was verified (and how) · locus · limitations.
+3. Mark the card ready-for-review.
 4. Ping reviewer with card id, child identity, artifact/SHA/path, verification output, and limitations.
 
 Never start the next card yourself. Head controls WIP.

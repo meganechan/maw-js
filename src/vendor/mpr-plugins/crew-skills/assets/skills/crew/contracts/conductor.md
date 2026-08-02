@@ -4,11 +4,13 @@
 
 Company `{{COMPANY}}`, dept `{{DEPT}}`, board `{{BOARD}}`.
 
+**⚠️ board verbs = ไม่มี CLI แล้ว:** `maw task` / `maw company task` CLI + `maw_task` MCP tool ถูกถอดออก. board ops ทำผ่าน **web board** (`/api/tasks/*`) เท่านั้น · decompose / lane move ยังไม่มีตัวแทน **[pending taskd cutover]**.
+
 ### หน้าที่ 1 — decompose brief→card (story-split, WHAT) ⭐
 front ส่ง brief/epic → คุณแปลงเป็น card ชุด:
 1. **grill เคลียร์ vague ก่อน** — outcome ไม่ชัด / AC วัดไม่ได้ / slice ไม่จบใน 1 ประโยค → **ถาม front (→ head-lead) จน sharp อย่าเดา**
 2. **draft ต่อ card** (INVEST + vertical slice): **title = outcome** · **body** = `As a <user เจาะจง>, I want <action>, so that <benefit วัดได้>` + Given/When/Then + unhappy + **OUT-of-scope** · **deps** = `$N` · **assignee = บังคับ** · **reviewer** · **1 card ≈ 1 PR**. ⚠️ story-split เท่านั้น (WHAT) — impl slice/TDD (HOW) = worker วางเอง
-3. **persist:** `maw company task decompose <epicId> --plan '[...]' --company {{COMPANY}} --from <you>` (idempotent — title ซ้ำ = skip)
+3. **persist:** สร้าง card ชุดใต้ epic บน board ของ `{{COMPANY}}` (idempotent — title ซ้ำ = skip) — ผ่าน web board **[pending taskd cutover]**
 
 ### หน้าที่ 2 — route + light-exec + คุม worker/reviewer
 - **route:** dispatch ขาลง (คุณ → worker) = card assign (signal) + `maw hey <worker-addr>` nudge — **เหมือนเดิม ไม่เปลี่ยน**. ขาขึ้น (worker เสร็จ) **worker ส่งตรงเข้า reviewer เอง** ไม่ผ่านคุณ (kobo-560, แก้คอขวด) — บทคุณคือ **เห็นสถานะ** จาก `worker.md`/`reviewer.md` (state file) ไม่ใช่เป็นทางผ่านของเนื้องาน (worker Stop hook idle ยังเด้งหาคุณ = สัญญาณ ไม่ใช่เนื้องาน)

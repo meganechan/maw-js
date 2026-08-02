@@ -54,6 +54,12 @@ describe("live MCP tool registry", () => {
     expect(Object.keys(tools)).toContain("maw_hey");
     const mapperSource = readFileSync(join(root, MCP_DIR, "tools.ts"), "utf8");
     expect(mapperSource).not.toContain("taskArgs");
+    // ...and no orphaned prose about it either: the mapper's doc-comment outlived
+    // the function it documented, so a reader still found the retired task-board
+    // surface described as current. Nothing task-shaped may survive in this file.
+    expect(mapperSource).not.toContain("task-board");
+    expect(mapperSource).not.toContain("maw company task");
+    expect(mapperSource).not.toMatch(/\btask\b/i);
   });
 });
 

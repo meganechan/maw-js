@@ -146,7 +146,19 @@ describe("coverage 100b runtime hooks", () => {
     };
     delete process.env.CLAUDE_AGENT_NAME;
     const second = await importHooks("plain-path");
-    await second.runHook("after_send", { to: "receiver", message: "hello" });
+    // inferCaller() falls through CLAUDE_AGENT_NAME -> /([^/]+)-oracle/ on the
+    // real process.cwd() -> "unknown". Deleting the env var alone only clears
+    // the first branch: any checkout living under a directory whose name ends
+    // in "-oracle" (an oracle worktree, for one) makes the second branch hit
+    // and MAW_FROM becomes that path segment. Pin cwd so this asserts the
+    // final fallback wherever the repo happens to sit.
+    const realCwd = process.cwd;
+    process.cwd = () => "/tmp/maw-coverage-hooks-neutral-cwd";
+    try {
+      await second.runHook("after_send", { to: "receiver", message: "hello" });
+    } finally {
+      process.cwd = realCwd;
+    }
 
     expect(spawnCalls).toHaveLength(1);
     expect(spawnCalls[0].args).toEqual(["-c", "/usr/local/bin/plain-hook"]);

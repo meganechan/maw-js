@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, afterAll, beforeEach } from "bun:test";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -7,6 +7,17 @@ import { appendWorklog, flushWorklog } from "../src/core/worklog/store";
 
 // mawjs-3 / kobo-120 — away is derived from the worklog (newest-wins per pane), no new store.
 describe("isPaneAway (presence gate read side)", () => {
+  // The default suite shares one bun process, so this MAW_DATA_DIR outlives the
+  // file unless it is put back — it used to reach test/preflight-default.test.ts,
+  // whose "default path" case asserts pluginDir() lands under ~/.maw/plugins and
+  // instead saw this away-test-XXXX sandbox. Same save/restore shape as
+  // test/review-desk.test.ts, which documents the identical hazard.
+  const originalDataDir = process.env.MAW_DATA_DIR;
+  afterAll(() => {
+    if (originalDataDir === undefined) delete process.env.MAW_DATA_DIR;
+    else process.env.MAW_DATA_DIR = originalDataDir;
+  });
+
   beforeEach(() => {
     process.env.MAW_DATA_DIR = mkdtempSync(join(tmpdir(), "away-test-"));
   });

@@ -1,13 +1,21 @@
-import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { spawnSync } from "child_process";
-import { join } from "path";
+import { dirname, join } from "path";
 import { tmpdir } from "os";
 
 const CHILD_WRAPPER = `
 const { writeFileSync } = await import("fs");
+const { dirname, join } = await import("path");
 const decoder = new TextDecoder();
 const resultFile = process.env.MAW_CHILD_RESULT_FILE;
-const scriptB64 = process.env.MAW_CHILD_SCRIPT_B64 ?? "";
+// The script is a FILE next to resultFile, not a data: URL. Bun caps an import
+// specifier at 1536 bytes, so \`import("data:text/javascript;base64," + b64)\`
+// blew up with "ResolveMessage: NameTooLong" once the encoded script passed
+// 1508 chars — and every script here embeds process.cwd() several times, so
+// the same test crossed that line purely by being checked out at a longer
+// path (fine at /Users/tony/maw-js, fatal in a deep worktree). A file path
+// carries no such ceiling.
+const scriptFile = join(dirname(resultFile), "script.mjs");
 const stdout = [];
 const stderr = [];
 const push = (bucket, chunk) => {
@@ -33,7 +41,7 @@ class ExitSignal extends Error {
 let code = 0;
 process.exit = (value) => { throw new ExitSignal(Number(value ?? 0)); };
 try {
-  await import("data:text/javascript;base64," + scriptB64);
+  await import(scriptFile);
 } catch (error) {
   if (error instanceof ExitSignal) {
     code = error.code;
@@ -75,6 +83,7 @@ export function runBunChild(opts: {
 }): { code: number; stdout: string; stderr: string } {
   const tempDir = mkdtempSync(join(tmpdir(), "maw-bun-child-"));
   const resultFile = join(tempDir, "result.json");
+  writeFileSync(join(dirname(resultFile), "script.mjs"), opts.script);
   const proc = spawnSync(process.execPath, ["-e", CHILD_WRAPPER], {
     cwd: opts.cwd,
     encoding: "utf8",
@@ -82,7 +91,6 @@ export function runBunChild(opts: {
       ...allowlistedChildEnv(),
       ...opts.env,
       MAW_CHILD_RESULT_FILE: resultFile,
-      MAW_CHILD_SCRIPT_B64: Buffer.from(opts.script, "utf8").toString("base64"),
     },
   });
 

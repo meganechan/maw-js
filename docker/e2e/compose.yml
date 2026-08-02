@@ -1,0 +1,35 @@
+# One service, on purpose.
+#
+# Every seam between maw and kobo is process-local, not network-local: kobo shells
+# out to `maw` (shared PATH + process namespace), maw drives panes over tmux
+# send-keys (same tmux server), and the kobo CLI talks to its store on the
+# filesystem. Splitting these into services would mean inventing a network
+# protocol for all three, at which point the thing under test is no longer the
+# thing that runs on the host.
+#
+# This is NOT docker/compose.yml. That one is the 2-node federation harness and
+# stays exactly as it is — different harness, different purpose, deliberately
+# not merged.
+#
+# Run it with docker/e2e/run.sh, which sets KOBO_REPO and cleans up after itself.
+name: maw-e2e
+
+services:
+  e2e:
+    image: maw-js:e2e
+    build:
+      context: ../..
+      dockerfile: docker/e2e/Dockerfile
+    # PID 1 is a bash script that backgrounds `maw serve`; without an init the
+    # container leaks zombies on every run.
+    init: true
+    volumes:
+      # kobo-board has no package.json and nothing to build — it runs straight
+      # from the checkout. Read-only: the repo ships a committed kobo-board.db
+      # (the real board), and the sandbox must not be able to write to it. The DB
+      # under test lives at $KOBO_BOARD_ROOT inside the container.
+      - ${KOBO_REPO:?set KOBO_REPO to a kobo-board checkout (run.sh does this)}:/home/maw/ghq/github.com/meganechan/kobo-board:ro
+    # No named volumes and no ports. State is throwaway by construction — it lives
+    # in the container's own layer and dies with `run --rm`. A named volume would
+    # survive `down` and reintroduce "last run's state leaked into this one",
+    # which is the bug class this sandbox exists to prevent.

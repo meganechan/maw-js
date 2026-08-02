@@ -1,0 +1,10 @@
+#!/bin/sh
+# kobo-board has no package.json and no bin/ — it is a plain bun entry point run
+# straight from the checkout. This wrapper only supplies the path so the stub pane
+# and the tests can say `kobo` the way a real pane would.
+#
+# The checkout is mounted read-only and ships a committed kobo-board.db (the real
+# board). $KOBO_BOARD_ROOT points the CLI at a separate writable dir, so the DB
+# under test is never that file. openDb() still reads schema.sql from the checkout,
+# which is why the two paths legitimately differ.
+exec bun "$KOBO_CHECKOUT/src/cli.ts" "$@"

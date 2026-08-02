@@ -7,7 +7,7 @@ import { join } from "path";
 // loadConfig().oracle — a generic maw-js family identity, never the specific
 // oracle instance a company roster keys members on — so the lookup always
 // missed and head-contract.md rendered a blank Dept line. Fixed by resolving
-// the pane's own identity via resolveAgentSelf() (CLAUDE_AGENT_NAME here —
+// the pane's own identity via selfOracleId() (CLAUDE_AGENT_NAME here —
 // hermetic, no live tmux). Sandbox pattern mirrors company-scope-dispatch.test.ts.
 
 const dir = mkdtempSync(join(tmpdir(), "maw-cell-dept-"));

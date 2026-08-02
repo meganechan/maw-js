@@ -4,14 +4,10 @@ import { join } from "node:path";
 import { expectStandalonePluginBoundary } from "./helpers/plugin-standalone-boundary";
 
 describe("cell command plugin standalone boundary", () => {
-  test("cell keeps explicit import boundaries (SDK + core/worklog/company-scope + commands/shared/comm-send)", () => {
+  test("cell keeps explicit import boundaries (SDK + core/worklog/company-scope)", () => {
     const imports = expectStandalonePluginBoundary({
       plugin: "cell",
-      allowRelative: [
-        /^(?:\.\.\/){3}core\/worklog\//,
-        /^(?:\.\.\/){3}core\/agent-panes$/,
-        /^(?:\.\.\/){3}commands\/shared\/comm-send$/,
-      ],
+      allowRelative: [/^(?:\.\.\/){3}core\/worklog\//, /^(?:\.\.\/){3}core\/agent-panes$/],
     }).map((record) => record.spec);
 
     expect(imports).toContain("maw-js/sdk");

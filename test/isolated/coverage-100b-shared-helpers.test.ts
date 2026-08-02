@@ -199,6 +199,11 @@ describe("workspace store error branches", () => {
   test("loadAllWorkspaces skips malformed entries and catches unreadable workspace directory", async () => {
     const configDir = tmp("maw-workspaces-list-");
     process.env.MAW_CONFIG_DIR = configDir;
+    // loadAllWorkspaces() calls ensureDir() — a mkdir on the read path, resolved
+    // via mawDataPath(), which MAW_CONFIG_DIR does not redirect. Without this
+    // the mkdir landed in the real maw home and the guard's throw was swallowed
+    // by loadAllWorkspaces' own catch, returning [].
+    process.env.MAW_DATA_DIR = configDir;
     const store = await import("../../src/commands/shared/workspace-store.ts?coverage-100b-workspace-list");
     mkdirSync(join(configDir, "workspaces"), { recursive: true });
     writeFileSync(join(configDir, "workspaces", "bad.json"), "{ nope", "utf-8");
@@ -224,6 +229,7 @@ describe("workspace store error branches", () => {
 
     const blockedConfigDir = tmp("maw-workspaces-blocked-");
     process.env.MAW_CONFIG_DIR = blockedConfigDir;
+    process.env.MAW_DATA_DIR = blockedConfigDir;
     writeFileSync(join(blockedConfigDir, "workspaces"), "not a directory", "utf-8");
     const blockedStore = await import("../../src/commands/shared/workspace-store.ts?coverage-100b-workspace-blocked");
     expect(blockedStore.loadAllWorkspaces()).toEqual([]);

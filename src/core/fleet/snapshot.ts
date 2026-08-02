@@ -18,7 +18,7 @@
  * Applies retention on write: keep newest snapshots and prune old files.
  */
 
-import { mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync, statSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync, statSync } from "fs";
 import { join } from "path";
 import { mawConfigPath, mawStatePath } from "../xdg";
 import { listSessions } from "../transport/ssh";
@@ -39,7 +39,11 @@ function candidateSnapshotDirs(): string[] {
 }
 
 export const SNAPSHOT_DIR = snapshotDir();
-mkdirSync(SNAPSHOT_DIR, { recursive: true });
+// The mkdir used to run HERE, at import time — so merely importing this module
+// (245 test files do, transitively) created `~/.maw/snapshots` in the operator's
+// real home, before any test could redirect MAW_DATA_DIR. Creating state as a
+// side effect of an import is the same mechanism as the collection-time store
+// leak; it now happens on first write instead. Readers tolerate a missing dir.
 
 const DEFAULT_KEEP_LAST = 240;
 const DEFAULT_MAX_AGE_DAYS = 14;
@@ -120,6 +124,7 @@ export async function takeSnapshot(trigger: string, retentionPolicy: SnapshotRet
   const filename = `${ts}.json`;
   const filepath = join(SNAPSHOT_DIR, filename);
 
+  mkdirSync(SNAPSHOT_DIR, { recursive: true });
   writeFileSync(filepath, JSON.stringify(snapshot, null, 2) + "\n");
 
   // Prune old snapshots
@@ -214,7 +219,9 @@ export function pruneSnapshots(policy: SnapshotRetentionPolicy = {}): SnapshotRe
   const resolved = resolveSnapshotRetentionPolicy(policy);
   const nowMs = (policy.now ?? new Date()).getTime();
   const maxAgeMs = resolved.maxAgeDays * 24 * 60 * 60 * 1000;
-  const files = readdirSync(SNAPSHOT_DIR)
+  // Dir is created on first write, so "not there yet" means "nothing to prune"
+  // — same empty result the import-time mkdir used to guarantee.
+  const files = (existsSync(SNAPSHOT_DIR) ? readdirSync(SNAPSHOT_DIR) : [])
     .filter(f => f.endsWith(".json"))
     .map(file => ({ file, timeMs: snapshotTimeMs(SNAPSHOT_DIR, file) }))
     .sort((a, b) => b.timeMs - a.timeMs || b.file.localeCompare(a.file));

@@ -37,7 +37,7 @@ describe("classifySignTiers (kobo-546) — sensitive path always wins", () => {
   });
 
   test("touches teardown/kill helper → 2 tiers (kobo-362: an empty target here kills the wrong session)", () => {
-    const files: DiffFile[] = [{ path: "src/vendor/mpr-plugins/pane-lifecycle/teardown.ts", additions: 1, deletions: 1 }];
+    const files: DiffFile[] = [{ path: "src/core/agent-panes.ts", additions: 1, deletions: 1 }];
     expect(classifySignTiers(files).tiers).toEqual(["crew", "head"]);
   });
 

@@ -22,10 +22,7 @@ import {
 // imports (not core/* reaches), so outside the boundary guard.
 import { runHome } from "../home/index";
 import { runWorklog } from "../watch/index";
-import { runCrew } from "../pane-lifecycle/index";
-import { runHead } from "../head/index";
 import { runCell } from "../cell/index";
-import { runCompanyUp, runCompanyDown } from "./company-fleet";
 
 export const command = {
   // kobo-363: `team` is the canonical name; `dept` kept as an alias (same
@@ -174,7 +171,7 @@ function runCompany(args: string[], logs: string[]): string | undefined {
   }
 
   logs.push(`unknown company subcommand: ${sub}`);
-  logs.push("usage: maw company <create|add-team|add-dept|ls|tree|attach|detach|sync|migrate|hooks|home|worklog|crew|head|cell|up|down|rm-team|rm-dept|delete>");
+  logs.push("usage: maw company <create|add-team|add-dept|ls|tree|attach|detach|sync|migrate|hooks|home|worklog|cell|rm-team|rm-dept|delete>");
   return `unknown subcommand: ${sub}`;
 }
 
@@ -529,15 +526,8 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
     // cli-reorg: `maw company home|worklog|task <verb>` → the plugin's shared runner (async).
     const isHome = !asDept && args[0]?.toLowerCase() === "home";
     const isWorklog = !asDept && args[0]?.toLowerCase() === "worklog";
-    // kobo-358: `maw company crew spawn <co>` — deterministic idempotent crew-cell spawn.
-    const isCrew = !asDept && args[0]?.toLowerCase() === "crew";
-    // kobo-364: `maw company head spawn <co>` — deterministic idempotent head-cell spawn.
-    const isHead = !asDept && args[0]?.toLowerCase() === "head";
     // Cell v2: `maw company cell spawn <co>` — uniform 2-window/3-pane cell.
     const isCell = !asDept && args[0]?.toLowerCase() === "cell";
-    // kobo-362: `maw company up/down <co>` — fleet wake+teardown for a whole company.
-    const isUp = !asDept && args[0]?.toLowerCase() === "up";
-    const isDown = !asDept && args[0]?.toLowerCase() === "down";
     // learn/knowledge/share/sync are async dept verbs (KB HTTP / soul-sync / hey).
     const isAsyncDept = asDept && ASYNC_DEPT_VERBS.has(args[0]?.toLowerCase() ?? "");
     const err = isAttach
@@ -546,21 +536,13 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
         ? (await runHome(args.slice(1), (l) => logs.push(l))).error
         : isWorklog
           ? (await runWorklog(args.slice(1), (l) => logs.push(l))).error
-          : isCrew
-              ? (await runCrew(args.slice(1), (l) => logs.push(l))).error
-              : isHead
-                ? (await runHead(args.slice(1), (l) => logs.push(l))).error
-                : isCell
-                  ? (await runCell(args.slice(1), (l) => logs.push(l))).error
-                  : isUp
-                    ? (await runCompanyUp(args.slice(1), (l) => logs.push(l))).error
-                    : isDown
-                      ? (await runCompanyDown(args.slice(1), (l) => logs.push(l))).error
-                      : isAsyncDept
-                        ? await runDeptAsync(args, logs)
-                        : asDept
-                          ? runDept(args, logs)
-                          : runCompany(args, logs);
+          : isCell
+            ? (await runCell(args.slice(1), (l) => logs.push(l))).error
+            : isAsyncDept
+              ? await runDeptAsync(args, logs)
+              : asDept
+                ? runDept(args, logs)
+                : runCompany(args, logs);
     const output = logs.join("\n");
     if (ctx.writer && output) ctx.writer(output);
     // When a writer streamed the output, return undefined so the dispatcher

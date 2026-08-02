@@ -38,8 +38,6 @@ const PROTECTED = new Set([
   "/control/resize",
   "/worklog",         // worklog read/inject — captured prompts + commands are private (Rule 6); loopback hooks bypass, LAN must auth
   "/policy",          // company/dept policy inject — same surface as worklog (Rule 6); loopback hooks bypass, LAN must auth
-  "/tasks",           // company-ui board — reveals who-works-on-what within a company (Rule 6); loopback UI bypasses, LAN must auth
-  "/tasks/events",    // company-ui card-detail SSE (kobo-207) — same private card surface (Rule 6); loopback UI bypasses, LAN must auth
   "/state",           // company-ui coordination markdown — company-internal state doc (Rule 6); loopback UI bypasses, LAN must auth
   "/roster",          // company-ui presence roster — company org membership (Rule 6, kobo-50); loopback UI bypasses, LAN must auth
   "/presence",        // company-ui presence detail — per-pane model + context% (Rule 6, kobo-104); loopback UI bypasses, LAN must auth
@@ -60,9 +58,9 @@ export function isProtected(path: string, method: string): boolean {
   // /worklog/feed (company-ui timeline) is the same private surface as /worklog (Rule 6)
   if (path.startsWith("/worklog/")) return true;
   if (PROTECTED_POST.has(path) && method === "POST") return true;
-  // company-ui board write (kobo-35: POST /tasks/archive) — a mutation on the
-  // same private surface as the board (Rule 6); loopback UI bypasses, LAN auths.
-  if (method === "POST" && path.startsWith("/tasks/")) return true;
+  // NOTE: /tasks and /tasks/* are deliberately absent — the task subsystem was
+  // removed, so no such route exists to protect. If a board surface ever returns
+  // here it needs its OWN auth decision, not a rule that silently pre-approved it.
   // kobo-245/241 — Brainstorm Room: POST /room/send delivers a `maw hey` as the local
   // oracle (control op, same surface as /send); open/close/reopen write the off-card
   // artifact; GET /room/thread reveals a private company conversation (Rule 6). All of

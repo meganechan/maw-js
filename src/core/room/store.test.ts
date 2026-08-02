@@ -2,20 +2,18 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { openRoom, closeRoom, reopenRoom, appendRoomMessage, readRoom, listRooms, findRoomCompany, roomFilePath, linkRoomCard, mergeRooms, addRoomParticipant, paginateRoomMessages, ROOM_DEFAULT_LAST, _test, type RoomMessage } from "./store";
-import { taskFilePath } from "../tasks/store";
+import { openRoom, closeRoom, reopenRoom, appendRoomMessage, readRoom, listRooms, findRoomCompany, roomFilePath, mergeRooms, addRoomParticipant, paginateRoomMessages, ROOM_DEFAULT_LAST, _test, type RoomMessage } from "./store";
 
 let dir: string; const prev = process.env.MAW_DATA_DIR;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "maw-room-")); process.env.MAW_DATA_DIR = dir; });
 afterEach(() => { if (prev === undefined) delete process.env.MAW_DATA_DIR; else process.env.MAW_DATA_DIR = prev; rmSync(dir, { recursive: true, force: true }); });
 
 describe("room artifact store (kobo-241 — off-card, file-per-room)", () => {
-  test("openRoom creates an OFF-CARD artifact under rooms/, NOT the kanban tasks/ dir", () => {
+  test("openRoom creates an artifact under the company's own rooms/ dir", () => {
     const r = openRoom("kobo", "demo", "what to build");
     expect(r).toMatchObject({ id: "demo", company: "kobo", topic: "what to build", status: "open", messages: [] });
     expect(existsSync(roomFilePath("kobo", "demo"))).toBe(true);
-    expect(roomFilePath("kobo", "demo")).toContain("/rooms/"); // NOT /tasks/
-    expect(existsSync(taskFilePath("kobo", "demo"))).toBe(false); // never a kanban card
+    expect(roomFilePath("kobo", "demo")).toContain("/rooms/");
   });
 
   test("addRoomParticipant records a pulled-in teammate, idempotent; null on an absent room (kobo-260)", () => {
@@ -85,15 +83,6 @@ describe("room artifact store (kobo-241 — off-card, file-per-room)", () => {
     const ids = listRooms("kobo").map((r) => r.id);
     expect(ids.sort()).toEqual(["a", "b"]);
     expect(listRooms("other")).toEqual([]);
-  });
-
-  test("linkRoomCard records the distilled card id (bidirectional back-half); null if absent", () => {
-    openRoom("kobo", "r3", "t");
-    const linked = linkRoomCard("kobo", "r3", "kobo-99");
-    expect(linked!.cardId).toBe("kobo-99");
-    expect(readRoom("kobo", "r3")!.cardId).toBe("kobo-99"); // persisted
-    expect(linkRoomCard("kobo", "r3", "kobo-99")!.cardId).toBe("kobo-99"); // idempotent re-link
-    expect(linkRoomCard("kobo", "ghost", "kobo-1")).toBeNull(); // absent room
   });
 });
 

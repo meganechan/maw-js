@@ -108,33 +108,8 @@ describe("crew-skills global asset contract", () => {
     expect(hook).toContain("presence: online (auto-seated)");
   });
 
-  // kobo-174/200 — the lead card-gate hook ships as an executable global asset so an
-  // oracle that opts in (via .maw/card-gate.json) points at a real script.
-  test("card-gate hook is a synced executable asset", () => {
-    const item = SYNC_ITEMS.find((i) => i.dest === "hooks/maw-card-gate.sh");
-    expect(item).toBeDefined();
-    expect(item?.exec).toBe(true);
-    const hook = readFileSync(join(assetsDir, "hooks/maw-card-gate.sh"), "utf8");
-    // gates BOTH paths (MCP-gap lesson) + fail-CLOSED + opt-in + conscious override
-    expect(hook).toContain("mcp__maw__maw_task");
-    expect(hook).toContain("maw task add");
-    expect(hook).toContain(".maw/card-gate.json"); // kobo-200: CC-safe config source
-    expect(hook).toContain(".mawCardGate");        // legacy settings.json fallback still read
-    expect(hook).toContain("--force-lead");
-    expect(hook).toContain('"deny"');
-  });
-
-  // kobo-200 — a dormant sample config ships so adopters can copy it to
-  // <repo>/.maw/card-gate.json. It must install to ~/.claude (NOT .maw/) so the
-  // hook never reads it → sync never auto-activates the gate for everyone.
-  test("card-gate sample ships as a dormant asset (never the live .maw path)", () => {
-    const item = SYNC_ITEMS.find((i) => i.dest === "card-gate.sample.json");
-    expect(item).toBeDefined();
-    expect(item?.dest).not.toContain(".maw"); // dormant — hook reads .maw/card-gate.json, not this
-    const sample = JSON.parse(readFileSync(join(assetsDir, "card-gate.sample.json"), "utf8"));
-    expect(sample.leadRole).toBe("lead");
-    expect(sample.gatedTools).toContain("maw_task add");
-  });
+  // kobo-174/200 card-gate hook + sample dropped with the task system (both the
+  // CLI verb and the mcp__maw__maw_task tool are gone) — no replacement asserted.
 
   // kobo-95/303 — a spawner that points CREW_STATE_DIR elsewhere needs the hook to
   // honor it, or a coord trusting the state hint reads the wrong path. The crew/head
@@ -146,15 +121,8 @@ describe("crew-skills global asset contract", () => {
     expect(hook).not.toContain("state: ψ/active/crew/$CREW_ROLE.md");
   });
 
-  // kobo-356: the Stop hook attaches the board-read next-ready queue to a WORKER's
-  // idle ping (event-driven — no loop/poll) so the conductor dispatches immediately
-  // instead of a separate round-trip query. Content-guard (bash isn't unit-testable here).
-  test("Stop hook queries next-ready for a worker idle-ping, scoped to worker* only (not reviewer)", () => {
-    const hook = readFileSync(join(assetsDir, "hooks/crew-worker-stop.sh"), "utf8");
-    expect(hook).toContain("maw company task next-ready --company \"$MAW_ROOM_COMPANY\"");
-    expect(hook).toContain('case "$CREW_ROLE" in\n  worker*)'); // queue query gated to worker*, not reviewer
-    expect(hook).toContain('[ -n "$QUEUE" ] && MSG="$MSG · $QUEUE"'); // attached, not a separate hey
-  });
+  // kobo-356's next-ready queue attachment was removed with the task system
+  // (the CLI verb no longer exists) — no replacement asserted here.
 
   test("Stop hook honors per-pane idle_notify override before legacy coord fallback", () => {
     const hook = readFileSync(join(assetsDir, "hooks/crew-worker-stop.sh"), "utf8");

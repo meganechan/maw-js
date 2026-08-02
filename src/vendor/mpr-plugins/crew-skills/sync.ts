@@ -54,9 +54,9 @@ export const SYNC_ITEMS: SyncItem[] = [
   { src: "skills/teardown/SKILL.md", dest: "skills/teardown/SKILL.md" }, // kobo-343 — /teardown lifecycle close (spin↔teardown); safety-critical pane killer
   // kobo-317 — /worker skill removed: worker is no longer a self-defined standalone role, only a /crew-spawned in-cell pane (crew §4 inline contract).
   { src: "hooks/crew-worker-stop.sh", dest: "hooks/crew-worker-stop.sh", exec: true },
-  { src: "hooks/maw-card-gate.sh", dest: "hooks/maw-card-gate.sh", exec: true }, // kobo-174 — lead card-create gate (dormant until an oracle opts in via .maw/card-gate.json, kobo-200)
+  // kobo-174/200 card-gate hook + sample dropped with the task system — the
+  // kobo-566 prune removes the installed copies on the next sync (intended).
   { src: "hooks/seat-resume.sh", dest: "hooks/seat-resume.sh", exec: true }, // kobo-196 — auto-seat on SessionStart:clear (self-gates to warroom repos; wired into the oracle REPO's settings by ensureSeatResumeHook, never the user's global ~/.claude)
-  { src: "card-gate.sample.json", dest: "card-gate.sample.json" }, // kobo-200 — dormant sample; adopter copies to <repo>/.maw/card-gate.json (hook reads .maw/, NOT this path → never auto-activates)
   { src: "crew-worker-settings.json", dest: "crew-worker-settings.json" },
 ];
 

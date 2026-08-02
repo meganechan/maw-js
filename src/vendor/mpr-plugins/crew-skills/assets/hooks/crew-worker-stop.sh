@@ -19,19 +19,8 @@ fi
 [ -n "$TARGET_PANE" ] || exit 0
 ADDR=$(tmux display-message -t "$TARGET_PANE" -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)
 [ -z "$ADDR" ] && exit 0
-# kobo-356: attach the board-read next-ready queue to a WORKER's idle ping so the
-# conductor can dispatch immediately without a separate query round-trip
-# (event-driven — this call only fires because the Stop hook already fired, no
-# loop/poll). reviewer idle carries no queue signal (reviewer doesn't pick up cards).
-QUEUE=""
-case "$CREW_ROLE" in
-  worker*)
-    if [ -n "$MAW_ROOM_COMPANY" ]; then
-      QUEUE=$(maw company task next-ready --company "$MAW_ROOM_COMPANY" 2>/dev/null | tail -1)
-    fi
-    ;;
-esac
+# kobo-356's next-ready queue attachment (maw company task next-ready) was
+# removed with the task system — the CLI verb no longer exists (taskd cutover).
 MSG="[hook] $CREW_ROLE idle (turn end) — state: ${CREW_STATE_DIR:-ψ/active/crew}/$CREW_ROLE.md"
-[ -n "$QUEUE" ] && MSG="$MSG · $QUEUE"
 maw hey "$ADDR" "$MSG" >/dev/null 2>&1 &
 exit 0

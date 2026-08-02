@@ -1,0 +1,32 @@
+[
+  {
+    "test": "POST /api/send — company-scope gate on local/self-node delivery (kobo-431) > refuses cross-company: sendKeys is NEVER called, not just warned-and-sent",
+    "card": "kobo-533",
+    "owner": "patchwork"
+  },
+  {
+    "test": "POST /api/send — company-scope gate on local/self-node delivery (kobo-431) > Defect B — a node:agent resolving to local/self-node is scope-gated too, whatever produced that result",
+    "card": "kobo-533",
+    "owner": "patchwork"
+  },
+  {
+    "test": "room artifact store (kobo-241 — off-card, file-per-room) > reopen of an absent room → null; findRoomCompany resolves the owning company",
+    "card": "kobo-241",
+    "owner": "patchwork"
+  },
+  {
+    "test": "room feed listener (kobo-241 — persist turns off the SAME hey feed events) > over-capture guard: a mid-sentence [room:id] mention is NOT persisted; a real leading-tag turn IS (kobo-250)",
+    "card": "kobo-241",
+    "owner": "patchwork"
+  },
+  {
+    "test": "room feed listener (kobo-241 — persist turns off the SAME hey feed events) > appends both directions to the artifact, dedups by message id, ignores non-room + unopened",
+    "card": "kobo-241",
+    "owner": "patchwork"
+  },
+  {
+    "test": "room feed listener (kobo-241 — persist turns off the SAME hey feed events) > normalizes from to the bare identity: web:web → web, m5:eq3 → eq3 (kobo-248 attribution)",
+    "card": "kobo-241",
+    "owner": "patchwork"
+  }
+]

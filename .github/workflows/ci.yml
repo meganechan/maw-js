@@ -54,6 +54,8 @@ jobs:
             run: bun run test:mock-smoke
           - name: selftest
             run: bun run test:selftest
+          - name: src
+            run: bun run test:src:known-red:selftest && bun run test:src
     name: test-${{ matrix.suite.name }}
     steps:
       - uses: actions/checkout@v6
@@ -90,6 +92,24 @@ jobs:
           install -m 0755 /tmp/ghq/ghq_linux_amd64/ghq "$HOME/bin/ghq"
           echo "$HOME/bin" >> "$GITHUB_PATH"
           "$HOME/bin/ghq" --version
+
+      # kobo-472 — `maw` was NEVER on PATH for any test job (only the `build`
+      # job builds it, and that job `needs: test` — runs AFTER, so its binary
+      # can never help here regardless). Every test that shells out to `maw`
+      # (defaultSpawn, src/core/room/route.ts) got ENOENT on every CI run,
+      # invisible until kobo-472 wired src/ tests into CI at all — same
+      # pattern as the `Install ghq` step above, aimed at the actual gap kobo-530
+      # traced it to (platform difference = binary present vs absent, not OS/bun
+      # version). Only the `src` shard needs it; gated so the other 11 shards
+      # don't pay a build cost they don't use.
+      - name: Build maw CLI (src shard only)
+        if: matrix.suite.name == 'src'
+        run: |
+          bun build src/cli.ts --outfile dist/maw --target=bun --minify --external @eclipse-zenoh/zenoh-ts
+          mkdir -p "$HOME/bin"
+          install -m 0755 dist/maw "$HOME/bin/maw"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          "$HOME/bin/maw" --version || true
 
       - name: Run ${{ matrix.suite.name }} tests
         # MAW_SKIP_FLAKY=1 — override list (#811/#813 precedent).

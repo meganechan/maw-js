@@ -14,7 +14,6 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { checkBusyGuard, cmdWake, findWindow, hostExec, listSessions, type Session } from "maw-js/sdk";
-import { loadConfig } from "maw-js/config";
 import { loadCompany, type Company } from "../company/company-helpers";
 import { scopeOfOracle } from "../../../core/worklog/company-scope";
 import { teardownCrewWindows, BRAIN_MODEL, DEFAULT_WORKER_MODEL } from "../../../core/agent-panes";
@@ -44,6 +43,41 @@ function contractAssetPath(role: Role): string {
 function renderContract(role: Role, vars: { company: string; dept: string; board: string }): string {
   const tpl = readFileSync(contractAssetPath(role), "utf8");
   return tpl.replaceAll("{{COMPANY}}", vars.company).replaceAll("{{DEPT}}", vars.dept).replaceAll("{{BOARD}}", vars.board);
+}
+
+/**
+ * kobo-cell-spawn-dept-resolve: the CURRENT pane's own oracle identity —
+ * CLAUDE_AGENT_NAME, else the pane's own tmux session name (numeric prefix
+ * stripped). Inlined rather than importing commands/shared/comm-send's
+ * resolveAgentSelf(): that import drags the maw-js/sdk barrel into this
+ * plugin's module graph, which broke isolated tests where sdk is mocked
+ * without every export (kobo-cell-spawn-dept-resolve CI review). Mirrors
+ * resolveAgentSelf (comm-send.ts:264) in a few lines.
+ */
+function selfOracleId(): string {
+  const agent = process.env.CLAUDE_AGENT_NAME?.trim();
+  if (agent) return agent;
+  if (process.env.TMUX) {
+    try {
+      const session = require("child_process").execSync("tmux display-message -p '#{session_name}'", { encoding: "utf-8" }).trim();
+      if (session) return session.replace(/^\d+-/, "");
+    } catch { /* not in a live tmux pane */ }
+  }
+  return "";
+}
+
+/**
+ * kobo-cell-spawn-dept-resolve: resolve the CURRENT pane's own dept for the
+ * rendered contract. Was reading `loadConfig().oracle` — a generic maw-js
+ * family identity that defaults to "mawjs" everywhere it's consumed — never
+ * the specific oracle instance name a company roster keys on, so the lookup
+ * always missed. selfOracleId() matches how the roster loop above resolves
+ * sessions via findWindow(sessions, member.oracle). An oracle genuinely
+ * outside any dept (or an unresolvable identity) renders explicitly rather
+ * than a blank.
+ */
+export function resolveSelfDept(): string {
+  return scopeOfOracle(selfOracleId())?.dept || "(none)";
 }
 
 async function capturePane(paneId: string): Promise<string> {
@@ -324,9 +358,7 @@ export async function cellSelfSpawn(company: string | undefined, emit: (line: st
   for (const line of teardown.logs) emit(line);
   if (!teardown.ok) return { ok: false, error: teardown.error };
 
-  const oracle = ((loadConfig() as unknown as Record<string, unknown>).oracle as string) || "";
-  const scope = scopeOfOracle(oracle);
-  const dept = scope?.dept ?? "";
+  const dept = resolveSelfDept();
   const board = company;
   const stateDir = process.env.CREW_STATE_DIR || DEFAULT_STATE_DIR;
   mkdirSync(stateDir, { recursive: true });

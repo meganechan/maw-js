@@ -1,7 +1,12 @@
 /**
- * maw company task — company task board CLI (ADR 0001 backbone; cli-reorg ADR
- * docs/company/0001). Agents use the maw_task MCP tool; the top-level `maw task`
- * is a deprecation shim (one release) that forwards to the shared runner.
+ * Company task board runner (ADR 0001 backbone; cli-reorg ADR docs/company/0001).
+ *
+ * NOT ROUTED FROM ANY ENTRY POINT — the `maw company task` CLI and the `maw_task`
+ * MCP tool were both removed. This file is the reference implementation of the
+ * sign/merge gate (notably: it calls signPaneViolation BEFORE signTask, a
+ * composition core/tasks/store.ts does not perform on its own), kept until kobo
+ * taskd reimplements sign/merge. The verb list below documents that reference
+ * surface — none of it is dispatchable today.
  *
  *   maw company task add "<title>" [--repo r] [--dept d] [--epic e] [--assignee a] [--needs id,...] [--body "...md..."]
  *     --needs = dependency link (kobo-640; --parent still works as a deprecated alias — do not confuse with pane-parent)
@@ -508,9 +513,10 @@ export function __setPatchIdFetcherForTest(fn: (pr: number, repo: string) => str
 export function __resetPatchIdFetcherForTest(): void { patchIdFetcher = realFetchPatchId; }
 
 /**
- * Shared task-board CLI runner — the single source of truth for the task verbs.
- * Both `maw company task` (company plugin) and the top-level `maw task` shim call
- * this, so the two surfaces can never diverge (cli-reorg ADR docs/company/0001).
+ * Shared task-board runner — the single source of truth for the task verbs.
+ * No CLI or MCP surface calls this today: `maw company task` and the `maw_task`
+ * MCP tool were both removed, so the only remaining callers are tests. Kept as the
+ * reference implementation of the sign/merge gate until kobo taskd reimplements it.
  * `emit` receives user-facing lines; returns an ok/error result.
  */
 export async function runTask(
@@ -1700,6 +1706,7 @@ export async function runTask(
 }
 
 // cli-reorg kobo-26: the top-level `maw task` shim is REMOVED (Tony: hard-cut,
-// no alias). This plugin is now a MODULE surface — `runTask` is imported by the
-// company plugin (`maw company task`); agents use the maw_task MCP tool. There is
-// no default handler and no cli command, so `maw task` → unknown command.
+// no alias). `maw company task` and the `maw_task` MCP tool were removed after
+// that, so this plugin is now a MODULE surface with NO production caller — it is
+// the reference implementation of the sign/merge gate, kept until kobo taskd
+// reimplements it. No default handler, no cli command: `maw task` → unknown command.

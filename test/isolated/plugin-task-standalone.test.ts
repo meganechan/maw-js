@@ -274,9 +274,9 @@ describe("task command plugin standalone boundary", () => {
     expect(src).toContain('t.state === "blocked"'); // hold's non-gate branch checks real state before echoing
   });
 
-  // cli-reorg kobo-26: `maw task` is HARD-REMOVED (no shim). The plugin exports
-  // the shared `runTask` runner (imported by the company plugin for
-  // `maw company task`) but registers NO cli command and NO default handler.
+  // cli-reorg kobo-26: `maw task` is HARD-REMOVED (no shim). `maw company task`
+  // and the `maw_task` MCP tool were removed after that, so the exported `runTask`
+  // has no production caller left; it registers NO cli command and NO default handler.
   test("exports runTask but has no shim handler / no default export", () => {
     const src = readFileSync(
       join(import.meta.dir, "../../src/vendor/mpr-plugins/task/index.ts"),
@@ -294,7 +294,7 @@ describe("task command plugin standalone boundary", () => {
     const manifest = loadManifestFromDir(join(import.meta.dir, "../../src/vendor/mpr-plugins/task"))!.manifest;
     expect(manifest.name).toBe("task");
     expect(manifest.cli).toBeUndefined(); // hard-removed — not dispatchable as `maw task`
-    expect(manifest.module?.exports).toContain("runTask"); // company imports this
+    expect(manifest.module?.exports).toContain("runTask"); // still exported; no production caller since the CLI/MCP removal
   });
 
   // kobo-368 compact-ack sweep: `ls` defaults to a lane-count summary; `--full`/
@@ -398,14 +398,18 @@ describe("task command plugin standalone boundary", () => {
   // doesn't exist" (a headless plugin's generic no-CLI-command message, with no
   // pointer anywhere to `maw company task`). Same failure class: a person reads
   // an incomplete message and concludes a real feature is missing.
-  test("a headless plugin's manifest.description (the pointer to its real surface) reaches the CLI's error message (kobo-581)", () => {
+  test("a headless plugin's manifest.description (which now explains the removal) reaches the CLI's error message (kobo-581)", () => {
     const dispatchSrc = readFileSync(join(import.meta.dir, "../../src/cli/dispatch.ts"), "utf8");
     const headlessBlock = dispatchSrc.slice(dispatchSrc.indexOf("if (headlessPlugin)"));
     expect(headlessBlock).toContain("headlessPlugin.manifest.description");
     const manifest = JSON.parse(
       readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/task/plugin.json"), "utf8"),
     );
-    expect(manifest.description).toContain("maw company task"); // task's own description names the real command
+    // The pointer this used to carry (`maw company task`) is itself removed now, so
+    // the description must say the surface is GONE rather than name a dead command —
+    // otherwise kobo-581's failure runs in reverse: a reader concludes a removed
+    // feature still exists.
+    expect(manifest.description).toContain("NOT routed from any entry point");
   });
 
   // kobo-578 — overwriting an existing sign never refuses, but never happens

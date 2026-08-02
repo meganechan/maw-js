@@ -479,16 +479,23 @@ describe("comm-send thirteenth-pass cmdSend branches", () => {
     expect(errs).toEqual([]);
   });
 
-  test("local delivery without config.node throws after tmux send instead of logging an invalid feed", async () => {
+  // kobo-1813: this used to assert the bug itself — a post-send throw
+  // escaping cmdSend after tmux send had already succeeded. The post-send
+  // bookkeeping tail is now wrapped in one try/catch (see
+  // test/isolated/comm-send-post-send-bookkeeping-wrap.test.ts for the
+  // positive/negative-control pair proving the wrap causes this difference);
+  // the fault is reported, not silent, and no longer escapes.
+  test("local delivery without config.node is caught and reported, not thrown, after tmux send", async () => {
     config = { oracle: "sender", port: 3456, namedPeers: [], commands: { default: "claude" } };
     resolveTargetReturn = { type: "local", target: "session:oracle.0" };
 
-    await expect(cmdSend("local:session:oracle", "missing node", false, { receiverInbox: false }))
-      .rejects.toThrow("config.node is required");
+    await runCmd(() => cmdSend("local:session:oracle", "missing node", false, { receiverInbox: false }));
 
+    expect(exitCode).toBeUndefined();
     expect(sendKeysCalls).toEqual([{ target: "session:oracle.0", text: "[local:sender] missing node" }]);
     expect(runHookCalls).toEqual([{ name: "after_send", payload: { to: "local:session:oracle", message: "[local:sender] missing node" } }]);
     expect(logMessageCalls).toEqual([]);
+    expect(errs.join("\n")).toContain("config.node is required");
   });
 
   test("peer failures fall back to HTTP status when response data has no error", async () => {

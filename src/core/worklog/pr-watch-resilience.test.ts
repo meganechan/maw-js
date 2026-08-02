@@ -1,4 +1,20 @@
 /**
+ * kobo-472 note: EXCLUDED from the src/ CI wiring (see
+ * scripts/test-default-safe.sh SRC_EXCLUDED_PREFIXES) — this file tests
+ * deleted functionality. The task/board subsystem was deleted (3fe50a48
+ * "delete the task store, the task plugin and the dead sweep") after this
+ * file was written. pr-watch.ts's repo-discovery moved from a card→repo
+ * link (`openPrLinkedRepos()`, now GONE — a stale call site throws
+ * `TypeError: openPrLinkedRepos is not a function`) to `scanWorktrees()`,
+ * and its merge-ping moved from the linked card's assignee to
+ * `scopeOfOracle(author)`. This file still seeds fake `card()` JSON
+ * fixtures and asserts the OLD assignee-from-card behavior — on top of
+ * that, several of its timing-based assertions are flaky (pass/fail flips
+ * between runs). Needs a real rewrite (mock `scanWorktrees()`, update the
+ * assignee assertions, de-flake the timing races) as its own follow-up
+ * card — ask Tony for a dedicated one. Verified: the same failures
+ * reproduce on bare `origin/alpha`, so kobo-472 does not own or worsen this.
+ *
  * pr-watch resilience — kobo-631: a repo-level failure must not cost every
  * OTHER repo's already-completed work (the actual root cause behind kobo-630's
  * 86-minute incident: one unguarded throw anywhere aborted the whole pass

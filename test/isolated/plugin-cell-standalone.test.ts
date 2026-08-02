@@ -70,6 +70,21 @@ describe("cell command plugin standalone boundary", () => {
     expect(spawnSrc).toContain("✓ cell down");
   });
 
+  test("spawn repair classifies the pane before typing into it — allowlist + fail closed (cell-spawn-inject-blind)", () => {
+    const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/cell/spawn.ts"), "utf8");
+    // Allowlist of shells, NOT a denylist of agents: an unnameable command must
+    // read as "cannot execute", the same as a REPL. Behaviour is proven in
+    // test/isolated/cell-spawn-inject-guard.test.ts; this is the boundary pin.
+    expect(spawnSrc).toContain("const SHELL_CMDS = new Set([");
+    expect(spawnSrc).toContain("pane_current_command");
+    expect(spawnSrc).toContain("if (!SHELL_CMDS.has(paneCommandBasename(current)))");
+    expect(spawnSrc).toContain("if (current === null) return { ok: false");
+    expect(spawnSrc).toContain("REFUSED repair injection");
+    // the probe must sit INSIDE injectCommand, ahead of the first send-keys
+    const inject = spawnSrc.slice(spawnSrc.indexOf("async function injectCommand"));
+    expect(inject.indexOf("paneCurrentCommand(target)")).toBeLessThan(inject.indexOf("send-keys"));
+  });
+
   test("company/index.ts wires `cell` to runCell", () => {
     const companyIndexSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/company/index.ts"), "utf8");
     expect(companyIndexSrc).toContain('from "../cell/index"');

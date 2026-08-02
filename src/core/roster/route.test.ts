@@ -3,15 +3,16 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { handleRosterRequest } from "./route";
-import { addTask, claimTask } from "../tasks/store";
+import { appendWorklog } from "../worklog/store";
 
 const dir = mkdtempSync(join(tmpdir(), "maw-roster-route-"));
 const prev = process.env.MAW_DATA_DIR;
 
 beforeAll(() => {
   process.env.MAW_DATA_DIR = dir;
-  const t = addTask({ company: "kobo", title: "wire route", by: "eq3" });
-  claimTask("kobo", t.id, "patchwork"); // → in-progress, held by patchwork
+  // an open worklog claim — the ownership signal /api/roster still projects now
+  // that the board's in-progress-card half retired with the task subsystem.
+  appendWorklog({ ts: 1, iso: "x", oracle: "patchwork", company: "kobo", kind: "claim", summary: "claim: kobo-1", task: "kobo-1" });
 });
 afterAll(() => {
   if (prev === undefined) delete process.env.MAW_DATA_DIR;
@@ -19,23 +20,27 @@ afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe("handleRosterRequest — kobo-445 review round 2: pending is opt-in", () => {
-  test("no ?pending=1 → held is still populated, pending is an empty object (existing callers unaffected)", async () => {
+describe("handleRosterRequest", () => {
+  test("held is projected from open worklog claims", async () => {
     const res = handleRosterRequest(new Request("http://x/api/roster?company=kobo"));
-    const body = (await res.json()) as { held: Record<string, unknown[]>; pending: Record<string, unknown[]> };
-    expect(body.held.patchwork).toBeDefined(); // existing behavior untouched
-    expect(body.pending).toEqual({}); // NOT computed/shipped unless asked
+    const body = (await res.json()) as { company: string; held: Record<string, { id: string; kind: string }[]> };
+    expect(body.company).toBe("kobo");
+    expect(body.held.patchwork?.map((h) => h.id)).toEqual(["kobo-1"]);
+    expect(body.held.patchwork?.[0]?.kind).toBe("claim");
   });
 
-  test("?pending=1 → pending is populated with the real held card", async () => {
-    const res = handleRosterRequest(new Request("http://x/api/roster?company=kobo&pending=1"));
-    const body = (await res.json()) as { pending: Record<string, { title: string }[]> };
-    expect(body.pending.patchwork?.some((p) => p.title === "wire route")).toBe(true);
+  test("no ?company → empty envelope, never an error", async () => {
+    const res = handleRosterRequest(new Request("http://x/api/roster"));
+    const body = (await res.json()) as { company: null; roster: unknown[]; held: Record<string, unknown> };
+    expect(body.company).toBeNull();
+    expect(body.roster).toEqual([]);
+    expect(body.held).toEqual({});
   });
 
-  test("?pending=0 (or any other value) does NOT opt in — only the literal '1' does", async () => {
-    const res = handleRosterRequest(new Request("http://x/api/roster?company=kobo&pending=0"));
-    const body = (await res.json()) as { pending: Record<string, unknown[]> };
-    expect(body.pending).toEqual({});
+  test("the retired `pending` card projection is no longer shipped, with or without the opt-in", async () => {
+    for (const q of ["?company=kobo", "?company=kobo&pending=1"]) {
+      const body = (await handleRosterRequest(new Request(`http://x/api/roster${q}`)).json()) as Record<string, unknown>;
+      expect(body).not.toHaveProperty("pending");
+    }
   });
 });

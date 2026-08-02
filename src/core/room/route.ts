@@ -12,11 +12,10 @@
  * kobo-241 (slice 2): the room is now a persisted OFF-CARD artifact
  * (rooms/<id>.json). open/close/reopen + the thread render read/write that artifact;
  * turns land in it via the room feed listener. Out of scope (later): attribution (3),
- * merge (4), distill-to-card (5).
+ * merge (4).
  */
 
-import { openRoom, closeRoom, reopenRoom, readRoom, listRooms, linkRoomCard, mergeRooms, findRoomCompany, appendRoomMessage, addRoomParticipant, paginateRoomMessages, type RoomPageOpts, type RoomArtifact } from "./store";
-import { addTask, readTask } from "../tasks/store";
+import { openRoom, closeRoom, reopenRoom, readRoom, listRooms, mergeRooms, findRoomCompany, appendRoomMessage, addRoomParticipant, paginateRoomMessages, type RoomPageOpts, type RoomArtifact } from "./store";
 import { roomActivity, bareName } from "./activity";
 import { readWorklog } from "../worklog/store";
 import { readPresenceRows } from "../presence/route";
@@ -469,7 +468,7 @@ function parseRoomPageOpts(params: URLSearchParams): RoomPageOpts | { error: str
 /**
  * GET /api/rooms?company=<c> — the company-scoped room list for the 2-pane chat
  * (kobo-258). Drives the topic list + the company selector + the default partner:
- *   { ok, company, lead, companies:[names], rooms:[{id,topic,status,updatedTs,cardId}] }
+ *   { ok, company, lead, companies:[names], rooms:[{id,topic,status,updatedTs}] }
  * `company` omitted / unknown → default to the first company (rooms are ALWAYS ⊂ a
  * company — the UI never operates without one). `lead` = the oracle that runs that
  * company's warroom (kobo→eq3, pgw→thawanban). Read-only.
@@ -479,46 +478,10 @@ export function handleRoomsListRequest(request: Request): Response {
   const asked = (new URL(request.url).searchParams.get("company") ?? "").trim();
   const company = asked && companies.includes(asked) ? asked : (companies[0] ?? "");
   if (!company) return Response.json({ ok: true, company: "", lead: null, companies: [], rooms: [], oracles: [] });
-  const rooms = listRooms(company).map((r) => ({ id: r.id, topic: r.topic, status: r.status, updatedTs: r.updatedTs, cardId: r.cardId }));
+  const rooms = listRooms(company).map((r) => ({ id: r.id, topic: r.topic, status: r.status, updatedTs: r.updatedTs }));
   // kobo-390: the picker's roster — grouped client-side against each room's `participants`.
   const oracles = [...companyOracles(company)].filter((o) => !ROOM_TAG_DENY.has(o));
   return Response.json({ ok: true, company, lead: companyLead(company), companies, rooms, oracles });
-}
-
-// ── kobo-244 slice 5: distill room-artifact → kanban card (the ONE room→board touch) ──
-
-/**
- * POST /api/room/distill — body { company, room, title, body?, assignee?, reviewer? }
- * → promote a room's grounding conversation into a board card. The caller supplies the
- * DISTILLED problem+approach (title + optional body); this handler only does the
- * promote + link mechanics, REUSING the card-create path (addTask — no new card system).
- * Writes a bidirectional link: the card carries room=<id> (provenance), the artifact
- * records cardId=<card>. Idempotent — a room already distilled returns its existing card
- * (no duplicate) so a double-click can't mint two cards for one room.
- */
-export async function handleRoomDistillRequest(request: Request): Promise<Response> {
-  const body = await parseBody(request);
-  if (!body) return Response.json({ ok: false, error: "invalid JSON body" }, { status: 400 });
-  const company = str(body.company), room = str(body.room), title = str(body.title);
-  if (!company || !room || !title) {
-    return Response.json({ ok: false, error: "company, room and title are required" }, { status: 400 });
-  }
-  const artifact = readRoom(company, room);
-  if (!artifact) return Response.json({ ok: false, error: `room not found: ${room}` }, { status: 404 });
-
-  // Already distilled → return the existing card (dedup). If the recorded card was
-  // deleted the link is stale, so fall through and mint a fresh one.
-  if (artifact.cardId) {
-    const existing = readTask(company, artifact.cardId);
-    if (existing) return Response.json({ ok: true, card: existing, room: artifact, deduped: true });
-  }
-
-  const detail = str(body.body);
-  const assignee = str(body.assignee) || undefined;
-  const reviewer = str(body.reviewer) || undefined;
-  const card = addTask({ company, title, by: "tony", room, ...(detail ? { body: detail } : {}), ...(assignee ? { assignee } : {}), ...(reviewer ? { reviewer } : {}) });
-  const linked = linkRoomCard(company, room, card.id) ?? artifact;
-  return Response.json({ ok: true, card, room: linked });
 }
 
 /**

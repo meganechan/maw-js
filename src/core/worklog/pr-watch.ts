@@ -3,15 +3,18 @@
  *
  * Triggered by: `maw done` (on-signal), `maw company worklog log` (on-read),
  * `maw company worklog sync`, AND — on a running server — the `serve-pr-watch`
- * plugin's periodic tick (kobo-33), so a plain github.com web-merge drives the
- * linked card to done with NO human `maw` command.
+ * plugin's periodic tick (kobo-33).
  * `gh pr list` is ground truth for open/merged/closed; we diff against a snapshot
- * so each transition logs exactly once. On merge we ping the author's dept lead +
- * the author (carrying content), so the log gets read.
+ * so each transition logs exactly once. On merge we ping the author's dept lead
+ * (carrying content), so the log gets read.
  *
  * An out-of-band github.com web merge is picked up within one server tick (or on
  * the next on-demand trigger when no server runs). In-pane `gh pr merge` is
  * caught immediately by the PostToolUse hook.
+ *
+ * Board side retired: driving a linked card to review/done, healing its repo, and
+ * stamping its mergeable state all went with the task subsystem. What is left is
+ * the activity log (worklog entries per transition) + the merge ping.
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from "fs";
@@ -20,10 +23,9 @@ import { mawStatePath } from "../xdg";
 import { scanWorktrees } from "../fleet/worktrees";
 import { loadConfig } from "../../config";
 import { appendWorklog } from "./store";
-import { completeOrParkMergedTask, findTasksByPr, prOpenedReview, setTaskRepoIfMissing, setTaskPrMergeState, listTasks, listCompanies } from "../tasks/store";
-import { notifyReviewer } from "../tasks/notify";
+import { listCompanies } from "../../vendor/mpr-plugins/company/company-helpers";
 import { pingOnMerge } from "./ping";
-import { companyOfOracleStrict } from "./company-scope";
+import { companyOfOracleStrict, scopeOfOracle } from "./company-scope";
 import type { WorklogEntry } from "./types";
 
 type PrState = "OPEN" | "MERGED" | "CLOSED";
@@ -37,12 +39,6 @@ interface GhPr {
   state: string;
   mergedAt: string | null;
   author?: { login?: string };
-  // kobo-594: riding the SAME `gh pr list` call this file already makes for
-  // open/merged/closed detection — zero extra `gh` calls, same poll cadence.
-  // "UNKNOWN" is GitHub's own lazy-compute-pending value, distinct from this
-  // repo never having checked at all (an absent TaskRecord.prMergeable).
-  mergeable?: string; // "MERGEABLE" | "CONFLICTING" | "UNKNOWN"
-  mergeStateStatus?: string; // "CLEAN" | "DIRTY" | "BLOCKED" | "BEHIND" | "UNSTABLE" | "UNKNOWN" | "DRAFT"
 }
 
 // kobo-631 — injectable override for the snapshot's own path, on top of (not
@@ -183,6 +179,12 @@ export function __resetGhForTest(): void {
   ghFetcher = realGh;
 }
 
+/** Company names on this machine — the fleet-wide fan-out target for a loud
+ *  failure. Was the task store's own company enumeration before the board left. */
+function companyNames(): string[] {
+  return listCompanies().map((c) => c.name);
+}
+
 function prStateOf(pr: GhPr): PrState {
   if (pr.mergedAt) return "MERGED";
   return pr.state === "CLOSED" ? "CLOSED" : "OPEN";
@@ -217,91 +219,15 @@ async function mergedBy(repo: string, num: number, signal?: AbortSignal): Promis
 }
 
 /**
- * Repos referenced by open (non-done) PR-linked cards, across every company on
- * this machine. The board's card→PR link is the source of truth for which repos
- * matter, independent of what worktrees/fleet windows happen to exist locally.
- */
-export function openPrLinkedRepos(): string[] {
-  return listCompanies().flatMap(company =>
-    listTasks(company)
-      .filter(t => typeof t.pr === "number" && t.state !== "done" && Boolean(t.repo))
-      .map(t => t.repo as string),
-  );
-}
-
-/**
- * kobo-631 — every company with at least one open PR-linked card for `repo`.
- * Used to route a REPO-LEVEL failure (the `gh pr list` call itself throwing,
- * before any specific PR/card is even known) — a single fallback company
- * would silently blind every OTHER company whose repo this also is. A repo
- * can legitimately matter to more than one company at once.
- */
-function companiesForRepo(repo: string): string[] {
-  return listCompanies().filter(company =>
-    listTasks(company).some(t => typeof t.pr === "number" && t.state !== "done" && t.repo === repo),
-  );
-}
-
-/**
- * Locate EVERY card linked to a PR across every company on this machine. The
- * card→PR link (task.pr) is globally unique per (company, card) but a single PR
- * can bind SEVERAL cards (kobo-43: PR #85 = kobo-38 + kobo-42) — so return all,
- * not the first, or merge→done strands every card past the first. Deliberately
- * does NOT map the PR author to a company: a github merge login often maps to
- * none, which previously stranded the flip.
- */
-export function findCardsByPrAnywhere(pr: number, repo?: string): { company: string; taskId: string; assignee: string | null }[] {
-  const hits: { company: string; taskId: string; assignee: string | null }[] = [];
-  for (const company of listCompanies()) {
-    for (const task of findTasksByPr(company, pr, repo)) hits.push({ company, taskId: task.id, assignee: task.assignee ?? null });
-  }
-  return hits;
-}
-
-export function findCardByPrAnywhere(pr: number, repo?: string): { company: string; taskId: string; assignee: string | null } | null {
-  return findCardsByPrAnywhere(pr, repo)[0] ?? null;
-}
-
-/**
- * Merge = approval → flip EVERY card this PR binds (kobo-43), idempotently. A
- * deploy-required card parks in wait-for-deploy (kobo-274, merged≠live); the rest
- * go to done. This is the single flip primitive shared by (a) the OPEN→MERGED
- * transition and (b)
- * the kobo-228 reconcile pass. Idempotent by construction: findTasksByPr already
- * excludes done+rejected, so a re-run flips nothing that's already closed (no
- * resurrection — kobo-99/101). Heals a repo-less card on the way (kobo-80). Returns
- * the ids it actually flipped (empty = everything already closed → no churn).
- *
- * kobo-228: pr-watch is a single-fire snapshot transition-diff — the merge→done
- * flip only fires on the OPEN→MERGED edge. That edge is SWALLOWED when the snapshot
- * is reseeded across a server restart (firstRun baselines the current MERGED state
- * without acting) or when a card is linked/routed into review/approve AFTER the edge
- * already passed. An approve-lane card is the most exposed: it waits on a human gate,
- * so a reseed easily lands between merge and blessing → the card strands until a
- * manual `task done`. Calling this on EVERY poll for a MERGED pr closes that gap.
- */
-export function reconcileMergedCards(pr: number, repo: string, by: string): string[] {
-  const flipped: string[] = [];
-  for (const hit of findCardsByPrAnywhere(pr, repo)) {
-    setTaskRepoIfMissing(hit.company, hit.taskId, repo); // kobo-80: heal repo-less card
-    // kobo-274: a deploy-required card parks in wait-for-deploy (merged≠live) instead
-    // of done; non-deploy cards still flip straight to done.
-    if (completeOrParkMergedTask(hit.company, hit.taskId, by)) flipped.push(hit.taskId);
-  }
-  return flipped;
-}
-
-/**
- * kobo-631 — a repo-level failure must be LOUD, not swallowed. Routes to
- * EVERY company with an open PR-linked card for `repo` (a repo can matter to
- * more than one company at once — a single fallback company would silently
- * blind the others, measured via `companiesForRepo`, not assumed). Falls
- * back to a company-less entry (still recorded, never dropped) only when no
- * company currently references this repo at all — e.g. a bare local
- * worktree scan hit with no linked card anywhere.
+ * kobo-631 — a repo-level failure must be LOUD, not swallowed. Routed to EVERY
+ * company on this machine, mirroring `recordStuckPoll`: the card→repo link that
+ * used to narrow this to "companies that care about this repo" retired with the
+ * task subsystem, and a single fallback company would silently blind the others.
+ * Falls back to a company-less entry (still recorded, never dropped) when there
+ * are no companies at all.
  */
 function recordFailure(repo: string, message: string): void {
-  const companies = companiesForRepo(repo);
+  const companies = companyNames();
   const base = {
     ts: Date.now(),
     iso: new Date().toISOString(),
@@ -353,7 +279,7 @@ async function pollRepoOnce(
   try {
     const out = await ghFetcher([
       "pr", "list", "--repo", repo, "--state", "all", "--limit", "30",
-      "--json", "number,title,state,mergedAt,author,mergeable,mergeStateStatus",
+      "--json", "number,title,state,mergedAt,author",
     ], signal);
     prs = JSON.parse(out || "[]") as GhPr[];
   } catch (e) {
@@ -365,17 +291,12 @@ async function pollRepoOnce(
       // kobo-631 (reviewer-escalated: the generation check before
       // saveSnapshotAtomic alone was NOT enough) — by the time a stale,
       // timed-out pass would reach that check, it has ALREADY performed
-      // every OTHER PR's real side effects for this repo: `record()`
+      // every OTHER PR's real side effect for this repo: `record()`
       // (appendWorklog — could re-log a "pr-opened" for a PR a NEWER pass
-      // already saw MERGED) and `reconcileMergedCards`/
-      // `completeOrParkMergedTask` (mutate REAL CARDS on the board from a
-      // stale view — worse blast radius than the snapshot file, same class
-      // of risk this file's own `beforeEach` isolation assert already
-      // treats `mawDataDir` as more dangerous than `mawStateDir` for).
-      // Checking here, before EACH PR's side effects (not just once at the
-      // end), bounds — doesn't eliminate, PRs already processed earlier in
-      // this same loop can't be undone — how much stale work a superseded
-      // pass can still do after being aborted.
+      // already saw MERGED). Checking here, before EACH PR's side effects
+      // (not just once at the end), bounds — doesn't eliminate, PRs already
+      // processed earlier in this same loop can't be undone — how much stale
+      // work a superseded pass can still do after being aborted.
       if (signal?.aborted) {
         return { entries, recorded, changed: firstRun || sawTransition, abortedMidLoop: prs.length - i };
       }
@@ -383,36 +304,6 @@ async function pollRepoOnce(
       const cur = prStateOf(pr);
       const prev = snap[key]?.state;
       const author = pr.author?.login;
-
-      // kobo-228 reconcile pass — a MERGED pr must leave NO linked card behind, even
-      // when the merge→done EDGE was swallowed: a restart reseeds the snapshot
-      // (firstRun baselines the current MERGED state without acting), or a card was
-      // linked/routed into review/approve AFTER the edge already passed. Run it
-      // exactly when the transition handler below WON'T (firstRun or no state change)
-      // so a fresh OPEN→MERGED edge stays the transition handler's job (worklog +
-      // ping + merger-resolved `by`). Idempotent: reconcileMergedCards flips only
-      // still-open cards (done/rejected excluded) → no churn, no double-flip, no spam.
-      if (cur === "MERGED" && (firstRun || prev === cur)) {
-        try { reconcileMergedCards(pr.number, repo, author || "pr-watch"); }
-        catch { /* never let task auto-done break PR-watch */ }
-      }
-
-      // kobo-594: runs on EVERY poll (before the firstRun/prev===cur early-outs
-      // below, same placement reasoning as the reconcile pass above) — an OPEN PR
-      // that never changes OPEN/MERGED/CLOSED state (the only thing `prev`/`cur`
-      // track) can still flip mergeable→conflicting from a SIBLING PR merging
-      // underneath it, with zero snapshot transition of its own. Gating this behind
-      // `prev === cur` would mean it only ever updates on a PR's own open/merge/close
-      // edge — exactly the gap this card exists to close. `pr.mergeable` is only
-      // absent/undefined when `gh` itself failed upstream (JSON.parse threw or the
-      // whole `gh` call errored, caught above) — the unhappy-path AC requires that
-      // failure leave the card's prior value untouched, never write a guess.
-      if (cur === "OPEN" && pr.mergeable && pr.mergeStateStatus) {
-        for (const hit of findCardsByPrAnywhere(pr.number, repo)) {
-          try { setTaskPrMergeState(hit.company, hit.taskId, pr.mergeable, pr.mergeStateStatus); }
-          catch { /* never let this break PR-watch's other work */ }
-        }
-      }
 
       if (firstRun || prev === cur) {
         // seed baseline only, or genuinely no-op — nothing else to wait for,
@@ -423,28 +314,19 @@ async function pollRepoOnce(
 
       sawTransition = true; // a real OPEN/MERGED/CLOSED edge, not a no-op — this repo's write is now earned.
 
-      // The card→PR link is globally unique, so locate the card by PR number
-      // across ALL companies rather than mapping the PR author to a company: a
-      // github web-merge's author is the merging login (often a bot/human that
-      // belongs to no company), which stranded the merge→done flip in _unscoped
-      // and never reached the card (kobo-33 e2e). Prefer the card's own company
-      // for the worklog entry too, so the event lands on that board's timeline.
-      // Scope the card lookup to THIS repo — a PR number is unique only within a
-      // repo, so merged owner/a#5 must not flip a card bound to owner/b#5 (kobo-99).
-      const cardHits = findCardsByPrAnywhere(pr.number, repo);
       // kobo-216 — resolve the author's company via the STRICT resolver: no silent
       // first-match (the AC gap). This is a background daemon with no --company to
       // supply, so an ambiguous (multi-company) author can't be prompted — catch the
       // throw and fall to the configured fallbackCompany rather than aborting the whole
-      // poll cycle (matches this file's "never let X break PR-watch" contract). The
-      // primary path (cardHits[0].company) is unaffected; a single-company author
-      // resolves byte-for-byte as before, so no worklog entry shifts company.
+      // poll cycle (matches this file's "never let X break PR-watch" contract). This
+      // used to sit behind the linked card's own company; with the board gone the
+      // author's company IS the primary path.
       let authorCompany: string | null = null;
       if (author) {
         try { authorCompany = companyOfOracleStrict(author); }
         catch { authorCompany = null; } // ambiguous → fallbackCompany, never guess a board
       }
-      const company = cardHits[0]?.company ?? authorCompany ?? fallbackCompany;
+      const company = authorCompany ?? fallbackCompany;
       const base = { ts: Date.now(), iso: new Date().toISOString(), oracle: author || "unknown", company, repo, pr: pr.number };
 
       if (cur === "MERGED") {
@@ -452,21 +334,14 @@ async function pollRepoOnce(
         const entry: WorklogEntry = { ...base, kind: "pr-merged", summary: `merged #${pr.number} ${pr.title}`, by };
         record(entry);
         recorded.push(entry);
-        // kobo-631: `lead` used to be derived from the GitHub `author` login via
-        // scopeOfOracle(author) — but every PR merges under ONE shared, fleet-wide
-        // github account (kobo-217), which is never itself a registered oracle, so
-        // that lookup always resolved to null. Use the linked card's own assignee
-        // instead — a real oracle name, already on the card (Board Truth rule 3:
-        // the shared PR-author is meaningless as owner).
-        const assignee = cardHits[0]?.assignee ?? null;
-        pingOnMerge({ lead: assignee, author: null, pr: pr.number, repo, by });
-        // Track 4 — merge = approval → auto-done EVERY card that owns this PR
-        // (kobo-43: one PR can bind several cards; flip them all, not just the
-        // first, or the rest strand in review until a human hand-flips). Shares the
-        // idempotent flip primitive with the kobo-228 reconcile pass — merger `by`
-        // resolved here (fresh edge); a re-poll's reconcile no-ops (card already done).
-        try { reconcileMergedCards(pr.number, repo, by || author || "pr-watch"); }
-        catch { /* never let task auto-done break PR-watch */ }
+        // kobo-631 resolved this from the linked card's assignee, because every PR
+        // merges under ONE shared fleet-wide github account (kobo-217) that is never
+        // itself a registered oracle. With the board gone that assignee no longer
+        // exists, so we fall back to the author's dept lead — which resolves to a
+        // real oracle only when the PR author IS one, and to nobody otherwise
+        // (deliver() skips empty targets). Merge notification is therefore
+        // best-effort now; the worklog entry above is the durable record.
+        pingOnMerge({ lead: author ? scopeOfOracle(author)?.lead ?? null : null, author: null, pr: pr.number, repo, by });
       } else if (cur === "CLOSED") {
         const entry: WorklogEntry = { ...base, kind: "pr-closed", summary: `closed #${pr.number} ${pr.title}` };
         record(entry);
@@ -475,18 +350,6 @@ async function pollRepoOnce(
         const entry: WorklogEntry = { ...base, kind: "pr-opened", summary: `opened #${pr.number} ${pr.title}` };
         record(entry);
         recorded.push(entry);
-        // eq3-011 kobo-13: PR open = truth → drive the linked card(s) to review,
-        // reviewer resolved via the chain. kobo-217: the doer (assignee) is KEPT —
-        // the shared-github PR author is never stamped as owner (Board Truth rule 9).
-        // Mirrors the merge→done path; acts off the card.pr link, fires once on this
-        // OPEN transition. kobo-43: flip every card the PR binds, not just the first.
-        try {
-          if (author) for (const hit of cardHits) {
-            setTaskRepoIfMissing(hit.company, hit.taskId, repo); // kobo-80: bind repo on the open→review flip → merge poll is guaranteed later
-            const reviewed = prOpenedReview(hit.company, hit.taskId, author);
-            if (reviewed) notifyReviewer(reviewed, author); // kobo-144: poke the resolved reviewer that a PR is up
-          }
-        } catch { /* never let task lifecycle break PR-watch */ }
       }
 
       // Committed only now — after this PR's real side effect has already
@@ -589,7 +452,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, onTimeout: () => void): Promi
  *  fleet-wide symptom, not one repo's problem, so every company on this
  *  machine gets told, mirroring `recordFailure`'s no-match fallback shape. */
 function recordStuckPoll(message: string): void {
-  const companies = listCompanies();
+  const companies = companyNames();
   const base = {
     ts: Date.now(), iso: new Date().toISOString(), oracle: "pr-watch",
     kind: "error" as const, summary: `pr-watch poll pass stuck: ${message}`,
@@ -677,17 +540,14 @@ async function runPollPrsOnce(generation: number, signal: AbortSignal): Promise<
   const cfg = loadConfig() as any;
   const fallbackCompany: string | undefined = cfg.company;
 
-  // Repos to poll = local worktree repos ∪ repos referenced by open PR-linked
-  // cards. Worktree scan alone misses a repo whose PRs drive the board when no
-  // .wt-*/agents worktree or fleet window exists for it on this host (e.g. a
-  // served maw-server on a box that only has its own repo checked out) — the
-  // card→PR link is the board's own source of truth, so poll exactly what the
-  // board points at. Generic on task.repo (any company/repo), never hardcoded.
+  // Repos to poll = local worktree repos. This used to be union'd with the repos
+  // referenced by open PR-linked cards (the board's own source of truth for which
+  // repos mattered); that half retired with the task subsystem, so a repo with no
+  // local worktree on this host is no longer polled.
   let repos: string[];
   try {
     const wts = await scanWorktrees();
-    const worktreeRepos = wts.map(w => w.mainRepo).filter(Boolean);
-    repos = [...new Set([...worktreeRepos, ...openPrLinkedRepos()])];
+    repos = [...new Set(wts.map(w => w.mainRepo).filter(Boolean))];
   } catch {
     return [];
   }
@@ -706,7 +566,7 @@ async function runPollPrsOnce(generation: number, signal: AbortSignal): Promise<
     recorded.push(...outcome.recorded);
     if (outcome.failed) recordFailure(repo, outcome.failed);
     if (outcome.abortedMidLoop) {
-      recordStuckPoll(`generation ${generation} aborted mid-repo ${repo} — ${outcome.abortedMidLoop} PR(s) left unprocessed, earlier PRs in this repo's list already had their side effects (worklog/card writes) applied from a stale view`);
+      recordStuckPoll(`generation ${generation} aborted mid-repo ${repo} — ${outcome.abortedMidLoop} PR(s) left unprocessed, earlier PRs in this repo's list already had their side effects (worklog writes) applied from a stale view`);
     }
     if (outcome.changed) {
       // kobo-631 — reviewer-verified block: a stale (timed-out, abandoned)

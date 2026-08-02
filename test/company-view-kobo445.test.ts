@@ -12,7 +12,7 @@ import { companyStatusHtml } from "../src/views/company-status";
 // suspends it), and assert getJson was only invoked by the FIRST call.
 function extractLoad(html: string) {
   const start = html.indexOf("let loadInFlight = false;");
-  const end = html.indexOf("function render(roster, held, pending, presence, worklog) {");
+  const end = html.indexOf("function render(roster, held, presence, worklog) {");
   if (start === -1 || end === -1 || end <= start) {
     throw new Error("extractLoad: markers not found — company-status.ts's load()/render() boundary text changed, update this test's markers");
   }
@@ -40,26 +40,24 @@ describe("company-status view — kobo-445 read-only gate", () => {
     expect(html).toContain("getJson('/api/roster?company=");
     expect(html).toContain("getJson('/api/presence?company=");
     expect(html).toContain("getJson('/api/worklog/feed?company=");
-    // kobo-445 review round 1: /api/tasks dropped entirely — /api/roster's `pending`
-    // field replaced it instead of a second 848KB/532-file scan (measured once by
-    // the author, 32554 bytes on a real company — not independently re-verified).
+    // /api/tasks is gone with the task subsystem; this page never fetched it after
+    // kobo-445 review round 1 anyway, and must not grow a reference back.
     expect(html).not.toContain("/api/tasks");
+    // the `pending` card projection retired too — the page must not ask for it
+    expect(html).not.toContain("pending=1");
   });
 
   test("missing data renders an explicit no-data message, never a fabricated 0/empty-looking value", () => {
     expect(html).toContain("pct == null ? 'ctx —'"); // no presence sample → em-dash, not "ctx 0%"
     expect(html).toContain("'no live pane'"); // no panes for this oracle → says so
-    expect(html).toContain("'nothing pending'"); // no pending cards → says so
     expect(html).toContain("'no recent activity'"); // no worklog entries → says so
     expect(html).toContain("'no roster members'"); // empty roster → says so
   });
 
-  test("pending list has no client-side done/rejected filter — the server (pendingTasksByOracle) already excludes terminal states, so a closed card is simply absent", () => {
-    // if this ever reads `pending[member.oracle]` through an extra done/rejected check,
-    // that's a second, driftable copy of the filter — it should stay server-only.
-    expect(html).not.toMatch(/state\s*===\s*['"]done['"]/);
-    expect(html).not.toMatch(/state\s*===\s*['"]rejected['"]/);
-    expect(html).toContain("const oraclePending = pending[member.oracle] || [];");
+  test("the retired pending-cards panel is fully gone — no render, no fetch, no CSS", () => {
+    expect(html).not.toContain("oraclePending");
+    expect(html).not.toContain("pending-row");
+    expect(html).not.toContain("ของค้าง");
   });
 
   test("polling never overlaps a still-in-flight request (behavioral, not a string-pin)", async () => {

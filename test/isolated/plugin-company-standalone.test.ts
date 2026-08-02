@@ -73,6 +73,10 @@ describe("company command plugin standalone boundary", () => {
     expect(indexSrc).not.toContain("runTask");
     expect(indexSrc).not.toContain('=== "task"');
     expect(indexSrc).not.toContain("|task|");
+    // …and no stale prose either: a comment that still names `maw company task` as a
+    // delegated verb describes a plugin that no longer exists on disk (the whole task
+    // subsystem retired), which is the same lie as advertising it in the manifest.
+    expect(indexSrc).not.toContain("home|worklog|task");
 
     // The manifest is the OTHER advertised surface (`maw --help` reads plugin.json,
     // not index.ts) — it must not offer the removed verb either, while the verbs

@@ -5,20 +5,19 @@
  *
  * - capture: add the feed listener (PostToolUse/UserPromptSubmit/interrupt → worklog)
  * - inject/read: register GET /api/worklog (behind auth — see PROTECTED "/worklog")
- * - company-ui (read-only): GET /api/worklog/feed (timeline) + GET /api/tasks
- *   (board) + GET /api/state (coordination markdown panel) — toggle with this
- *   plugin, same worklog-engine territory (spec §6 + addendum).
+ * - company-ui (read-only): GET /api/worklog/feed (timeline) + GET /api/state
+ *   (coordination markdown panel) — toggle with this plugin, same worklog-engine
+ *   territory (spec §6 + addendum).
  */
 
 import type { PluginLifecycleContext } from "maw-js/plugin/lifecycle";
 import { registerWorklogListener } from "../../../core/worklog/listener";
 import { handleWorklogRequest, handleWorklogFeedRequest } from "../../../core/worklog/route";
-import { handleTasksRequest, handleTaskDetailRequest, handleTaskArchiveRequest, handleTaskNoteRequest, handleTaskCommentRequest, handleTaskCreateRequest, handleTaskDoneRequest, handleTaskDeployedRequest, handleTaskApproveRequest, handleTaskRejectRequest, handleTaskAssignRequest, handleTaskEditRequest, handleTaskEventsRequest } from "../../../core/tasks/route";
 import { handleStateDocRequest } from "../../../core/state-doc/route";
 import { handleRosterRequest } from "../../../core/roster/route";
 import { handlePresenceRequest } from "../../../core/presence/route";
 import { handlePolicyRequest } from "../../../core/policy/route";
-import { handleRoomSendRequest, handleRoomOpenRequest, handleRoomCloseRequest, handleRoomReopenRequest, handleRoomThreadRequest, handleRoomDistillRequest, handleRoomMergeRequest, handleRoomActivityRequest, handleRoomsListRequest, handleRoomReplyRequest, handleRoomInviteRequest } from "../../../core/room/route";
+import { handleRoomSendRequest, handleRoomOpenRequest, handleRoomCloseRequest, handleRoomReopenRequest, handleRoomThreadRequest, handleRoomMergeRequest, handleRoomActivityRequest, handleRoomsListRequest, handleRoomReplyRequest, handleRoomInviteRequest } from "../../../core/room/route";
 import { registerRoomListener } from "../../../core/room/listener";
 import { companyVersion } from "../../../views/company";
 import { feedListeners } from "../../../api/feed";
@@ -33,50 +32,6 @@ export function serve(ctx: PluginLifecycleContext): { ok: true } {
   ctx.http?.route("GET", "/api/worklog", (request: Request) => handleWorklogRequest(request));
   // company-ui timeline feed (behind auth — see PROTECTED "/worklog/feed")
   ctx.http?.route("GET", "/api/worklog/feed", (request: Request) => handleWorklogFeedRequest(request));
-  // company-ui kanban board — stub now, backbone later (behind auth — PROTECTED "/tasks")
-  ctx.http?.route("GET", "/api/tasks", (request: Request) => handleTasksRequest(request));
-  // company-ui single-card detail fetch (kobo-401): the bulk list above stopped
-  // shipping body/notes/comments on every card — the detail modal calls this on
-  // card-open instead (behind auth — PROTECTED "/tasks" prefix already covers it).
-  ctx.http?.route("GET", "/api/tasks/detail", (request: Request) => handleTaskDetailRequest(request));
-  // company-ui card-detail live push (kobo-207): SSE stream that pushes a `change`
-  // event when the open card's content shifts (comment/note/state), so the detail
-  // modal hot-reloads without waiting on the board poll. Behind auth ("/tasks/events").
-  ctx.http?.route("GET", "/api/tasks/events", (request: Request) => handleTaskEventsRequest(request));
-  // company-ui per-card archive (kobo-35): Tony reviews a done card + clicks
-  // archive → moves it off the board (behind auth — PROTECTED POST "/tasks/…").
-  ctx.http?.route("POST", "/api/tasks/archive", (request: Request) => handleTaskArchiveRequest(request));
-  // company-ui card comment (kobo-46): Tony posts a note from the modal → append
-  // + poke assignee on task-events (behind auth — PROTECTED POST "/tasks/…").
-  ctx.http?.route("POST", "/api/tasks/note", (request: Request) => handleTaskNoteRequest(request));
-  // company-ui threaded comment (kobo-141): the modal's comment thread posts an
-  // ask/answer comment (replyTo threads it) → poke assignee on task-events. Distinct
-  // from a note (Board Truth rule 10). Behind auth via PROTECTED POST "/tasks/…".
-  ctx.http?.route("POST", "/api/tasks/comment", (request: Request) => handleTaskCommentRequest(request));
-  // kobo-237: the comment-resolve route is removed — the resolve concept is gone;
-  // the mentions queue is trimmed by mark-as-read (kobo-238), not by resolving a comment.
-  // company-ui card create (kobo-48): the modal "+ subtask" button posts a child
-  // card (epic = parent id) → c1 containment (behind auth — PROTECTED POST "/tasks/…").
-  ctx.http?.route("POST", "/api/tasks/create", (request: Request) => handleTaskCreateRequest(request));
-  // company-ui mark-done (kobo-50): the modal "mark done" button posts a card→done
-  // transition; an epic w/ incomplete children → 409 needsConfirm (guard b). Behind
-  // auth via PROTECTED POST "/tasks/…".
-  ctx.http?.route("POST", "/api/tasks/done", (request: Request) => handleTaskDoneRequest(request));
-  // company-ui mark-deployed (kobo-275): the wait-for-deploy "🚀 Mark deployed" button
-  // posts a card→done drain; server guards state===wait-for-deploy (409 otherwise, never
-  // dones a non-waiting card). Deploy stays manual (kobo-233). Behind auth (PROTECTED /tasks/…).
-  ctx.http?.route("POST", "/api/tasks/deployed", (request: Request) => handleTaskDeployedRequest(request));
-  // company-ui approve (kobo-192): the card-detail Approve button posts a card→approve
-  // action; server derives from the pr field — has pr = mark-only comment, no pr =
-  // spawn an execution-card (epic=work, in-progress). Behind auth (PROTECTED /tasks/…).
-  ctx.http?.route("POST", "/api/tasks/approve", (request: Request) => handleTaskApproveRequest(request));
-  // company-ui action buttons (kobo-225): reject → Rejected lane (reason mandatory);
-  // assign → reassign friction (kobo-219, 409 needsForce → confirm → force); edit →
-  // reviewer in place (kobo-214). Each wires the SAME store verb the CLI uses — the
-  // rule guard holds server-side, not just in the button. Behind auth (PROTECTED /tasks/…).
-  ctx.http?.route("POST", "/api/tasks/reject", (request: Request) => handleTaskRejectRequest(request));
-  ctx.http?.route("POST", "/api/tasks/assign", (request: Request) => handleTaskAssignRequest(request));
-  ctx.http?.route("POST", "/api/tasks/edit", (request: Request) => handleTaskEditRequest(request));
   // kobo-245 — Brainstorm Room core wire: the web /room input box posts here; we
   // deliver to the lead via `maw hey` (the SAME transport oracles use, which emits a
   // MessageSend feed event). The reply renders back on /room by filtering /api/feed on
@@ -94,9 +49,6 @@ export function serve(ctx: PluginLifecycleContext): { ok: true } {
   ctx.http?.route("POST", "/api/room/close", (request: Request) => handleRoomCloseRequest(request));
   ctx.http?.route("POST", "/api/room/reopen", (request: Request) => handleRoomReopenRequest(request));
   ctx.http?.route("GET", "/api/room/thread", (request: Request) => handleRoomThreadRequest(request));
-  // kobo-244 — distill a room-artifact into a kanban card (the ONE room→board touch);
-  // reuses addTask + writes the bidirectional card↔room link. Behind auth (PROTECTED).
-  ctx.http?.route("POST", "/api/room/distill", (request: Request) => handleRoomDistillRequest(request));
   // kobo-243 — lead-driven merge: consolidate same-problem rooms into one thread. Gated
   // by confirm:true (NEVER auto-merge); sources archived (status→merged), not deleted.
   ctx.http?.route("POST", "/api/room/merge", (request: Request) => handleRoomMergeRequest(request));

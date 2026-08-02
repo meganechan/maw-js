@@ -9,8 +9,22 @@
  * (see test/isolated/federation-auth.test.ts:184-202). #800 brings auth.ts
  * up to the same standard.
  */
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { createToken, verifyToken } from "../../src/lib/auth";
+
+// getJwtSecret() falls through to "generate a fresh secret and persist it" when
+// no secret file exists — so on a machine that has never run maw (any CI
+// runner) these tests wrote a real 0600 auth-secret into the operator's maw
+// home. It stayed invisible on a developer box because the file already exists
+// there and the reader returns before ever touching the filesystem for writing.
+// MAW_JWT_SECRET is the documented override that skips the file path entirely,
+// and this file is about signature comparison, not secret persistence.
+const prevSecret = process.env.MAW_JWT_SECRET;
+beforeAll(() => { process.env.MAW_JWT_SECRET = "auth-timing-safe-fixed-test-secret"; });
+afterAll(() => {
+  if (prevSecret === undefined) delete process.env.MAW_JWT_SECRET;
+  else process.env.MAW_JWT_SECRET = prevSecret;
+});
 
 describe("verifyToken — constant-time signature compare (#800)", () => {
   test("round-trip: createToken → verifyToken returns payload", () => {

@@ -29,14 +29,27 @@
  * and writes under it is therefore ALSO guarded (that dir is this process's real
  * home) — which is what makes the negative-control fixture meaningful.
  *
+ * GREEN LOCALLY IS NOT GREEN: the worst offenders write only when the file is
+ * ABSENT — `getJwtSecret`/`getPeerKey` read their secret first and return before
+ * touching the write path, so on a box that has already run maw they never trip
+ * this guard, and on a fresh CI runner they mint a real 0600 credential into the
+ * home. Reproduce the runner before trusting a local pass:
+ *     HOME=$(mktemp -d) bash scripts/test-isolated.sh
+ *
  * ESCAPE HATCH: a test that genuinely must write to the real home sets
  * `MAW_ALLOW_REAL_HOME_WRITES=1` for its own process — explicit and greppable,
  * never a silent default. Nothing in the repo sets it.
  *
  * ponytail: guards the sync/callback/promise fs mutators plus `Bun.write` and
- * write-mode `openSync`. Not covered: native writers that never touch node:fs
- * (e.g. `bun:sqlite` opening a DB) — those all `mkdirSync` their parent first,
- * so they are caught one call earlier. Widen the list if a leak slips past.
+ * write-mode `openSync`. Two known ceilings:
+ *   1. Native writers that never touch node:fs (e.g. `bun:sqlite` opening a DB)
+ *      — those all `mkdirSync` their parent first, so they are caught one call
+ *      earlier. Widen the list if a leak slips past.
+ *   2. IN-PROCESS ONLY. A test that spawns the real `maw` CLI gets a production
+ *      runtime, which by design never loads this module — those children still
+ *      write `audit.jsonl` / `session-warnings.state` into the inherited home.
+ *      Closing that needs the spawning tests to pass MAW_HOME to their children;
+ *      it is a separate change, not a hole in this guard.
  */
 import { homedir } from "node:os";
 import { isAbsolute, resolve, sep } from "node:path";

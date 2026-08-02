@@ -1,3 +1,14 @@
+// kobo-472 known-red note (scripts/test-src-known-red.json): 3 of the
+// "room feed listener" tests below are RED in a fresh environment (no
+// ambient company registry) — pre-existing on origin/alpha, not introduced
+// by kobo-472 (this file is the first time src/ tests run in CI at all).
+// Same root cause as store.test.ts's own known-red note: this suite only
+// isolates MAW_DATA_DIR, but onRoomFeedEvent's room lookup (via
+// findRoomCompany-style resolution) iterates the REAL listCompanies()
+// registry — a machine with "kobo" already registered ambiently passes,
+// a clean runner can't resolve the room's company at all. Needs a real fix
+// (seed a fake company registry inside the isolated dir, or inject
+// listCompanies for the test) as its own follow-up card.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";

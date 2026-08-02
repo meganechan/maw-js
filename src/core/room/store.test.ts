@@ -1,3 +1,14 @@
+// kobo-472 known-red note (scripts/test-src-known-red.json): "findRoomCompany
+// resolves the owning company" is RED in a fresh environment (no ambient company
+// registry) — pre-existing on origin/alpha, not introduced by kobo-472 (this file
+// is the first time src/ tests run in CI at all). Root cause: this suite only
+// isolates MAW_DATA_DIR, but findRoomCompany() iterates the REAL listCompanies()
+// registry (gated on MAW_HOME/config, a different resolver — same class of gap
+// pr-watch-resilience.test.ts's own doc calls out for kobo-546/kobo-608: an env
+// var isolates only what it gates). On a machine with "kobo" already registered
+// ambiently it passes; on a clean runner it can't find "kobo" anywhere and
+// returns null. Needs a real fix (seed a fake company registry inside the
+// isolated dir, or inject listCompanies for the test) as its own follow-up card.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";

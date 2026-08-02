@@ -411,6 +411,116 @@ describe("runBootstrap — #817 idempotent bundled-plugin symlinks", () => {
     }
   });
 
+  /**
+   * Canonical-root guard: a checkout that isn't the canonical one may read
+   * pluginDir but never rewrite its symlinks. `.git`-as-file == linked
+   * worktree; `.git`-as-dir == real clone; absent == installed package.
+   */
+  describe("canonical-root anchor", () => {
+    let warns: string[];
+    let originalWarn: typeof console.warn;
+    const savedEnv: Record<string, string | undefined> = {};
+    const GUARD_ENV = ["MAW_CANONICAL_ROOT", "HOME"] as const;
+
+    beforeEach(() => {
+      warns = [];
+      originalWarn = console.warn;
+      console.warn = (...args: unknown[]) => { warns.push(args.map(String).join(" ")); };
+      for (const k of GUARD_ENV) savedEnv[k] = process.env[k];
+      delete process.env.MAW_CANONICAL_ROOT; // would disable the guard
+      // The guard only defends a store under the user's home. Pretend workDir
+      // is home so pluginDir counts as one — without this every assertion
+      // below passes for the wrong reason (tmpdir is not under the real home).
+      process.env.HOME = workDir;
+    });
+
+    afterEach(() => {
+      console.warn = originalWarn;
+      for (const k of GUARD_ENV) {
+        if (savedEnv[k] === undefined) delete process.env[k];
+        else process.env[k] = savedEnv[k];
+      }
+    });
+
+    /** Make this checkout look like a linked git worktree (.git is a gitdir pointer file). */
+    function makeWorktreeShaped() {
+      writeFileSync(join(workDir, ".git"), `gitdir: ${join(workDir, "fake-gitdir")}\n`);
+    }
+
+    it("canonical checkout (.git is a directory) → bundled plugins linked as usual", async () => {
+      mkdirSync(join(workDir, ".git"), { recursive: true });
+      makeBundledPlugin("alpha");
+      makeVendoredPlugin("wake");
+
+      await runBootstrap(pluginDir, srcDir);
+
+      expect(readdirSync(pluginDir).sort()).toEqual(["alpha", "wake"]);
+      expect(warns.some(w => w.includes("bootstrap skipped"))).toBe(false);
+    });
+
+    it("worktree checkout (.git is a file) → no new symlinks, existing ones untouched, one stderr notice", async () => {
+      makeWorktreeShaped();
+      makeBundledPlugin("alpha");
+      const staleFleet = makeStaleMawJsBundledPlugin("fleet");
+      makeBundledPlugin("fleet");
+
+      mkdirSync(pluginDir, { recursive: true });
+      // A link the guard must not heal, and a broken one it must not prune.
+      symlinkSync(staleFleet, join(pluginDir, "fleet"));
+      symlinkSync("/nonexistent/old-maw-js/src/commands/plugins/workon", join(pluginDir, "workon"));
+
+      await runBootstrap(pluginDir, srcDir);
+
+      // "alpha" would have been created had the guard not fired.
+      expect(readdirSync(pluginDir).sort()).toEqual(["fleet", "workon"]);
+      expect(readlinkSync(join(pluginDir, "fleet"))).toBe(staleFleet);
+      expect(lstatSync(join(pluginDir, "workon")).isSymbolicLink()).toBe(true);
+
+      const notices = warns.filter(w => w.includes("bootstrap skipped"));
+      expect(notices.length).toBe(1);
+      expect(notices[0]).toContain(workDir);
+      expect(notices[0]).toContain("MAW_CANONICAL_ROOT");
+    });
+
+    it("MAW_CANONICAL_ROOT naming the running root → linking allowed from a worktree", async () => {
+      makeWorktreeShaped();
+      makeBundledPlugin("alpha");
+      process.env.MAW_CANONICAL_ROOT = workDir;
+
+      await runBootstrap(pluginDir, srcDir);
+
+      expect(readdirSync(pluginDir)).toEqual(["alpha"]);
+      expect(warns.some(w => w.includes("bootstrap skipped"))).toBe(false);
+    });
+
+    it("plugin dir outside home → guard stands down (redirected store is the caller's)", async () => {
+      makeWorktreeShaped();
+      makeBundledPlugin("alpha");
+      // e.g. MAW_DATA_DIR pointed at a scratch dir: nothing shared to protect.
+      const otherHome = join(workDir, "other-home");
+      mkdirSync(otherHome, { recursive: true });
+      process.env.HOME = otherHome;
+
+      await runBootstrap(pluginDir, srcDir);
+
+      expect(readdirSync(pluginDir)).toEqual(["alpha"]);
+      expect(warns.some(w => w.includes("bootstrap skipped"))).toBe(false);
+    });
+
+    it("MAW_CANONICAL_ROOT naming some other path does not unlock this checkout", async () => {
+      makeWorktreeShaped();
+      makeBundledPlugin("alpha");
+      const elsewhere = join(workDir, "elsewhere");
+      mkdirSync(elsewhere, { recursive: true });
+      process.env.MAW_CANONICAL_ROOT = elsewhere;
+
+      await runBootstrap(pluginDir, srcDir);
+
+      expect(readdirSync(pluginDir)).toEqual([]);
+      expect(warns.some(w => w.includes("bootstrap skipped"))).toBe(true);
+    });
+  });
+
   it("pluginSources URL-fetch path is gated behind wasEmpty (only logs on first install)", async () => {
     // The `[maw] bootstrapped N plugins` info log is inside the `wasEmpty`
     // branch alongside the URL-fetch logic — its presence/absence is a

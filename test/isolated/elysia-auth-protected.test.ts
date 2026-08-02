@@ -43,9 +43,11 @@ describe("elysia-auth — isProtected (#798)", () => {
     expect(isProtected("/feed", "POST")).toBe(true);
   });
 
-  test("/tasks/archive: POST protected (kobo-35 board write), GET board still gated too", () => {
-    expect(isProtected("/tasks/archive", "POST")).toBe(true); // board mutation on the private surface
-    expect(isProtected("/tasks/archive", "GET")).toBe(false); // no such GET; not gated by the POST rule
-    expect(isProtected("/tasks", "GET")).toBe(true); // board read stays PROTECTED (loopback bypasses)
+  test("/tasks: no auth rule survives the task subsystem's removal — the routes are gone", () => {
+    // Deliberately NOT protected: there is nothing to protect. Pinned so a future
+    // board is forced to make its own auth decision instead of inheriting one.
+    expect(isProtected("/tasks", "GET")).toBe(false);
+    expect(isProtected("/tasks/archive", "POST")).toBe(false);
+    expect(isProtected("/tasks/events", "GET")).toBe(false);
   });
 });

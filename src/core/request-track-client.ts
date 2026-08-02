@@ -12,6 +12,21 @@ function mawUrl(): string {
   return `http://localhost:${process.env.MAW_PORT || "3456"}`;
 }
 
+// `[request:<id>]` must lead the message (after optional whitespace). Moved here
+// from the retired core/tasks/auto-create — the board-card half of the convention
+// is gone; the reply-tracking half below is what still reads the tag.
+const REQUEST_RE = /^\s*\[request:([A-Za-z0-9._-]+)\]/;
+
+/**
+ * The correlation id a hey message dispatches under, or null when it is not a
+ * `[request:<id>]` lead — including `re:` replies, which are answers to an
+ * already-tracked request, not a new one.
+ */
+export function parseRequestId(message: string): string | null {
+  if (/^\s*re:/i.test(message)) return null; // reply, not a new request
+  return REQUEST_RE.exec(message)?.[1] ?? null;
+}
+
 export async function trackRequest(
   correlationId: string,
   from: string,

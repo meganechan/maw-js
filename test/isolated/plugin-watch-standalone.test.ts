@@ -17,7 +17,6 @@ describe("watch command plugin standalone boundary", () => {
       allowMawJs: [/^maw-js\/config$/],
       allowRelative: [
         /^(?:\.\.\/){3}core\/worklog\//,
-        /^(?:\.\.\/){3}core\/tasks\//, // company-ui board (stub now, backbone later)
         /^(?:\.\.\/){3}core\/state-doc\//, // company-ui coordination markdown panel
         /^(?:\.\.\/){3}core\/roster\//, // company-ui presence roster (kobo-50)
         /^(?:\.\.\/){3}core\/presence\//, // company-ui presence detail — per-pane model + ctx% (kobo-104)
@@ -43,59 +42,25 @@ describe("watch command plugin standalone boundary", () => {
     expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']GET["']/);
   });
 
-  test("serve hook also wires the company-ui read-only routes (feed timeline + board)", () => {
+  test("serve hook also wires the company-ui read-only routes (feed timeline + state)", () => {
     const serveSrc = readFileSync(
       join(import.meta.dir, "../../src/vendor/mpr-plugins/watch/serve.ts"),
       "utf8",
     );
-    // company-ui (spec §6) reads these two from the same plugin so they toggle
-    // with the worklog engine; backbone replaces the /api/tasks stub later.
+    // company-ui (spec §6) reads these from the same plugin so they toggle with
+    // the worklog engine.
     expect(serveSrc).toContain("/api/worklog/feed");
-    expect(serveSrc).toContain("/api/tasks");
     expect(serveSrc).toContain("/api/state");
     expect(serveSrc).toContain("handleWorklogFeedRequest");
-    expect(serveSrc).toContain("handleTasksRequest");
     expect(serveSrc).toContain("handleStateDocRequest");
-    // kobo-207: card-detail live-push SSE stream (GET), on the same plugin so it
-    // toggles with the board it streams.
-    expect(serveSrc).toContain("handleTaskEventsRequest");
-    expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']GET["'],\s*["']\/api\/tasks\/events["']/);
-    // kobo-401: single-card detail fetch (GET) — the bulk list stopped shipping
-    // body/notes/comments on every card; the board calls this on card-open instead.
-    expect(serveSrc).toContain("handleTaskDetailRequest");
-    expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']GET["'],\s*["']\/api\/tasks\/detail["']/);
-    // kobo-35: per-card archive write route (POST) lives on the same plugin so it
-    // toggles with the worklog engine + the board it mutates.
-    expect(serveSrc).toContain("handleTaskArchiveRequest");
-    expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/tasks\/archive["']/);
-    // kobo-275: manual deploy-drain POST → wait-for-deploy card → done (guarded backend).
-    expect(serveSrc).toContain("handleTaskDeployedRequest");
-    expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/tasks\/deployed["']/);
-    // kobo-46: web comment POST → append note + poke assignee (task-events).
-    expect(serveSrc).toContain("handleTaskNoteRequest");
-    expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/tasks\/note["']/);
-    // kobo-141: threaded comment POST (ask/answer channel). kobo-237: resolve removed.
-    expect(serveSrc).toContain("handleTaskCommentRequest");
-    expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/tasks\/comment["']/);
-    expect(serveSrc).not.toContain("handleTaskResolveRequest"); // kobo-237: resolve route gone
-    expect(serveSrc).not.toContain("/api/tasks/resolve");
-    // kobo-48: web create POST → +subtask (child card, epic = parent).
-    expect(serveSrc).toContain("handleTaskCreateRequest");
-    expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/tasks\/create["']/);
-    // kobo-50: mark-done POST (guard b web trigger) + presence roster GET.
-    expect(serveSrc).toContain("handleTaskDoneRequest");
-    expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/tasks\/done["']/);
-    // kobo-192: approve POST — derives from pr (mark-only vs spawn execution-card).
-    expect(serveSrc).toContain("handleTaskApproveRequest");
-    expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/tasks\/approve["']/);
-    // kobo-225: card-detail action buttons — reject (Rejected lane), assign (reassign
-    // friction, kobo-219), edit (reviewer, kobo-214). Each wires the CLI's store verb.
-    expect(serveSrc).toContain("handleTaskRejectRequest");
-    expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/tasks\/reject["']/);
-    expect(serveSrc).toContain("handleTaskAssignRequest");
-    expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/tasks\/assign["']/);
-    expect(serveSrc).toContain("handleTaskEditRequest");
-    expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/tasks\/edit["']/);
+    // The task subsystem retired: NO /api/tasks route (read, detail, SSE or write)
+    // may come back through this hook. Asserted as a class, not per-handler — the
+    // per-handler list this replaces could only catch the handlers it enumerated.
+    expect(serveSrc).not.toContain("/api/tasks");
+    expect(serveSrc).not.toMatch(/handleTask\w+Request/);
+    // …and neither may the room→card distill route (its card side is gone).
+    expect(serveSrc).not.toContain("/api/room/distill");
+    expect(serveSrc).not.toContain("handleRoomDistillRequest");
     // kobo-245: Brainstorm Room core wire — web input → hey to lead (delivery + MessageSend feed event).
     expect(serveSrc).toContain("handleRoomSendRequest");
     expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/room\/send["']/);
@@ -105,9 +70,6 @@ describe("watch command plugin standalone boundary", () => {
     expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/room\/close["']/);
     expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/room\/reopen["']/);
     expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']GET["'],\s*["']\/api\/room\/thread["']/);
-    // kobo-244: distill room-artifact → kanban card (the one room→board touch).
-    expect(serveSrc).toContain("handleRoomDistillRequest");
-    expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/room\/distill["']/);
     // kobo-243: lead-driven merge — consolidate same-problem rooms (confirm-gated).
     expect(serveSrc).toContain("handleRoomMergeRequest");
     expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']POST["'],\s*["']\/api\/room\/merge["']/);
@@ -127,8 +89,8 @@ describe("watch command plugin standalone boundary", () => {
     // kobo-104: per-pane presence detail GET (model + context%).
     expect(serveSrc).toContain("handlePresenceRequest");
     expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']GET["'],\s*["']\/api\/presence["']/);
-    // kobo-57: cache-bust version GET — the board polls it to detect a new deploy
-    // and offer a reload. Served from companyVersion() (content hash of the board).
+    // kobo-57: cache-bust version GET — the company page polls it to detect a new
+    // deploy and offer a reload. Served from companyVersion() (content hash).
     expect(serveSrc).toContain("companyVersion");
     expect(serveSrc).toMatch(/ctx\.http\??\.route\(\s*["']GET["'],\s*["']\/api\/version["']/);
   });
@@ -142,21 +104,15 @@ describe("watch command plugin standalone boundary", () => {
     const manifest = loadManifestFromDir(join(import.meta.dir, "../../src/vendor/mpr-plugins/watch"))!.manifest;
     expect(manifest.cli).toBeUndefined(); // hard-removed — not dispatchable as `maw watch`
     expect(manifest.module?.exports).toContain("runWorklog"); // company imports this
-    // serve hook untouched — the worklog/board HTTP routes still toggle with the plugin.
+    // serve hook untouched — the worklog/room HTTP routes still toggle with the plugin.
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/worklog/feed");
-    expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks");
-    expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks/detail"); // kobo-401
-    expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks/events"); // kobo-207
-    expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks/archive"); // kobo-35
-    expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks/note"); // kobo-46
-    expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks/comment"); // kobo-141
-    expect(manifest.hooks!.serve!.ensures).not.toContain("http:route:/api/tasks/resolve"); // kobo-237: route removed → manifest must not declare it
-    expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks/create"); // kobo-48
-    expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/tasks/done"); // kobo-50
+    // task subsystem retired — the manifest must not advertise a route the hook no
+    // longer registers (a stale `ensures` is a promise the plugin can't keep).
+    expect(manifest.hooks!.serve!.ensures.filter((e) => e.includes("/api/tasks"))).toEqual([]);
+    expect(manifest.hooks!.serve!.ensures).not.toContain("http:route:/api/room/distill");
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/room/send"); // kobo-245 Brainstorm Room wire
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/room/open"); // kobo-241 artifact lifecycle
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/room/thread"); // kobo-241 persisted thread
-    expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/room/distill"); // kobo-244 distill room→card
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/room/merge"); // kobo-243 lead-driven merge
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/rooms"); // kobo-258 company-scoped room list
     expect(manifest.hooks!.serve!.ensures).toContain("http:route:/api/room/reply"); // kobo-260 reply primitive

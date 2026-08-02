@@ -2,7 +2,7 @@
  * Presence read route (kobo-104) — registered by the watch plugin's serve hook.
  * Behind auth via the "/presence" entry in elysia-auth PROTECTED (loopback UI
  * bypasses; LAN must auth) — pane model/context is company-internal (Rule 6),
- * same surface as /api/roster + /api/tasks.
+ * same surface as /api/roster.
  *
  *   GET /api/presence[?company=X] → { rows: [ { oracle, pane, model, model_id,
  *                          remaining_percentage, used_percentage,

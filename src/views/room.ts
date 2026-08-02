@@ -10,7 +10,7 @@ import { escapeHtml, inlineMd, mdToHtml, NOTE_IMG_EXT, renderNoteBody } from "./
 //   GET  /api/room/thread?company&room → persisted thread (kobo-241)
 //   GET  /api/room/activity?…          → who's-here CC-strip (kobo-242)
 //   POST /api/room/open|close|send     → lifecycle + hey delivery (kobo-241/245/248)
-//   POST /api/room/distill|merge       → room→card + consolidate (kobo-244/243)
+//   POST /api/room/merge              → consolidate same-problem rooms (kobo-243)
 // ONE template literal; keep the client JS backtick-free (string concat), like messages.ts.
 export function roomHtml(): string {
   return `<!doctype html>
@@ -131,21 +131,6 @@ export function roomHtml(): string {
     .mmd-modal-body svg { display:block; max-width:100%; height:auto; }
     .mmd-modal-close { position:absolute; top:10px; right:10px; background:var(--muted); border:1px solid var(--border); border-radius:8px; width:32px; height:32px; color:var(--fg); font-size:16px; line-height:1; }
     .mmd-modal-close:hover { filter:brightness(1.15); }
-    /* kobo-527: card-ref chip (message text "kobo-N" → clickable) + the modal
-       content it opens — same #mermaidModal instance the diagram zoom uses. */
-    .card-ref-chip { background:var(--muted); border:1px solid var(--border); border-radius:4px; padding:1px 5px; font-size:.9em; color:var(--human); }
-    .card-ref-chip:hover { filter:brightness(1.15); }
-    .card-ref-modal-title { font-size:1.1em; font-weight:700; margin-bottom:6px; }
-    .card-ref-modal-meta { color:var(--dim); font-size:.9em; margin-bottom:12px; }
-    /* card body markdown is outside .bubble, so it doesn't inherit .bubble .body's
-       code/pre/blockquote theming — a minimal same-look-and-feel copy, additive only. */
-    .card-ref-modal-body p { margin:4px 0; }
-    .card-ref-modal-body code { background:var(--muted); border:1px solid var(--border); border-radius:4px; padding:1px 5px; font-size:.9em; }
-    .card-ref-modal-body pre { background:var(--muted); border:1px solid var(--border); border-radius:6px; padding:8px; overflow:auto; }
-    .card-ref-modal-body pre code { background:none; border:0; padding:0; }
-    .card-ref-modal-body blockquote { border-left:4px solid var(--danger); background:rgba(239,68,68,.12); color:var(--fg); margin:6px 0; padding:6px 12px; border-radius:0 6px 6px 0; }
-    .card-ref-modal-err { color:var(--danger); }
-    .card-ref-modal-loading { color:var(--dim); font-style:italic; } /* kobo-538 — shown immediately, before the fetch resolves */
     .bubble .body a { color:var(--human); text-decoration:underline; }
     .bubble .body .note-img-link { display:inline-block; margin:4px 0; }
     .bubble .body .note-img { display:block; max-width:100%; max-height:320px; height:auto; border:1px solid var(--border); border-radius:9px; }
@@ -216,7 +201,6 @@ export function roomHtml(): string {
         <button id="inviteBtn" class="act" type="button">+ teammate</button>
         <button id="mergeBtn" class="act" type="button">merge</button>
         <button id="closeBtn" class="act" type="button">✕ close</button>
-        <button id="distillBtn" class="act accent" type="button">distill ▸</button>
       </div>
       <div id="banner" class="banner" style="display:none;"></div>
       <div id="activity"></div>
@@ -443,133 +427,6 @@ function linkifyDom(root) {
   }
 }
 
-// kobo-527 — "kobo-N" card refs in message text become a clickable chip that
-// opens the card in the SAME #mermaidModal instance the diagram zoom uses (no
-// second modal). Run AFTER linkifyDom: URL text is already wrapped in <a> by
-// then, so this pass's own closest('a') skip keeps a card number pasted
-// INSIDE a URL (the main over-match risk — this room pastes card numbers in
-// URLs and code blocks all day) from becoming a second, nested chip.
-// kobo-513 lesson: match by SHAPE (any word-ish-token + '-' + digits), not by
-// hardcoding this company's own "kobo-" prefix — the company check happens
-// at match time against the live company var, not baked into the regex, so
-// a differently-prefixed id from another company never turns into a chip
-// (kobo-527 Q3: same-company only, narrow first).
-const CARD_REF_RE = /\\b([a-zA-Z][a-zA-Z0-9]*)-(\\d+)\\b/g;
-function cardLinkify(container, text) {
-  CARD_REF_RE.lastIndex = 0;
-  let last = 0, m;
-  while ((m = CARD_REF_RE.exec(text))) {
-    if (m.index > last) container.appendChild(document.createTextNode(text.slice(last, m.index)));
-    const id = m[0], prefix = m[1];
-    if (company && prefix.toLowerCase() === company.toLowerCase()) {
-      const chip = document.createElement('button');
-      chip.type = 'button';
-      chip.className = 'card-ref-chip mono';
-      chip.textContent = id;
-      chip.setAttribute('data-card-id', id);
-      container.appendChild(chip);
-    } else {
-      container.appendChild(document.createTextNode(id));
-    }
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) container.appendChild(document.createTextNode(text.slice(last)));
-}
-function cardLinkifyDom(root) {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-  const nodes = [];
-  let n;
-  while ((n = walker.nextNode())) {
-    const p = n.parentElement;
-    if (p && (p.closest('a') || p.closest('code') || p.closest('pre'))) continue;
-    nodes.push(n);
-  }
-  for (const textNode of nodes) {
-    const frag = document.createDocumentFragment();
-    cardLinkify(frag, textNode.data);
-    textNode.replaceWith(frag);
-  }
-}
-// kobo-538: which card-ref modal fetch is currently in flight, if any. Two
-// problems this fixes together: (1) the modal used to show NOTHING until the
-// fetch resolved — on a slow server (kobo-526 measured ~1.1s) a reader sees no
-// feedback and clicks again, firing a second identical fetch; (2) that repeat
-// fetch used to re-download the card's FULL notes/comments (kobo-446 has 434
-// notes → 1.5MB) even though this modal only ever renders id/title/state/
-// assignee/body — ?notes=0 (core/tasks/route.ts) drops them server-side instead
-// of fetching-then-discarding client-side.
-// kobo-538 round 2 — the in-flight marker is keyed on a per-REQUEST token, not
-// on the card id alone. Keying it on the id made closing the modal mid-load
-// leave the marker set, so the next click on that same card hit the repeat-click
-// no-op above and did nothing — a dead click, in exactly the ~1.1s window this
-// card exists to fix. It did not always clear itself either: getJson has no
-// timeout and no AbortSignal, so a request that never settles never reaches the
-// finally block, and that card stayed unopenable until a page reload.
-// Clearing the marker on close is necessary but not sufficient on its own: the
-// abandoned request is still in flight, and its finally would then clear the
-// marker belonging to the NEW request, reopening the double-fetch hole for the
-// click after that. The token makes each request only ever clear its own marker.
-let cardModalSeq = 0;
-let cardModalInFlight = null; // { id, token } while a card fetch is outstanding
-async function openCardModal(id) {
-  if (cardModalInFlight && cardModalInFlight.id === id) return; // already loading this exact card — a repeat click is a no-op, not a second fetch
-  const token = ++cardModalSeq;
-  cardModalInFlight = { id, token };
-  const box = el('div', 'card-ref-modal');
-  box.appendChild(el('div', 'card-ref-modal-loading', 'loading ' + id + '…'));
-  openMermaidModal(box); // show the modal (with the loading state) BEFORE the fetch, not after
-  try {
-    const { body } = await getJson('/api/tasks/detail?company=' + encodeURIComponent(company) + '&id=' + encodeURIComponent(id) + '&notes=0');
-    // Superseded by a newer open, or the modal was closed — drop this response.
-    // HONEST NOTE (kobo-538 round 2): removing this line reddens NOTHING, and
-    // that is not a gap in the tests — a superseded response CANNOT REACH THE
-    // SCREEN by construction. Every openCardModal call builds its OWN box above
-    // and hands it to openMermaidModal, which replaceChildren()s it into the
-    // single content slot, so a superseded call's box is already detached.
-    // That is inferred from the control flow (an early return before ANY DOM
-    // write, no branches to miss), not measured — nothing to dynamically test.
-    //
-    // CORRECTED (kobo-588, superseding an earlier claim in this comment that
-    // removing this line would leak an image request): stitch measured it
-    // (kobo-585) — a detached note-img (loading=lazy, md.ts) did NOT issue
-    // its /api/files/... request in EITHER of 2 rounds, with a positive
-    // control (an attached image DID request) passing every round. Measured
-    // on Chrome 150.0.7871.187, headed, no throttling, via a standalone
-    // harness (not the live company board) — bounded to that config.
-    // loading=lazy is a browser HINT, not a contract, so this is NOT "a
-    // detached lazy image never fetches" as a general rule — a different
-    // browser/version/network condition could measure differently. Read it
-    // as "measured, not found on this config," never as "impossible."
-    // (patchwork reviewer registered a falsifiable prediction BEFORE the
-    // measurement — "if no request shows up, I'm clearly wrong" — which is
-    // what makes this result decisive rather than just another guess landing
-    // where the first one did. kobo-585, credit: stitch.)
-    //
-    // This guard is kept anyway, for a reason that doesn't depend on the
-    // measurement above: it's a structural guard for the day someone makes
-    // the modal reuse one box instead of building a fresh one per open — at
-    // that point a superseded response CAN reach the screen, and this line
-    // is what stops it. Not a tested guarantee today; a guarantee for a
-    // shape the code doesn't have yet.
-    if (!cardModalInFlight || cardModalInFlight.token !== token) return;
-    box.replaceChildren();
-    const t = body && body.ok ? body.task : null;
-    if (!t) {
-      box.appendChild(el('div', 'card-ref-modal-err', 'card not found: ' + id));
-    } else {
-      box.appendChild(el('div', 'card-ref-modal-title', t.id + ' · ' + (t.title || '')));
-      box.appendChild(el('div', 'card-ref-modal-meta', 'state: ' + t.state + (t.assignee ? ' · assignee: ' + t.assignee : '')));
-      if (t.body) {
-        const bodyDiv = el('div', 'card-ref-modal-body body md');
-        bodyDiv.innerHTML = renderNoteBody(t.body); // same escape-first renderer as message bodies — same XSS guarantee
-        box.appendChild(bodyDiv);
-      }
-    }
-  } finally {
-    if (cardModalInFlight && cardModalInFlight.token === token) cardModalInFlight = null; // only ever clear OUR OWN marker — never a newer request's
-  }
-}
-
 // kobo-398 — mermaid, lazy-loaded ONLY when a mermaid-fenced code block is
 // actually present (LAZY-BY-ABSENCE: a thread with no diagram never touches the
 // network for this asset). Same-origin asset (/assets/vendor/mermaid.js, new
@@ -698,8 +555,7 @@ async function loadThread() {
   const inRoom = new Set(room.messages.map((m) => m.from).filter((f) => f && roleOf(f) !== 'you'));
   $('hSub').textContent = 'with ' + (lead || '—') + ' (lead) · ' + inRoom.size + ' in room';
   const banner = $('banner');
-  if (room.cardId) { banner.style.display = ''; banner.replaceChildren(document.createTextNode('กลั่นเป็น card '), Object.assign(el('a', null, room.cardId), { href: '/company?company=' + encodeURIComponent(company) })); }
-  else if (room.status !== 'open') { banner.style.display = ''; banner.textContent = 'ห้องนี้ ' + room.status + ' — thread read-only'; }
+  if (room.status !== 'open') { banner.style.display = ''; banner.textContent = 'ห้องนี้ ' + room.status + ' — thread read-only'; }
   else banner.style.display = 'none';
 
   const msgs = room.messages.slice().sort((a, b) => (a.ts || 0) - (b.ts || 0));
@@ -751,7 +607,6 @@ async function loadThread() {
     const bodyEl = el('div', 'body md');
     bodyEl.innerHTML = renderNoteBody(m.text || '');
     linkifyDom(bodyEl);
-    cardLinkifyDom(bodyEl); // kobo-527: card-ref chips, after URL linkify so a card # pasted inside a link stays inert
     b.appendChild(bodyEl);
     thread.appendChild(b);
   }
@@ -926,7 +781,7 @@ function onComposeInput() {
   if (at) renderPicker(at.query); else closePicker();
 }
 
-// ── new topic / distill / merge (reuse the engine endpoints) ────────────────
+// ── new topic / merge (reuse the engine endpoints) ──────────────────────────
 function slug(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || ('room-' + Date.now()); }
 async function newTopic() {
   const topic = prompt('New topic (what to brainstorm with ' + (lead || 'lead') + '):');
@@ -934,17 +789,6 @@ async function newTopic() {
   const id = slug(topic.trim());
   try { await post('/api/room/open', { company, room: id, topic: topic.trim() }); await loadRooms(); selectRoom(id); }
   catch (err) { setStatus('เปิดหัวข้อไม่สำเร็จ: ' + (err && err.message ? err.message : err), true); }
-}
-async function distill() {
-  if (!roomId) { setStatus('เลือกหัวข้อก่อน distill', true); return; }
-  const title = prompt('Distill this room into a card — outcome (problem + approach):');
-  if (!title || !title.trim()) return;
-  try {
-    const j = await post('/api/room/distill', { company, room: roomId, title: title.trim() });
-    const id = j.card && j.card.id ? j.card.id : '?';
-    setStatus('distilled → card ' + id + (j.deduped ? ' (already linked)' : ''));
-    loadThread();
-  } catch (err) { setStatus('distill failed: ' + (err && err.message ? err.message : err), true); }
 }
 // kobo-260 — pull a teammate into the room: records them + sends one plain notify hey.
 async function invite() {
@@ -1012,7 +856,6 @@ function openMermaidModal(svgNode) {
 function closeMermaidModal() {
   $('mermaidModal').style.display = 'none';
   $('mmdModalContent').replaceChildren();
-  cardModalInFlight = null; // kobo-538: closing mid-load must not leave that card unopenable — see openCardModal
   if (mermaidModalReturnFocus && mermaidModalReturnFocus.focus) mermaidModalReturnFocus.focus();
   mermaidModalReturnFocus = null;
 }
@@ -1072,8 +915,6 @@ function dedupeSvgIds(svgNode) {
   return svgNode;
 }
 function onThreadClick(ev) {
-  const cardChip = ev.target.closest('.card-ref-chip');
-  if (cardChip) { openCardModal(cardChip.getAttribute('data-card-id')); return; }
   const thumb = ev.target.closest('.mermaid-thumb');
   if (!thumb) return;
   const svgEl = thumb.querySelector('svg');
@@ -1112,7 +953,6 @@ $('mmdModalClose').addEventListener('click', closeMermaidModal);
 $('mermaidModal').addEventListener('click', (ev) => { if (ev.target.id === 'mermaidModal' || ev.target.classList.contains('mmd-modal-backdrop')) closeMermaidModal(); });
 document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeMermaidModal(); });
 $('back').addEventListener('click', () => { $('app').classList.remove('showchat'); });
-$('distillBtn').addEventListener('click', distill);
 $('inviteBtn').addEventListener('click', invite);
 $('mergeBtn').addEventListener('click', enterMerge);
 $('closeBtn').addEventListener('click', toggleRoomOpen);

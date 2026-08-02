@@ -108,165 +108,64 @@ describe("crew-skills global asset contract", () => {
     expect(hook).toContain("presence: online (auto-seated)");
   });
 
-  // kobo-174/200 — the lead card-gate hook ships as an executable global asset so an
-  // oracle that opts in (via .maw/card-gate.json) points at a real script.
-  test("card-gate hook is a synced executable asset", () => {
-    const item = SYNC_ITEMS.find((i) => i.dest === "hooks/maw-card-gate.sh");
-    expect(item).toBeDefined();
-    expect(item?.exec).toBe(true);
-    const hook = readFileSync(join(assetsDir, "hooks/maw-card-gate.sh"), "utf8");
-    // gates BOTH paths (MCP-gap lesson) + fail-CLOSED + opt-in + conscious override
-    expect(hook).toContain("mcp__maw__maw_task");
-    expect(hook).toContain("maw task add");
-    expect(hook).toContain(".maw/card-gate.json"); // kobo-200: CC-safe config source
-    expect(hook).toContain(".mawCardGate");        // legacy settings.json fallback still read
-    expect(hook).toContain("--force-lead");
-    expect(hook).toContain('"deny"');
-  });
+  // kobo-174/200 card-gate hook + sample dropped with the task system (both the
+  // CLI verb and the mcp__maw__maw_task tool are gone) — no replacement asserted.
 
-  // kobo-200 — a dormant sample config ships so adopters can copy it to
-  // <repo>/.maw/card-gate.json. It must install to ~/.claude (NOT .maw/) so the
-  // hook never reads it → sync never auto-activates the gate for everyone.
-  test("card-gate sample ships as a dormant asset (never the live .maw path)", () => {
-    const item = SYNC_ITEMS.find((i) => i.dest === "card-gate.sample.json");
-    expect(item).toBeDefined();
-    expect(item?.dest).not.toContain(".maw"); // dormant — hook reads .maw/card-gate.json, not this
-    const sample = JSON.parse(readFileSync(join(assetsDir, "card-gate.sample.json"), "utf8"));
-    expect(sample.leadRole).toBe("lead");
-    expect(sample.gatedTools).toContain("maw_task add");
-  });
-
-  test("crew skill spawns workers with the $HOME-absolute settings path", () => {
-    const skill = readFileSync(join(assetsDir, "skills/crew/SKILL.md"), "utf8");
-    expect(skill).toContain('--settings "$HOME/.claude/crew-worker-settings.json"');
-    expect(skill).not.toContain("--settings .claude/crew-worker-settings.json");
-  });
-
-  // kobo-282 regress guard — the front @role tag has broken THREE times (270→271→281):
-  // it must live in §0 init (fires on every /crew, incl a STANDBY front with 0 workers)
-  // AND after the company-gate refuse (a refused /crew exits before it tags — no stale
-  // coord). Pin both invariants by position so a future eye can't silently re-break it.
-  test("front @role tag is baked at §0 init — after company-gate refuse, before §1 spawn (kobo-282)", () => {
-    const skill = readFileSync(join(assetsDir, "skills/crew/SKILL.md"), "utf8");
-    const tagIdx = skill.indexOf('set-option -p -t "$TMUX_PANE" @role "🧭 coord"');
-    const refuseIdx = skill.indexOf("crew ต้องอยู่ใน company"); // §0 company-gate refuse (exit)
-    const spawnIdx = skill.indexOf("## 1. Spawn"); // worker-spawn section (§1 Layout was the old home)
-    expect(tagIdx).toBeGreaterThan(-1);
-    expect(refuseIdx).toBeGreaterThan(-1);
-    expect(spawnIdx).toBeGreaterThan(-1);
-    expect(tagIdx).toBeGreaterThan(refuseIdx); // refused /crew exits before tagging → no stale coord
-    expect(tagIdx).toBeLessThan(spawnIdx); // unconditional at init, NOT deferred to worker-spawn (kobo-270 gap)
-    // single source — the old §1 Layout copy (tagged $COORD) is gone
-    expect(skill).not.toContain('set-option -p -t "$COORD" @role "🧭 coord"');
-  });
-
-  // kobo-303 — /warroom hard-removed; /head is the coord skill that spawns workers now.
-  // Same global path requirement (kobo-94): a bare/relative --settings re-opens the
-  // deadlock once local .claude/ copies are removed.
-  test("head skill has no cwd-relative crew-worker-settings reference", () => {
-    const skill = readFileSync(join(assetsDir, "skills/head/SKILL.md"), "utf8");
-    expect(skill).toContain('--settings "$HOME/.claude/crew-worker-settings.json"');
-    expect(skill).not.toContain("--settings .claude/crew-worker-settings.json");
-    // no bare relative "crew-worker-settings.json" (only the $HOME-absolute form)
-    for (const m of skill.matchAll(/crew-worker-settings\.json/g)) {
-      const before = skill.slice(Math.max(0, m.index! - 20), m.index!);
-      expect(before).toContain("$HOME/.claude/");
-    }
-  });
-
-  // kobo-95/303 — /head reviewer+scratchpad write to ψ/active/head/ — the hook state hint
-  // must follow via CREW_STATE_DIR, or a coord that trusts the hint reads the wrong path.
-  test("head spawn sets CREW_STATE_DIR and hook honors it", () => {
-    const head = readFileSync(join(assetsDir, "skills/head/SKILL.md"), "utf8");
-    expect(head).toContain("CREW_STATE_DIR=ψ/active/head");
-
+  // kobo-95/303 — a spawner that points CREW_STATE_DIR elsewhere needs the hook to
+  // honor it, or a coord trusting the state hint reads the wrong path. The crew/head
+  // spawners are gone; the hook keeps the contract (cell relies on it).
+  test("Stop hook honors CREW_STATE_DIR for the state hint", () => {
     const hook = readFileSync(join(assetsDir, "hooks/crew-worker-stop.sh"), "utf8");
     expect(hook).toContain("${CREW_STATE_DIR:-ψ/active/crew}/$CREW_ROLE.md");
     // no lingering hardcoded crew path in the hint
     expect(hook).not.toContain("state: ψ/active/crew/$CREW_ROLE.md");
   });
 
-  // kobo-356: the Stop hook attaches the board-read next-ready queue to a WORKER's
-  // idle ping (event-driven — no loop/poll) so the conductor dispatches immediately
-  // instead of a separate round-trip query. Content-guard (bash isn't unit-testable here).
-  test("Stop hook queries next-ready for a worker idle-ping, scoped to worker* only (not reviewer)", () => {
+  // kobo-356's next-ready queue attachment was removed with the task system
+  // (the CLI verb no longer exists) — no replacement asserted here.
+
+  test("Stop hook honors per-pane idle_notify override before legacy coord fallback", () => {
     const hook = readFileSync(join(assetsDir, "hooks/crew-worker-stop.sh"), "utf8");
-    expect(hook).toContain("maw company task next-ready --company \"$MAW_ROOM_COMPANY\"");
-    expect(hook).toContain('case "$CREW_ROLE" in\n  worker*)'); // queue query gated to worker*, not reviewer
-    expect(hook).toContain('[ -n "$QUEUE" ] && MSG="$MSG · $QUEUE"'); // attached, not a separate hey
+    expect(hook).toContain("@idle_notify_pane");
+    expect(hook).toContain('TARGET_PANE="$CREW_COORD_PANE"');
+    expect(hook).toContain('tmux display-message -t "$TARGET_PANE"');
   });
 
-  // kobo-356: the conductor-contract prose (§4c) tells the conductor-LLM what to DO with
-  // the idle-ping's next-ready signal — the CLI verb + hook only carry the board-read,
-  // the DECISION (dispatch / suggest-teardown) lives here as behavioral contract.
-  test("conductor contract: NEXT-READY dispatches immediately; empty+all-idle SUGGESTS teardown (never auto)", () => {
-    const skill = readFileSync(join(assetsDir, "skills/crew/SKILL.md"), "utf8");
-    expect(skill).toContain("auto-reassign idle worker → next-ready");
-    expect(skill).toContain("event-driven, board-read"); // no loop/poll — hook is the only trigger
-    expect(skill).toContain("NEXT-READY <id>"); // has-ready-work branch → dispatch immediately
-    expect(skill).toContain("NO-READY-WORK inFlight=<N>`, N>0"); // empty but work still coming back → note only
-    expect(skill).toContain("NO-READY-WORK inFlight=0`"); // empty + nothing in flight → check all-idle next
-    expect(skill).toContain("all-idle"); // roster-all-idle — NOT board-derivable, conductor's own knowledge
-    expect(skill).toContain("SUGGEST เท่านั้น ห้าม auto"); // teardown = suggest-only, never auto-executed
-    expect(skill).toContain("`/teardown`"); // reuses the existing shipped skill, doesn't reimplement
+  // /cell ships; /warroom, /worker, /crew and /head are all hard-removed — no sync
+  // item, no asset file. The seat-resume hook KEEPS its crew/warroom/worker-dir
+  // support (asserted above) so any still-running pane survives the skill removal:
+  // the skill file is gone, the runtime survival path is not.
+  test("only /cell ships; /warroom, /worker, /crew and /head are fully removed", () => {
+    expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/SKILL.md")).toBeDefined();
+    expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/contracts/head.md")).toBeDefined();
+    expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/contracts/worker.md")).toBeDefined();
+    expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/contracts/reviewer.md")).toBeDefined();
+    expect(existsSync(join(assetsDir, "skills/cell/SKILL.md"))).toBe(true);
+    expect(existsSync(join(assetsDir, "skills/cell/contracts/head.md"))).toBe(true);
+    for (const gone of ["warroom", "worker", "crew", "head"]) {
+      expect(SYNC_ITEMS.find((i) => i.dest === `skills/${gone}/SKILL.md`)).toBeUndefined();
+      expect(existsSync(join(assetsDir, `skills/${gone}/SKILL.md`))).toBe(false);
+    }
+    // crew/head contract templates left with them — nothing may re-add a dest
+    // whose asset no longer exists (a sync would throw on the missing src).
+    expect(SYNC_ITEMS.filter((i) => /^skills\/(crew|head)\//.test(i.dest))).toEqual([]);
   });
 
-  // kobo-150: crew SKILL forwards CREW_STATE_DIR (default ψ/active/crew, warroom
-  // overrides to ψ/active/warroom) so the same spawn form works under the Conductor (kobo-157 rename).
-  test("crew skill forwards CREW_STATE_DIR with the default state dir", () => {
-    const crew = readFileSync(join(assetsDir, "skills/crew/SKILL.md"), "utf8");
-    expect(crew).toContain("${CREW_STATE_DIR:-ψ/active/crew}");
-    expect(crew).toContain("CREW_STATE_DIR=");
-  });
-
-  // kobo-267: both spawns must stamp MAW_ROOM_COMPANY (from the company name crew
-  // §0 resolves) so the statusline self-describes company → /api/presence?company=
-  // can scope. Drop the stamp and the pane silently falls out of its board's
-  // presence query, so guard it here (this is a CI-only isolated content gate).
-  test("crew + head spawns stamp MAW_ROOM_COMPANY for presence scoping", () => {
-    const crew = readFileSync(join(assetsDir, "skills/crew/SKILL.md"), "utf8");
-    expect(crew).toContain("CO_NAME="); // company name resolved in §0
-    expect(crew).toContain("MAW_ROOM_COMPANY=");
-    const head = readFileSync(join(assetsDir, "skills/head/SKILL.md"), "utf8");
-    expect(head).toContain("MAW_ROOM_COMPANY=");
-  });
-
-  // kobo-303 CUTOVER — /head (3-tier) replaced /warroom, which is now hard-removed.
-  // kobo-317 — /worker (kobo-316) ALSO hard-removed: worker is no longer a self-defined standalone
-  // skill, only a /crew-spawned in-cell pane (crew §4 inline contract). /head + /crew ship.
-  // Both /warroom and /worker: no sync item, no asset file. The seat-resume hook KEEPS its
-  // warroom-dir AND worker-dir support (asserted above) so any still-running pane survives the
-  // skill removal — the skill file is gone, the runtime survival path is not.
-  test("head + crew ship; /warroom and /worker are fully removed (kobo-303/317 cutover)", () => {
-    expect(SYNC_ITEMS.find((i) => i.dest === "skills/head/SKILL.md")).toBeDefined();
-    expect(SYNC_ITEMS.find((i) => i.dest === "skills/crew/SKILL.md")).toBeDefined();
-    // /warroom hard-removed: no sync item, no asset file
-    expect(SYNC_ITEMS.find((i) => i.dest === "skills/warroom/SKILL.md")).toBeUndefined();
-    expect(existsSync(join(assetsDir, "skills/warroom/SKILL.md"))).toBe(false);
-    // kobo-317 — /worker hard-removed: no sync item, no asset file
-    expect(SYNC_ITEMS.find((i) => i.dest === "skills/worker/SKILL.md")).toBeUndefined();
-    expect(existsSync(join(assetsDir, "skills/worker/SKILL.md"))).toBe(false);
-  });
-
-  // kobo-574 — the comm pane's split direction was wrong TWICE before landing right
-  // (kobo-543, kobo-556): `-h` splits by WIDTH and cuts lead's pane in half (measured
-  // 22% instead of 45%); `-v -b` inserts comm as a thin strip ABOVE lead instead,
-  // which is what the 45%-wide lead layout actually depends on. Nothing pinned it, so
-  // a future doc edit could flip it back with no test to catch it — pin both the real
-  // spawn command (§2) and its own reproducible-measurement recipe (§5), since either
-  // could drift independently and both feed a human copying commands out of this file.
-  test("head SKILL.md's comm split direction is pinned to -v -b, not -h (kobo-543/556)", () => {
-    const head = readFileSync(join(assetsDir, "skills/head/SKILL.md"), "utf8");
-    expect(head).toContain("kobo-543"); // the fix this pin protects, named in the doc's own prose
-    // §2 — the real spawn command a lead's setup script actually runs
-    expect(head).toContain('COMM=$(tmux split-window -v -b -t "$LEAD" -l 15%');
-    expect(head).not.toContain('COMM=$(tmux split-window -h -t "$LEAD"');
-    // §5 — the reproducible-measurement recipe, explicitly labeled `# = comm`.
-    // Two separate asserts (not one string with the exact column-alignment
-    // whitespace baked in) — reviewer's finding: a pure reformat that keeps the
-    // same direction would otherwise turn this test red for the wrong reason.
-    expect(head).toContain('tmux split-window -v -b -t "$L" -l 15% \'sleep 300\'');
-    expect(head).toContain("# = comm");
+  test("/cell skill is the oracle-based Cell v2 trigger and points to the deterministic binary spawn", () => {
+    const skill = readFileSync(join(assetsDir, "skills/cell/SKILL.md"), "utf8");
+    expect(skill).toContain("name: cell");
+    expect(skill).toContain("head + reviewer|worker");
+    expect(skill).toContain("wakes every oracle in the company roster");
+    expect(skill).toContain("maw company cell spawn <company>");
+    expect(skill).toContain("maw company cell down <company> [--force]");
+    expect(skill).toContain("requires an identifiable cell head pane before killing anything");
+    expect(skill).toContain("maw company cell self-spawn <company>");
+    expect(skill).toContain("This is NOT a caller-local split and NOT the older `/crew` 4-pane cell");
+    expect(skill).toContain("After that, the head pane should be a live Claude process, not a shell");
+    expect(readFileSync(join(assetsDir, "skills/cell/contracts/head.md"), "utf8")).toContain("spawn/supervise a background implementation agent");
+    expect(readFileSync(join(assetsDir, "skills/cell/contracts/worker.md"), "utf8")).toContain("Act as execution supervisor by default");
+    expect(readFileSync(join(assetsDir, "skills/cell/contracts/worker.md"), "utf8")).toContain("Do not review your own work");
+    expect(readFileSync(join(assetsDir, "skills/cell/contracts/reviewer.md"), "utf8")).toContain("Do not implement fixes yourself");
   });
 
   // kobo-343 — /teardown = crew lifecycle close (spin↔teardown). Safety-critical pane killer:
@@ -297,247 +196,14 @@ describe("crew-skills global asset contract", () => {
     expect(skill).toContain("kill-pane");
   });
 
-  // kobo-317 — the /crew worker pane offloads heavy exec to CC Task sub-agents and returns a
-  // distilled result to the front (not a raw dump), keeping the durable tier lean. The worker
-  // contract (crew §4) carries this instruction + the light-state re-seat rule.
-  test("crew §4 worker contract instructs Task sub-agent offload → distilled to front (kobo-317)", () => {
-    const skill = readFileSync(join(assetsDir, "skills/crew/SKILL.md"), "utf8");
-    // heavy exec offloads to a CC Task sub-agent
-    expect(skill).toContain("Task sub-agent");
-    // returns a distilled result, not raw
-    expect(skill).toContain("distilled");
-    // report-to = front
-    expect(skill).toContain("คืน distilled result");
-    // light state = standing task + held card (toilet/seat survives without full re-init)
-    expect(skill).toContain("light state");
-    expect(skill).toContain("standing task + held card");
-  });
-
-  // kobo-345 (v2 340b) — workers scale ×N: a bare BASE worker (§1, always present = worker-1-of-N)
-  // PLUS dynamic numbered worker-N panes the conductor spawns/kills in W1 (§5). This lifts the
-  // old kobo-319 single-worker cap (sonnet + ephemeral-kill make real pane parallelism affordable).
-  // Pin BOTH: the base worker keeps its bare deadlock-critical form, AND the §5 recipe spawns +
-  // KILLS numbered workers. The Stop-hook glob `worker*` must cover BOTH bare + worker-N (idle signal).
-  test("crew v2: base worker bare + dynamic worker-N spawn/kill in W1 (kobo-345)", () => {
-    const skill = readFileSync(join(assetsDir, "skills/crew/SKILL.md"), "utf8");
-    // base worker's bare CREW_ROLE=worker (not worker-1) moved into spawn.ts's self-heal
-    // buildCmd with the rest of §1 (kobo-384) — pinned there now (plugin-crew-spawn.test.ts).
-    expect(skill).toContain("$CREW_STATE_DIR/worker.md");
-    expect(skill).toContain('"$WORKER:⚒ worker"');
-    // §5 dynamic scale: spawn ADDITIONAL numbered workers (split into W1) + KILL them (despawn)
-    expect(skill).toContain("CREW_ROLE=worker-");            // numbered additional workers
-    expect(skill).toContain('tmux split-window -t "$WIN1_PANE"'); // spawn into the W1 window
-    expect(skill).toContain("tmux kill-pane -t");            // the kill/despawn path (340b core)
-    expect(skill).toContain("worker-$N-contract.md");        // per-worker contract file
-    // deadlock-critical: the Stop-hook glob covers BOTH the bare base worker AND worker-N so every
-    // worker fires its idle completion signal (kobo-91). `worker-*` alone would miss the bare base.
+  // kobo-345/347/91 — deadlock-critical: the Stop-hook glob must cover BOTH a bare
+  // `worker` and numbered `worker-N` panes, or a worker never fires its idle signal.
+  // `worker-*` alone would miss the bare base worker. The crew SKILL prose that had
+  // to match this glob is gone; the hook is what cell actually runs, so it keeps the pin.
+  test("Stop-hook role glob covers bare worker AND worker-N (kobo-345/347)", () => {
     const stopHook = readFileSync(join(assetsDir, "hooks/crew-worker-stop.sh"), "utf8");
     expect(stopHook).toContain("worker*|reviewer");
     expect(stopHook).not.toContain("worker-*|reviewer");
-    // kobo-347: the SKILL PROSE describing the gate MUST match the hook (no dash). A future editor
-    // trusting `worker-*` prose would rewrite the hook to `worker-*` → orphan the bare base worker =
-    // cell deadlock. Pin the prose to the real glob so doc and hook can't drift.
-    expect(skill).not.toContain("worker-*|reviewer");
-    expect(skill).toContain("worker*|reviewer");
-  });
-
-  // kobo-384: the raw self-heal recipe (claude-sonnet-5 spawn, boot-fail/retry, new-window
-  // form) moved entirely to spawn.ts crewSpawn() — single source, no more duplicate in
-  // SKILL.md to drift. That behavior is pinned where it now lives: plugin-crew-spawn.test.ts
-  // ("boots claude-sonnet-5 on first try", "boot-fail → kills orphan window, retries with
-  // plain sonnet", "double-fail ... surfaces via maw hey with a RESOLVED addr"). This test
-  // instead pins that SKILL.md §1 calls the verb and the duplicate recipe is actually gone.
-  test("crew §1 calls the spawn verb — self-heal/model recipe no longer duplicated in SKILL.md (kobo-384)", () => {
-    const skill = readFileSync(join(assetsDir, "skills/crew/SKILL.md"), "utf8");
-    expect(skill).toContain('maw company crew spawn "$CO_NAME"');
-    expect(skill).not.toContain("tmux new-window -P -F '#{pane_id}' -n crew-workers");
-    expect(skill).not.toContain('claude --model "claude-sonnet-5"');
-    expect(skill).not.toContain("claude --model claude-opus-5");
-    // pane-ids still extracted for the auto-kick step (§ auto-kick) and worker-model.txt
-    // still written for §5 worker-N reuse — same external contract as before
-    expect(skill).toMatch(/FRONT=\$\(printf '%s' "\$_OUT"/);
-    expect(skill).toContain('echo "$_WORKER_MODEL" > "$STATE_DIR/worker-model.txt"');
-  });
-
-  // kobo-353: conductor sets @task on dispatch, clears on idle — baked into dispatch recipe in §4c
-  test("crew conductor: @task dispatch label recipe present (kobo-353)", () => {
-    const skill = readFileSync(join(assetsDir, "skills/crew/SKILL.md"), "utf8");
-    expect(skill).toContain("@task");                                          // feature present
-    expect(skill).toContain('tmux set-option -p -t');                          // tmux option verb
-    expect(skill).toContain("@task \"\"");                                     // idle/done reset to ""
-    expect(skill).toMatch(/@task "kobo-/);                                     // dispatch format kobo-<id>
-    expect(skill).toContain("tmux list-panes -F '#{@role} #{@task}'");         // AC verify command
-  });
-
-  // kobo-384: the double-fail belt (_RETRY_BOOTED guard, resolved-addr hey front) moved to
-  // spawn.ts crewSpawn() with the rest of self-heal — pinned there (plugin-crew-spawn.test.ts
-  // "double-fail (both models fail to boot) → surfaces via maw hey with a RESOLVED addr, not a
-  // bare pane-id"). kobo-381/382's conductor+reviewer model pin similarly moved — now the ONLY
-  // place it's pinned is plugin-crew-spawn.test.ts ("conductor + reviewer spawn with the literal
-  // model claude-opus-5"), since SKILL.md no longer duplicates the raw spawn command at all.
-
-  // kobo-355: §5 worker-N self-heal parity — mirrors §1 (poll-verify + kill+retry + double-fail hey)
-  test("crew §5 worker-N self-heal parity: poll-verify + retry + no-orphan + resolved-addr hey (kobo-355)", () => {
-    const skill = readFileSync(join(assetsDir, "skills/crew/SKILL.md"), "utf8");
-    const sec5Start = skill.indexOf("self-heal parity (kobo-355)");
-    const sec5End = skill.indexOf("tmux set-option -p -t \"$NEW\" @role", sec5Start);
-    const block5 = skill.slice(sec5Start, sec5End + 60);
-    // initial boot polled (not assumed to succeed)
-    expect(block5).toMatch(/_N_BOOTED=0/);
-    expect(block5).toMatch(/for _i in/);
-    // fail path: kill orphan pane
-    expect(block5).toContain('tmux kill-pane -t "$NEW"');
-    // retry with plain sonnet
-    expect(block5).toContain('claude --model sonnet');
-    // retry also polled
-    expect(block5).toMatch(/_N_RETRY_BOOTED/);
-    // addr resolved via tmux display-message before hey (not bare %pane-id — §3 convention)
-    expect(block5).toContain('_COND_ADDR=$(tmux display-message -t "$COND"');
-    expect(block5).toContain('#{session_name}:#{window_index}.#{pane_index}');
-    // hey uses resolved addr, not bare $COND
-    expect(block5).toContain('maw hey "$_COND_ADDR"');
-    expect(block5).not.toContain('maw hey "$COND"');
-    expect(block5).toContain('double-fail');
-  });
-
-  // kobo-358: contract text extracted from SKILL §4/4b/4c into standalone
-  // contracts/{conductor,worker,reviewer}.md templates — single source that
-  // `maw company crew spawn` CATs + substitutes (no LLM-fill, no version-skew).
-  // SKILL.md keeps the prose (human docs) but now points to the asset as canonical.
-  describe("crew contract templates extracted to standalone assets (kobo-358)", () => {
-    test("contracts/{conductor,worker,reviewer}.md exist with {{COMPANY}}/{{DEPT}}/{{BOARD}} placeholders", () => {
-      for (const role of ["conductor", "worker", "reviewer"]) {
-        const tpl = readFileSync(join(assetsDir, "skills/crew/contracts", `${role}.md`), "utf8");
-        expect(tpl).toContain("{{COMPANY}}");
-        expect(tpl.length).toBeGreaterThan(200); // not a stub — real contract prose
-      }
-    });
-
-    test("SYNC_ITEMS ships all 3 contract templates alongside SKILL.md", () => {
-      for (const role of ["conductor", "worker", "reviewer"]) {
-        expect(SYNC_ITEMS.find((i) => i.dest === `skills/crew/contracts/${role}.md`)).toBeDefined();
-      }
-    });
-
-    test("SKILL.md §4/4b/4c reference the canonical asset (single-source, no duplicated maintenance)", () => {
-      const skill = readFileSync(join(assetsDir, "skills/crew/SKILL.md"), "utf8");
-      expect(skill).toContain("canonical asset (kobo-358)");
-      expect(skill).toContain("contracts/conductor.md");
-      expect(skill).toContain("contracts/worker.md");
-      expect(skill).toContain("contracts/reviewer.md");
-    });
-  });
-
-  test("head skill spawns the 3 head roles with global settings + presence stamp (kobo-299)", () => {
-    const head = readFileSync(join(assetsDir, "skills/head/SKILL.md"), "utf8");
-    // 3-role head cell: lead + conductor + reviewer, comm opt-in
-    expect(head).toContain("@role \"🎼 conductor\"");
-    expect(head).toContain("@role \"🔎 reviewer\"");
-    expect(head).toContain("@role \"👤 lead\"");
-    // reviewer's Stop-hook wiring (--settings global path, deadlock-critical kobo-91/94) moved
-    // into spawn.ts headSpawn() with the rest of the raw recipe (kobo-384) — pinned there now
-    // (plugin-head-spawn.test.ts "reviewer (not conductor) gets --settings"). scratchpad's own
-    // spawn line (still raw here, untouched by 384) also carries the global settings path —
-    // that's a real, separate invariant this line still legitimately covers.
-    expect(head).toContain('--settings "$HOME/.claude/crew-worker-settings.json"');
-    expect(head).not.toContain("--settings .claude/crew-worker-settings.json");
-    // scratchpad writes to ψ/active/head/ — CREW_STATE_DIR must follow (kobo-95, kobo-301)
-    expect(head).toContain("CREW_STATE_DIR=ψ/active/head");
-    // presence scoping (kobo-267)
-    expect(head).toContain("MAW_ROOM_COMPANY=");
-    // review chain wired head-reviewer → lead (299 AC)
-    expect(head).toContain("worker → crew reviewer → head reviewer → lead");
-    // opus top tier (299 AC — model-tier full mapping is sibling kobo-300); kobo-384: the
-    // literal --model invocation moved to spawn.ts (single source) — pinned there now
-    // (plugin-head-spawn.test.ts "happy path: 3-pane cell, both BRAIN_MODEL"). kobo-389:
-    // the model-tier PROSE also stopped hardcoding the literal id (`BRAIN_MODEL` instead),
-    // since the const is now the one place a model change happens.
-    expect(head).toContain("BRAIN_MODEL");
-    expect(head).not.toContain("claude-opus-5");
-    expect(head).toContain("model tier (spawn)");
-  });
-
-  // kobo-300 — model tier: แพงบน-ถูกล่าง. head lead/conductor/reviewer = opus (judgment),
-  // comm = sonnet (relay, high-volume low-judgment — same as warroom). worker .3 caught A
-  // shipping comm=opus, off-spec; this pins comm sonnet so a regression can't slip back.
-  test("head comm spawns with --model sonnet, not opus (kobo-300 tier fix)", () => {
-    const head = readFileSync(join(assetsDir, "skills/head/SKILL.md"), "utf8");
-    // the comm spawn line uses sonnet
-    const commSpawn = head.split("\n").find((l) => l.includes("comm-contract.md") && l.includes("--model"));
-    expect(commSpawn).toBeDefined();
-    expect(commSpawn).toContain("--model sonnet");
-    expect(commSpawn).not.toContain("--model opus");
-    // no comm pane left on opus anywhere (roster row + contract heading)
-    expect(head).not.toContain("| comm       | %720    | opus");
-    expect(head).not.toContain("comm 📡 · opt-in · opus");
-    // full tier mapping table present (opus top · sonnet worker/scratchpad/comm)
-    expect(head).toContain("model tier (spawn)");
-    expect(head).toContain("worker×3 | **sonnet**");
-  });
-
-  // kobo-301 — the scratchpad is a read-only grounding role: it fetches sources into a
-  // digest but must NOT mutate. The guard is structural (--disallowedTools hard-blocks the
-  // write tools, and survives --dangerously-skip-permissions since disallow = exclude, not
-  // prompt) + contract discipline for bash. Pin the structural guard so a spawn edit can't
-  // silently drop it and hand scratchpad a write path.
-  test("scratchpad spawns read-only — --disallowedTools blocks write tools (kobo-301)", () => {
-    const head = readFileSync(join(assetsDir, "skills/head/SKILL.md"), "utf8");
-    const spawn = head.split("\n").find((l) => l.includes("scratchpad-contract.md") && l.includes("claude --model"));
-    expect(spawn).toBeDefined();
-    // sonnet tier (kobo-300) + autonomous (no blackhole) + structural no-write guard
-    expect(spawn).toContain("--model sonnet");
-    expect(spawn).toContain("--dangerously-skip-permissions");
-    expect(spawn).toContain('--disallowedTools "Write Edit MultiEdit NotebookEdit"');
-    // read-only role is explicit in the contract (defense-in-depth: bash discipline too)
-    expect(head).toContain("read-only grounding");
-    expect(head).toContain("no-write guard");
-  });
-
-  // kobo-304 — the worker cell (execution tier) IS the existing /crew, reused, not a new
-  // spawn machinery. Pin that /head documents the nesting (crew → /crew) but does NOT
-  // re-implement the /crew worker spawn — a future edit that copies /crew's split-window
-  // spawn form into the worker-cell section would fork the kernel (drift). The only
-  // worker-spawn split-window forms in this skill are for the HEAD panes (conductor,
-  // reviewer, comm, scratchpad); the worker cell delegates to /crew.
-  test("worker cell reuses /crew, not a re-implementation (kobo-304)", () => {
-    const head = readFileSync(join(assetsDir, "skills/head/SKILL.md"), "utf8");
-    // the execution tier is documented as /crew reuse
-    expect(head).toContain("Worker cell (execution tier · = /crew");
-    // nesting is via invoking /crew (single kernel source), not a fresh spawn form
-    expect(head).toContain("invoke `/crew`");
-    // the worker-cell section names no new CREW_ROLE=worker spawn (that lives in /crew)
-    const wcSection = head.slice(head.indexOf("## Worker cell"), head.indexOf("## lead-toilet-survive"));
-    expect(wcSection).not.toContain("CREW_ROLE=worker");
-    expect(wcSection).not.toContain("split-window"); // no re-implemented spawn machinery
-  });
-
-  // kobo-364: contract text extracted from head SKILL's Conductor/Reviewer
-  // Contract sections into standalone contracts/{conductor,reviewer}.md
-  // templates — same treatment kobo-358 gave /crew's §4/4b/4c. NO lead.md:
-  // lead is the invoking pane, never spawned, never gets --append-system-prompt.
-  describe("head contract templates extracted to standalone assets (kobo-364)", () => {
-    test("contracts/{conductor,reviewer}.md exist with {{COMPANY}}/{{DEPT}}/{{BOARD}} placeholders, no lead.md", () => {
-      for (const role of ["conductor", "reviewer"]) {
-        const tpl = readFileSync(join(assetsDir, "skills/head/contracts", `${role}.md`), "utf8");
-        expect(tpl).toContain("{{COMPANY}}");
-        expect(tpl.length).toBeGreaterThan(200); // not a stub — real contract prose
-      }
-      expect(existsSync(join(assetsDir, "skills/head/contracts/lead.md"))).toBe(false);
-    });
-
-    test("SYNC_ITEMS ships both head contract templates", () => {
-      for (const role of ["conductor", "reviewer"]) {
-        expect(SYNC_ITEMS.find((i) => i.dest === `skills/head/contracts/${role}.md`)).toBeDefined();
-      }
-      expect(SYNC_ITEMS.find((i) => i.dest === "skills/head/contracts/lead.md")).toBeUndefined();
-    });
-
-    test("head SKILL.md's Conductor/Reviewer Contract sections reference the canonical asset", () => {
-      const head = readFileSync(join(assetsDir, "skills/head/SKILL.md"), "utf8");
-      expect(head).toContain("canonical asset (kobo-364)");
-      expect(head).toContain("contracts/conductor.md");
-      expect(head).toContain("contracts/reviewer.md");
-    });
   });
 });
 
@@ -555,8 +221,8 @@ describe("crew-skills sync", () => {
     expect(hookMode).not.toBe(0); // some exec bit set
 
     // installed content matches canonical assets
-    const crew = readFileSync(join(home, ".claude/skills/crew/SKILL.md"), "utf8");
-    expect(crew).toContain('--settings "$HOME/.claude/crew-worker-settings.json"');
+    const cell = readFileSync(join(home, ".claude/skills/cell/SKILL.md"), "utf8");
+    expect(cell).toBe(readFileSync(join(assetsDir, "skills/cell/SKILL.md"), "utf8"));
   });
 
   test("second sync is idempotent (everything up-to-date)", () => {
@@ -572,12 +238,12 @@ describe("crew-skills sync", () => {
     const home = freshHome();
     const repoDir = freshHome();
     syncCrewSkills({ home, assetsDir, repoDir });
-    const crewDest = join(home, ".claude/skills/crew/SKILL.md");
-    writeFileSync(crewDest, "STALE COPY");
+    const cellDest = join(home, ".claude/skills/cell/SKILL.md");
+    writeFileSync(cellDest, "STALE COPY");
 
     const result = syncCrewSkills({ home, assetsDir, repoDir });
-    expect(result.installed).toContain("skills/crew/SKILL.md");
-    expect(readFileSync(crewDest, "utf8")).not.toBe("STALE COPY");
+    expect(result.installed).toContain("skills/cell/SKILL.md");
+    expect(readFileSync(cellDest, "utf8")).not.toBe("STALE COPY");
   });
 
   test("--force rewrites even when unchanged", () => {
@@ -593,7 +259,7 @@ describe("crew-skills sync", () => {
     const result = syncCrewSkills({ home, assetsDir, repoDir: freshHome(), dryRun: true });
     expect(result.dryRun).toBe(true);
     expect(result.installed.length).toBe(SYNC_ITEMS.length);
-    expect(existsSync(join(home, ".claude/skills/crew/SKILL.md"))).toBe(false);
+    expect(existsSync(join(home, ".claude/skills/cell/SKILL.md"))).toBe(false);
     expect(formatSyncResult(result)).toContain("would install");
   });
 

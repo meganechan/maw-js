@@ -6,6 +6,12 @@
 **Children**: kobo-21 (MCP), kobo-22 (home), kobo-23 (worklog), kobo-24 (task + forcing)
 **Author**: meganechan:patchwork
 
+> **Partly superseded (2026-08-03).** The task/board subsystem was removed from maw
+> entirely — `src/core/tasks/{store,route,…}`, the `task` plugin, the `/api/tasks*`
+> routes and the web kanban board are all gone; the board lives in kobo taskd now.
+> Everything this ADR says about `task` is history. The `home` and `worklog`
+> reorganizations it decided are unchanged and still in force.
+
 ## Context
 
 Three top-level `maw` commands are conceptually **owned by a company** but live at the fleet root:

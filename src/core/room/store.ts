@@ -2,11 +2,11 @@
  * Brainstorm Room artifact store (kobo-241, slice 2).
  *
  * A "room" is an OFF-CARD note-thread artifact — a grounding conversation that lives
- * OUTSIDE the kanban and can be reopened. It reuses the task store's proven
- * file-per-artifact PATTERN (mawDataPath + atomic JSON write), but a DIFFERENT
- * directory: `~/.maw/companies/<c>/rooms/<id>.json`. Because it's `rooms/` and not
- * `tasks/`, it is NEVER read by /api/tasks — it can't appear on a kanban lane
- * (front-confirmed store choice, kobo-241). NO new store mechanism/DB/transport.
+ * OUTSIDE any board and can be reopened. It uses a file-per-artifact PATTERN
+ * (mawDataPath + atomic JSON write) under its own directory:
+ * `~/.maw/companies/<c>/rooms/<id>.json` (front-confirmed store choice, kobo-241).
+ * NO new store mechanism/DB/transport. The room→card distill link is gone with the
+ * task subsystem — a room is now purely a conversation artifact.
  *
  * The thread persists here (durable, survives restart) so a reopen reloads the full
  * conversation. Turns are appended by the feed listener (src/core/room/listener.ts)
@@ -55,7 +55,6 @@ export interface RoomArtifact {
   ts: number; // opened at
   updatedTs: number;
   messages: RoomMessage[];
-  cardId?: string; // kobo-244: the kanban card distilled FROM this room (bidirectional provenance — the card records this room id back). The single point where a room touches the board.
   mergedInto?: string; // kobo-243: set on a SOURCE room — the target it was consolidated into (archived, not deleted)
   mergedFrom?: string[]; // kobo-243: set on the TARGET room — the source ids it absorbed (provenance)
   participants?: string[]; // kobo-260: teammates EXPLICITLY pulled in (invite) — union'd with the derived (spoken-in-thread) participants so a pulled-in teammate shows before their first turn
@@ -334,20 +333,6 @@ export function addRoomParticipant(company: string, id: string, oracle: string):
 }
 
 /**
- * Record on the artifact the kanban card it was distilled into (kobo-244) — the
- * back-half of the bidirectional link (the card already carries room=<id>). Returns
- * the room, or null if absent. Idempotent: re-linking the same card is a no-op write.
- */
-export function linkRoomCard(company: string, id: string, cardId: string): RoomArtifact | null {
-  const room = readRoom(company, id);
-  if (!room) return null;
-  room.cardId = cardId;
-  room.updatedTs = Date.now();
-  writeRoom(room);
-  return room;
-}
-
-/**
  * Consolidate SOURCE rooms into a TARGET room (kobo-243, slice 4). Lead-proposed +
  * human-CONFIRMED at the route layer — this fn only EXECUTES a confirmed merge, it never
  * decides to merge. The target absorbs every source thread (messages merged, deduped by
@@ -396,8 +381,11 @@ export function listRooms(company: string): RoomArtifact[] {
 }
 
 // listCompanies() is cheap — the feed listener resolves which company owns a bare
-// [room:<id>] by finding the artifact under each company's rooms/ dir.
-import { listCompanies } from "../tasks/store";
+// [room:<id>] by finding the artifact under each company's rooms/ dir. Reads the
+// company REGISTRY (companies/<name>.json) since the task store that used to
+// enumerate companies/<name>/ data dirs is gone; a room can only be opened for a
+// registered company, so the two lists agree.
+import { listCompanies } from "../../vendor/mpr-plugins/company/company-helpers";
 
 /**
  * The company whose OPENED room owns this bare id — the feed listener uses this to
@@ -407,8 +395,8 @@ import { listCompanies } from "../tasks/store";
  * open/closed room anywhere → the message is ignored (not persisted).
  */
 export function findRoomCompany(id: string): string | null {
-  for (const company of listCompanies()) {
-    if (existsSync(roomFilePath(company, id))) return company;
+  for (const { name } of listCompanies()) {
+    if (existsSync(roomFilePath(name, id))) return name;
   }
   return null;
 }

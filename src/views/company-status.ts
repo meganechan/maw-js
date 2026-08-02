@@ -1,40 +1,23 @@
 import { Hono } from "hono";
 
 /**
- * Company status (kobo-445) — per-oracle rollup: pending work + presence +
- * worklog, ONE card per oracle instead of 3 separate tabs a reader has to
- * cross-reference. Deliberately separate page from /company (the kanban
- * board) — different question ("what is each oracle doing right now") vs
- * the board's ("what state is each card in").
+ * Company status (kobo-445) — per-oracle rollup: presence + held work + worklog,
+ * ONE card per oracle instead of separate tabs a reader has to cross-reference.
+ * Answers "what is each oracle doing right now".
  *
  * READ-ONLY (Tony's explicit constraint) — fetches only, zero POST/write.
- * Sources: GET /api/roster (membership + held + pending, kobo-445 rev),
- * GET /api/presence (per-pane ctx%), GET /api/worklog/feed (recent activity).
+ * Sources: GET /api/roster (membership + held claims), GET /api/presence
+ * (per-pane ctx%), GET /api/worklog/feed (recent activity).
  *
- * kobo-445 review round 1: this used to also fetch GET /api/tasks for the
- * pending list — 848KB / 532-file server-side scan, every 5s, forever, per
- * open tab. /api/roster ALREADY does that same file scan (for `held`); the
- * fix is having it also return the full per-oracle pending set (id/title/
- * state only — see pendingTasksByOracle in core/presence/held.ts) instead
- * of a second, heavier route computing the same thing. Measured on the real
- * kobo company (chrome-devtools network panel, this PR, single measurement
- * by me — not independently re-verified yet since the field wasn't live on
- * any server at review time): /api/roster with `pending` added was 32554
- * bytes, vs 848KB for /api/tasks.
+ * The "ของค้าง" pending-cards panel retired with the task subsystem: it rendered
+ * `pendingTasksByOracle`, a pure board projection, and /api/roster no longer
+ * ships a `pending` field. Held work (open worklog claims) is what remains.
  *
- * kobo-445 review round 2: two more real gaps caught —
- *   1. the 5s poll never paused for a hidden/backgrounded tab, and never
- *      checked for one still running when the next tick fired. Fixed below
- *      (visibilitychange + loadInFlight guard) and the interval lengthened
- *      to 15s — this is a status dashboard, not a live board, so 15s-stale
- *      is an acceptable tradeoff for a much lower steady-state request rate.
- *   2. handleRosterRequest was STILL calling listTasks(company) twice per
- *      request (once inside heldWorkByOracle, once inside pendingTasksByOracle)
- *      even after round 1 — the comment above claimed "one shared file-scan"
- *      but the code didn't do that yet. Fixed in core/roster/route.ts: listTasks
- *      is now called once and passed into both functions (see held.ts's updated
- *      signatures + the mock-free test proving the param is actually honored,
- *      not silently ignored).
+ * kobo-445 review round 2: the 5s poll never paused for a hidden/backgrounded
+ * tab, and never checked for one still running when the next tick fired. Fixed
+ * below (visibilitychange + loadInFlight guard) and the interval lengthened to
+ * 15s — this is a status dashboard, not a live board, so 15s-stale is an
+ * acceptable tradeoff for a much lower steady-state request rate.
  */
 export function companyStatusHtml(): string {
   return `<!doctype html>
@@ -74,11 +57,6 @@ export function companyStatusHtml(): string {
     .pane-row { display:flex; gap:8px; font-size:12px; color:var(--muted); }
     .pane-row .p-id { color:var(--accent); }
     .pane-row .p-ctx { margin-left:auto; }
-    .pending-row { display:flex; gap:8px; align-items:baseline; font-size:12px; padding:3px 0; border-top:1px dashed var(--line); }
-    .pending-row:first-child { border-top:0; }
-    .pending-row .p-title { color:var(--fg); flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .pending-row .p-state { flex:0 0 auto; font-size:10px; border:1px solid var(--line); border-radius:999px; padding:1px 7px; color:var(--muted); white-space:nowrap; }
-    .pending-more { color:var(--muted); font-size:11px; font-style:italic; margin-top:2px; }
     .wl-row { font-size:12px; padding:3px 0; border-top:1px dashed var(--line); }
     .wl-row:first-child { border-top:0; }
     .wl-row .wl-kind { color:var(--muted); font-size:10px; border:1px solid var(--line); border-radius:999px; padding:0 6px; margin-right:6px; }
@@ -94,7 +72,7 @@ export function companyStatusHtml(): string {
   <header>
     <div>
       <h1>maw company status</h1>
-      <div class="sub">ต่อ oracle: ของค้าง · presence · worklog ในที่เดียว (read-only) — <code>/company</code> is the kanban board, this is not it</div>
+      <div class="sub">ต่อ oracle: งานที่ถืออยู่ · presence · worklog ในที่เดียว (read-only)</div>
     </div>
     <div class="controls">
       <label>company <input id="company" placeholder="kobo" autocomplete="off" /></label>
@@ -151,11 +129,11 @@ async function load() {
     statusEl.textContent = 'loading…';
     try {
       const [rosterRes, presenceRes, worklogRes] = await Promise.all([
-        getJson('/api/roster?company=' + encodeURIComponent(company) + '&pending=1'), // opt into the pending field — see roster/route.ts
+        getJson('/api/roster?company=' + encodeURIComponent(company)),
         getJson('/api/presence?company=' + encodeURIComponent(company)),
         getJson('/api/worklog/feed?company=' + encodeURIComponent(company) + '&limit=300'),
       ]);
-      render(rosterRes.roster || [], rosterRes.held || {}, rosterRes.pending || {}, presenceRes.rows || [], worklogRes.entries || []);
+      render(rosterRes.roster || [], rosterRes.held || {}, presenceRes.rows || [], worklogRes.entries || []);
       statusEl.textContent = (rosterRes.roster || []).length + ' oracle(s) in ' + company;
     } catch (err) {
       statusEl.textContent = 'failed to load: ' + (err && err.message ? err.message : err);
@@ -167,7 +145,7 @@ async function load() {
   }
 }
 
-function render(roster, held, pending, presence, worklog) {
+function render(roster, held, presence, worklog) {
   gridEl.replaceChildren();
   if (!roster.length) { gridEl.appendChild(el('div', 'empty', 'no roster members')); return; }
 
@@ -251,27 +229,6 @@ function render(roster, held, pending, presence, worklog) {
       paneSection.appendChild(el('div', 'empty-note', 'no live pane'));
     }
     cell.appendChild(paneSection);
-
-    // pending work — server-sorted newest-first, done/rejected already excluded
-    // server-side (pendingTasksByOracle), so a closed card just isn't in this list.
-    const oraclePending = pending[member.oracle] || [];
-    const pendSection = el('div', 'section');
-    pendSection.appendChild(el('h3', null, 'ของค้าง (' + oraclePending.length + ')'));
-    if (oraclePending.length) {
-      const CAP = 6;
-      for (const t of oraclePending.slice(0, CAP)) {
-        const r = el('div', 'pending-row');
-        const title = el('span', 'p-title', t.id + ' — ' + t.title);
-        title.title = t.title;
-        r.appendChild(title);
-        r.appendChild(el('span', 'p-state', t.state));
-        pendSection.appendChild(r);
-      }
-      if (oraclePending.length > CAP) pendSection.appendChild(el('div', 'pending-more', '+' + (oraclePending.length - CAP) + ' more'));
-    } else {
-      pendSection.appendChild(el('div', 'empty-note', 'nothing pending'));
-    }
-    cell.appendChild(pendSection);
 
     // worklog: last 5
     const wlSection = el('div', 'section');

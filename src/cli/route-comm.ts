@@ -162,37 +162,27 @@ export async function routeComm(cmd: string, args: string[]): Promise<boolean> {
     }
     const message = msgArgs.join(" ");
 
-    // `[request:<id>]` convention hooks — turn a dispatch into (1) a board card
-    // (Track 3) and (2) a tracked request-reply entry so `maw reply <id>` works.
-    // Both MUST run BEFORE cmdSend: cmdSend calls process.exit() on many delivery
-    // outcomes, so a hook placed after it never executes (the live #50 bug).
-    // Recording first is also the right semantics — "this request was sent",
-    // independent of whether delivery then succeeds. Cheap substring gate first
-    // → normal hey/send pay ~nothing; best-effort try/catch so a hook failure
+    // `[request:<id>]` convention hook — record a tracked request-reply entry so
+    // `maw reply <id>` works. MUST run BEFORE cmdSend: cmdSend calls process.exit()
+    // on many delivery outcomes, so a hook placed after it never executes (the live
+    // #50 bug). Recording first is also the right semantics — "this request was
+    // sent", independent of whether delivery then succeeds. Cheap substring gate
+    // first → normal hey/send pay ~nothing; best-effort try/catch so a hook failure
     // never blocks delivery; notify + broadcast excluded.
     if (!isNotify && message.includes("[request:")) {
       try {
-        const [{ autoCreateFromDispatch, parseRequestDispatch }, { authenticateActor }, { trackRequest }] = await Promise.all([
-          import("../core/tasks/auto-create"),
+        const [{ authenticateActor }, { trackRequest, parseRequestId }] = await Promise.all([
           import("../commands/shared/comm-send"),
           import("../core/request-track-client"),
         ]);
-        // kobo-335: the auto-created card's `by` is a security-relevant actor — bind the
+        // kobo-335: the tracked entry's `from` is a security-relevant actor — bind the
         // --from/MAW_SENDER claim to the local self so `maw hey --from x:tony "[request:]…"`
-        // can't forge a card authored by tony. A forged/unbacked claim throws → null → skip.
-        const resolveSender = (): string | null => {
-          try {
-            return authenticateActor(from);
-          } catch {
-            return null; // forged/unbacked claim, or SSH relay without a valid --from → skip
-          }
-        };
-        autoCreateFromDispatch(message, target, resolveSender);
-        // register the correlationId into the server store so `maw reply` finds it
-        const parsed = parseRequestDispatch(message);
-        if (parsed) {
-          const sender = resolveSender();
-          if (sender) await trackRequest(parsed.requestId, sender, target, message);
+        // can't forge a request attributed to tony. A forged/unbacked claim throws → skip.
+        const requestId = parseRequestId(message);
+        if (requestId) {
+          let sender: string | null = null;
+          try { sender = authenticateActor(from); } catch { sender = null; }
+          if (sender) await trackRequest(requestId, sender, target, message);
         }
       } catch {
         /* request-convention hooks are best-effort — never break hey/send delivery */

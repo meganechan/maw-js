@@ -12,6 +12,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { buildServer } from "../../src/vendor/mpr-plugins/mcp/server";
 import {
   inlineImages,
   parseMawRef,
@@ -43,6 +44,24 @@ function depsFrom(
     ...overrides,
   };
 }
+
+describe("live MCP tool registry", () => {
+  test("omits maw_task while keeping maw_hey", () => {
+    const server = buildServer();
+    const tools = (server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools;
+
+    expect(Object.keys(tools)).not.toContain("maw_task");
+    expect(Object.keys(tools)).toContain("maw_hey");
+    const mapperSource = readFileSync(join(root, MCP_DIR, "tools.ts"), "utf8");
+    expect(mapperSource).not.toContain("taskArgs");
+    // ...and no orphaned prose about it either: the mapper's doc-comment outlived
+    // the function it documented, so a reader still found the retired task-board
+    // surface described as current. Nothing task-shaped may survive in this file.
+    expect(mapperSource).not.toContain("task-board");
+    expect(mapperSource).not.toContain("maw company task");
+    expect(mapperSource).not.toMatch(/\btask\b/i);
+  });
+});
 
 describe("mcp plugin standalone boundary (#2113)", () => {
   test("plugin sources import runtime deps only through maw-js/sdk", () => {
@@ -104,158 +123,6 @@ describe("mcp plugin standalone boundary (#2113)", () => {
       expect(body).toContain("compactRoomAck(res.body)");
       expect(body).toContain("!res.ok"); // error path stays the already-compact toText(res)
     }
-  });
-
-  // kobo-368: `maw_task ls` defaults to a compact lane-count board (task/index.ts's
-  // renderBoardCompact); `full` opts an MCP caller into the pre-368 full render.
-  test("kobo-368: maw_task tool exposes a `full` input for the compact-default ls", () => {
-    const server = readFileSync(join(root, MCP_DIR, "server.ts"), "utf8");
-    expect(server).toContain("full: z.boolean().optional()");
-    const tools = readFileSync(join(root, MCP_DIR, "tools.ts"), "utf8");
-    const lsCase = tools.slice(tools.indexOf('case "ls": {'), tools.indexOf('case "start"'));
-    expect(lsCase).toContain("input.full");
-    expect(lsCase).toContain('"--full"');
-  });
-
-  // kobo-640: `needs` is the preferred dependency field on `maw_task add` — must be
-  // advertised in the MCP schema (server.ts) AND actually forwarded to the CLI as
-  // `--needs` (tools.ts), else an MCP caller has no way to reach the new flag at
-  // all even though the CLI accepts it. `parent` must still be forwarded too
-  // (deprecated alias, not removed).
-  test("kobo-640: maw_task tool exposes `needs` (add) and still forwards `parent`", () => {
-    const server = readFileSync(join(root, MCP_DIR, "server.ts"), "utf8");
-    expect(server).toContain("needs: z.array(z.string())");
-    const tools = readFileSync(join(root, MCP_DIR, "tools.ts"), "utf8");
-    const addCase = tools.slice(tools.indexOf('case "add": {'), tools.indexOf('case "move"'));
-    expect(addCase).toContain('argv.push("--needs", p)');
-    expect(addCase).toContain('argv.push("--parent", p)');
-  });
-
-  // kobo-21/24: the maw_task tool wraps the CLI task board (spawns
-  // `maw company task <verb>` via runMaw, like the other verb tools) — it must
-  // NOT reach into core task logic directly. Pin the registration + that taskArgs
-  // maps every verb + targets the canonical company surface.
-  test("server registers maw_task and delegates through taskArgs → maw company task", () => {
-    const server = readFileSync(join(root, MCP_DIR, "server.ts"), "utf8");
-    expect(server).toContain('"maw_task"');
-    expect(server).toContain("taskArgs");
-    const tools = readFileSync(join(root, MCP_DIR, "tools.ts"), "utf8");
-    expect(tools).toContain("export function taskArgs");
-    for (const verb of ['"add"', '"ls"', '"start"', '"move"', '"claim"', '"assign"', '"ask"', '"mentions"', '"comment"', '"comments"', '"review"', '"hold"', '"approve"', '"need-answer"', '"pr"', '"sign"', '"merge"', '"done"', '"deployed"', '"note"', '"edit"', '"epic"', '"dep"', '"decompose"', '"block"', '"unblock"', '"archive"']) {
-      expect(tools).toContain(verb);
-    }
-    // kobo-327: merge-gate — sign records a crew/head tier; merge is the gated merge path.
-    expect(tools).toContain('const argv = ["company", "task", "sign", sid, "--role", input.role]');
-    expect(tools).toContain('task sign requires a role'); // sign refuses without a tier
-    // kobo-565: evidence scope must reach the CLI through MCP too — it was silently
-    // dropped before (every MCP sign read back "undeclared" regardless of what was done).
-    expect(tools).toContain('argv.push("--evidence", input.evidence)');
-    expect(tools).toContain('argv.push("--evidence-locus", input.evidenceLocus)');
-    expect(tools).toContain('["company", "task", "merge", gid]');
-    expect(tools).toContain('argv.push("--crew-gate")'); // add forwards the crew-cell flag
-    expect(tools).toContain('argv.push("--single-tier")'); // kobo-331: merge forwards the no-crew escape
-    expect(server).toContain('"sign"'); // enum + description advertise the verb
-    expect(server).toContain('"merge"');
-    expect(server).toContain('z.enum(["crew", "head"])'); // role param schema
-    expect(server).toContain('evidence: z.enum(["undeclared", "diff-read", "test-run", "test-run+mutation"])'); // kobo-565: evidence param schema
-    expect(server).toContain("evidenceLocus: z.string()"); // kobo-565: evidence locus param schema
-    expect(server).toContain('z.enum(["merge", "squash", "rebase"])'); // method param schema
-    expect(server).toContain("singleTier: z.boolean()"); // kobo-331: --single-tier param schema
-    // kobo-275: deployed maps 1:1 to the CLI verb (manual wait-for-deploy → done drain).
-    expect(tools).toContain('["company", "task", "deployed", needId("deployed")');
-    expect(server).toContain('"deployed"'); // enum + description advertise the verb
-    // kobo-213: edit = reword title/body in place (same id) → `maw company task edit <id> [--title] [--body]`.
-    expect(tools).toContain('["company", "task", "edit", eid]');
-    expect(server).toContain('"edit"'); // enum + title advertise the verb
-    // kobo-214: edit also amends the reviewer in place → forwards --reviewer; the
-    // empty-edit guard names all three editable fields (title, body, reviewer).
-    expect(tools).toContain('if (input.reviewer !== undefined) argv.push("--reviewer", input.reviewer)');
-    expect(tools).toContain("title, body, reviewer, and/or deployRequired");
-    // kobo-274: add/edit forward the deploy-required override to the CLI flags.
-    expect(tools).toContain('argv.push("--deploy-required")');
-    expect(tools).toContain('argv.push("--no-deploy-required")');
-    expect(server).toContain("deployRequired"); // the boolean param is advertised in the schema
-    // kobo-191: approve = reviewer routes big-work review → approve (reason mandatory).
-    expect(tools).toContain('["company", "task", "approve", aid, "--reason", input.reason');
-    expect(server).toContain('"approve"'); // enum + title advertise the verb
-    // kobo-235: need-answer = standalone verb mirroring approve (Tony's decision queue, reason mandatory).
-    expect(tools).toContain('["company", "task", "need-answer", nid, "--reason", input.reason');
-    expect(server).toContain('"need-answer"'); // enum + title advertise the verb
-    // kobo-134: dep verb — op add|rm + exactly one parent id, maps to
-    // `maw company task dep <op> <id> <parentId>` on the canonical surface.
-    expect(tools).toContain('["company", "task", "dep", input.op, did, input.parent[0]');
-    expect(server).toContain('"dep"'); // enum + title advertise the verb
-    // assign = set assignee. maps to `maw company task assign <id> --to <who>`.
-    expect(tools).toContain('["company", "task", "assign", aid, "--to", input.to');
-    expect(server).toContain('"assign"'); // enum + title advertise the verb
-    // kobo-219: reassign is friction — input.force appends --force-reassign (correction only).
-    expect(tools).toContain('argv.push("--force-reassign")');
-    expect(server).toContain('force: z.boolean()'); // schema advertises the flag
-    // kobo-126: ask = question → subcard (parent id + question text [+ --to answerer]);
-    // mentions = the @mention decision queue ([--for who]). Both map to the canonical surface.
-    expect(tools).toContain('["company", "task", "ask", askParent, input.text');
-    expect(tools).toContain('["company", "task", "mentions"');
-    expect(server).toContain('"ask"'); // enum + title advertise the verbs
-    expect(server).toContain('"mentions"');
-    // kobo-72: epic verb sets/clears containment; epic present → re-link, omit → --clear.
-    expect(tools).toContain('["company", "task", "epic", eid, input.epic');
-    expect(tools).toContain('["company", "task", "epic", eid, "--clear"');
-    expect(server).toContain('"epic"'); // enum + title advertise the verb
-    // kobo-70: backlog state — `move <id> <state>` re-files parking states, and
-    // `add` accepts `--state`. taskArgs maps both to the canonical company surface.
-    expect(tools).toContain('["company", "task", "move", mid, input.state');
-    expect(tools).toContain('argv.push("--state", input.state)');
-    // kobo-218: `add` forwards --reason (born-in-approve deploy card carries WHY; CLI enforces it).
-    expect(tools).toContain('if (input.reason) argv.push("--reason", input.reason)');
-    expect(server).toContain('"move"'); // enum + title advertise the verb
-    // kobo-133: ready state — move accepts it (auto-promote's manual override);
-    // the state enum + move error advertise backlog|todo|ready on both surfaces.
-    // kobo-218: approve + need-answer join the move enum (Tony's two queues, reason
-    // mandatory); tools forwards --reason for both. backlog|todo|ready still advertised.
-    // kobo-273: wait-for-deploy joins the move enum (merged≠live park, manual target).
-    expect(server).toContain('z.enum(["backlog", "todo", "ready", "approve", "need-answer", "wait-for-deploy"])');
-    expect(tools).toContain("backlog|todo|ready");
-    expect(tools).toContain('input.state === "approve" || input.state === "need-answer"'); // both forward a mandatory reason
-    // kobo-39: append-only note verb — needs an id + text; taskArgs targets the
-    // canonical company surface (`maw company task note <id> <text>`).
-    expect(tools).toContain('["company", "task", "note", nid');
-    expect(server).toContain('"note"'); // enum + title advertise the verb
-    // kobo-140: comment/comments — threaded ask channel. comment maps to
-    // `comment <id> <text> [--reply-to cid]`. kobo-237: the resolve action is gone.
-    expect(tools).toContain('["company", "task", "comment", cid, input.text');
-    // kobo-263: structured clarity (tldr/ask/detail) rides to the CLI gate — mcp/cli parity.
-    expect(tools).toContain('argv.push("--tldr", input.tldr)');
-    expect(tools).toContain('argv.push("--ask", input.ask)');
-    expect(tools).toContain('["company", "task", "comments", needId("comments")');
-    expect(tools).not.toContain('"task", "resolve"'); // kobo-237: resolve action removed
-    expect(server).toContain('"comment"'); // enum + title advertise the verbs
-    expect(server).not.toContain('"resolve"'); // kobo-237: enum/title no longer advertise resolve
-    // kobo-147: pr forwards --repo. MCP has no CWD git remote, so without this the
-    // CLI stamps card.repo from the subprocess CWD (wrong repo). Pin that taskArgs
-    // emits --repo and the schema advertises repo for pr (not add-only).
-    expect(tools).toContain('argv.push("--repo", input.repo)');
-    expect(server).toContain("add / pr: repo");
-    // cli-reorg kobo-24: targets the canonical `maw company task`, NOT the
-    // `maw task` deprecation shim (so no "moved" notice leaks into MCP output).
-    expect(tools).toContain('["company", "task"');
-    expect(tools).not.toMatch(/\[\s*"task"\s*,/);
-    // kobo-35: archive accepts a per-card id (positional), not only the bulk --days sweep.
-    expect(tools).toContain('["company", "task", "archive", id');
-    // kobo-144: reviewer system — `hold` = the reviewer's brake (id + optional
-    // --reason), and `add` accepts a persistent per-card `--reviewer`. Both map to
-    // the canonical company surface + are advertised in the server enum/schema.
-    expect(tools).toContain('["company", "task", "hold", needId("hold")');
-    expect(tools).toContain('argv.push("--reviewer", input.reviewer)');
-    expect(server).toContain('"hold"'); // enum + title advertise the verb
-    // kobo-224: gated brake — input.gate appends --gate → approve lane (Tony's queue).
-    expect(tools).toContain('argv.push("--gate")');
-    expect(server).toContain("gate: z.boolean()"); // schema advertises the flag
-    expect(server).toContain("reviewer:"); // add: persistent per-card reviewer input
-    // kobo-146 C7: decompose materializes a plan (children[]) into cards+links; the
-    // plan rides --plan as JSON (runMaw is argv-only). Advertised in enum + schema.
-    expect(tools).toContain('["company", "task", "decompose", decId, "--plan", JSON.stringify(input.children)');
-    expect(server).toContain('"decompose"'); // enum + title advertise the verb
-    expect(server).toContain("children:"); // decompose: the plan's child cards input
   });
 
   // eq3-020: the maw_hey `target` describe must document every routing format the

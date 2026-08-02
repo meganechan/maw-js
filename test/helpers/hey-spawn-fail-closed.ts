@@ -29,9 +29,9 @@ mock.module(HEY_SPAWN_MODULE, () => ({
   spawnHeyProcess(): void {
     throw new Error(
       "kobo-405: a test attempted a REAL `maw hey` spawn via core/tasks/hey-spawn. " +
-        "notifyTaskComment/notifyReviewer/notifyCommentReply/notifyParentOfSubcardDone all " +
-        "accept an injectable `send` callback — pass one instead of relying on the module " +
-        "default when asserting delivery behavior.",
+        "Every caller of this seam (pingOnMerge/pingCollision/pingBypass, the room " +
+        "nudge, scheduler hooks) accepts an injectable `send` callback — pass one " +
+        "instead of relying on the module default when asserting delivery behavior.",
     );
   },
 }));

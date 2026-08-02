@@ -19,6 +19,16 @@ describe("plugin coverage gate (#2316)", () => {
     expect(result.ok).toBe(true);
   });
 
+  // kobo-358: retiring a plugin deletes its dir AND its boundary test, which the
+  // gate used to read as "changed vendor files, test missing" — unsatisfiable.
+  test("skips a retired plugin whose dir is gone, but not a live one missing its test", () => {
+    const retired = analyzeChangedFiles(["src/vendor/mpr-plugins/crew/spawn.ts"]);
+    const live = analyzeChangedFiles(["src/vendor/mpr-plugins/costs/impl.ts"]);
+
+    expect(retired.ok).toBe(true);
+    expect(live.ok).toBe(false); // costs/ still exists — the gate must still bite
+  });
+
   test("requires SDK boundary changes to update a standalone test or helper", () => {
     const stale = analyzeChangedFiles(["src/sdk/index.ts"]);
     const covered = analyzeChangedFiles(["src/sdk/index.ts", "test/isolated/helpers/plugin-standalone-boundary.ts"]);

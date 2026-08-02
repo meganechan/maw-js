@@ -1,5 +1,6 @@
 import { mkdirSync, existsSync, readdirSync, symlinkSync, cpSync, readFileSync, lstatSync, unlinkSync, realpathSync } from "fs";
-import { join } from "path";
+import { join, dirname, sep } from "path";
+import { homedir } from "os";
 import { info, warn } from "./verbosity";
 
 /** Allowlist: only http/https URLs may be used as plugin sources */
@@ -151,6 +152,59 @@ function healOrPruneBrokenSymlinks(pluginDir: string, bundledRoots: string[]): {
   return { healed, pruned };
 }
 
+/** `process.env.HOME ||` mirrors legacyMawPath() in core/xdg — os.homedir() is cached at startup. */
+function isInsideHome(dir: string): boolean {
+  try {
+    const home = realpathSync(process.env.HOME || homedir());
+    const target = realpathSync(dir);
+    return target === home || target.startsWith(home + sep);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Non-canonical checkouts may READ ~/.maw/plugins but must not MUTATE it.
+ *
+ * srcDir comes from `import.meta.dir`, i.e. whatever checkout happens to be
+ * executing. Running `bun src/cli.ts` from a throwaway git worktree once
+ * repointed all 135 ~/.maw/plugins symlinks at a /private/tmp path that
+ * vanished on cleanup.
+ *
+ * A linked worktree's `.git` is a FILE (a gitdir pointer); a real clone's is
+ * a DIRECTORY; an installed package (npm/tarball) has none. So worktree-shaped
+ * is the only thing we refuse on and everything else fails open — fresh
+ * installs from the canonical checkout keep working. Submodule checkouts are
+ * also `.git`-as-file and are refused for the same reason: not canonical.
+ *
+ * Scope: only the user's own long-lived store. Every default maw store
+ * (~/.maw/plugins, ~/.local/share/maw/plugins) hangs off the home dir, so a
+ * pluginDir outside it was redirected by the caller (MAW_DATA_DIR, tests,
+ * scratch installs) and is theirs to throw away — linking there is allowed
+ * from anywhere.
+ *
+ * @returns the offending root when mutation must be skipped, else undefined.
+ */
+function nonCanonicalRoot(pluginDir: string, srcDir: string): string | undefined {
+  if (!isInsideHome(pluginDir)) return undefined;
+
+  const root = dirname(srcDir);
+  const override = process.env.MAW_CANONICAL_ROOT;
+  if (override) {
+    // Escape hatch, but it must name the root actually running — declaring
+    // some *other* path canonical can't unlock this checkout.
+    try {
+      if (realpathSync(override) === realpathSync(root)) return undefined;
+    } catch {}
+  }
+  try {
+    if (!lstatSync(join(root, ".git")).isFile()) return undefined;
+  } catch {
+    return undefined; // no .git at all → installed package → fail open
+  }
+  return root;
+}
+
 /**
  * Auto-bootstrap plugins into pluginDir.
  *
@@ -171,6 +225,12 @@ function healOrPruneBrokenSymlinks(pluginDir: string, bundledRoots: string[]): {
  */
 export async function runBootstrap(pluginDir: string, srcDir: string): Promise<void> {
   mkdirSync(pluginDir, { recursive: true });
+
+  const foreignRoot = nonCanonicalRoot(pluginDir, srcDir);
+  if (foreignRoot) {
+    console.warn(`[maw] plugin bootstrap skipped: ${foreignRoot} is a linked worktree, not a canonical checkout — leaving ${pluginDir} untouched. Set MAW_CANONICAL_ROOT=${foreignRoot} to override.`);
+    return;
+  }
 
   // 0. #1015 — prune broken symlinks before anything else. After an update
   //    removes bundled plugins from src/commands/plugins/, their old symlinks

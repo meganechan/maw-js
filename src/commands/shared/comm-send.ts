@@ -1809,63 +1809,74 @@ export async function cmdSend(
         console.log(`  \x1b[33m⚠\x1b[0m submit needed ${verify.retriesNeeded} Enter retry — TUI may have been in scroll-mode`);
       }
     }
-    await runHook("after_send", { to: query, message: outboundMessage });
-    if (!config.node) throw new Error("config.node is required — set 'node' in maw.config.json");
-    logMessage(senderName, query, outboundMessage, "local");
-    await Bun.sleep(150);
-    let lastLine = "";
-    try { const content = await capture(target, 3); lastLine = content.split("\n").filter(l => l.trim()).pop() || ""; } catch {}
-    emitMessageFeed({
-      direction: "outbound",
-      state: "delivered",
-      channel: "hey",
-      route: "local",
-      from: senderIdentity.display,
-      to: query,
-      target,
-      text: outboundMessage,
-      lastLine,
-      signed: true,
-    }, config.port || 3456);
-    // kobo-596 (option A) — "delivered" claimed more than this code path can
-    // verify: it proves the keystrokes were successfully written into SOME
-    // pane's input box (sendKeys didn't throw) — never that the pane belongs
-    // to the right, live session, and never that a person read it. "landed"
-    // is the word that matches what's actually checked here; it still does
-    // NOT imply a human received or read the message, only that text reached
-    // a pane. (kobo-596 option C, immediately below) when pane resolution
-    // itself degraded — resolveOraclePane hit a tmux error and silently fell
-    // back to the raw, unresolved target — that fallback must be visible
-    // here, not just internally logged: the text may have landed in the
-    // WRONG pane (or a dead one) with nothing about "landed" catching that.
-    if (paneResolution.degraded) {
-      console.log(`\x1b[33m⚠ sent (pane resolution degraded)\x1b[0m → ${target} \x1b[90m— tmux pane lookup failed (${paneResolution.error}), sent to the raw target as a fallback; verify this reached the right pane\x1b[0m`);
-    } else if (opts.verbose) {
-      console.log(`\x1b[32mlanded\x1b[0m → ${target}: ${outboundMessage}`);
-    } else {
-      console.log(`\x1b[32mlanded\x1b[0m → ${target} (${outboundMessage.length} chars)`);
-    }
-    // kobo-368: the captured tail-line stays in BOTH modes — it's a small, already-
-    // truncated (cfgLimit) diagnostic snippet of what the RECEIVER'S pane now shows,
-    // not an echo of what was just sent; it was never the flagged token-waste.
-    if (lastLine) console.log(`\x1b[90m  ⤷ ${lastLine.slice(0, cfgLimit("messageTruncate"))}\x1b[0m`);
-    await runPluginEventHooks("transport:after_send", {
-      event: "transport:after_send",
-      route: "local",
-      target,
-      to: query,
-      from: senderIdentity.display,
-      result: {
-        ok: true,
-        state: "local",
+    // kobo-1813: send-keys above already succeeded — everything from here to
+    // return is post-send bookkeeping (hooks, log, feed emit, plugin hooks,
+    // mismatch warning), not delivery. None of it should be able to turn an
+    // already-successful send into a thrown error (the config.node throw
+    // below was one such accidental signal — config.node has zero
+    // correlation with whether the message actually landed). Any failure in
+    // this block is surfaced, never silent, but never escapes.
+    try {
+      await runHook("after_send", { to: query, message: outboundMessage });
+      if (!config.node) throw new Error("config.node is required — set 'node' in maw.config.json");
+      logMessage(senderName, query, outboundMessage, "local");
+      await Bun.sleep(150);
+      let lastLine = "";
+      try { const content = await capture(target, 3); lastLine = content.split("\n").filter(l => l.trim()).pop() || ""; } catch {}
+      emitMessageFeed({
+        direction: "outbound",
+        state: "delivered",
+        channel: "hey",
         route: "local",
-      },
-      via: "tmux",
-      message: outboundMessage,
-    });
-    // #1980: warn on silent misdelivery to a window that isn't the named oracle.
-    const mismatch = detectWindowMismatch(query, result.target, sessions);
-    if (mismatch) console.log(`  \x1b[33m⚠\x1b[0m ${mismatch}`);
+        from: senderIdentity.display,
+        to: query,
+        target,
+        text: outboundMessage,
+        lastLine,
+        signed: true,
+      }, config.port || 3456);
+      // kobo-596 (option A) — "delivered" claimed more than this code path can
+      // verify: it proves the keystrokes were successfully written into SOME
+      // pane's input box (sendKeys didn't throw) — never that the pane belongs
+      // to the right, live session, and never that a person read it. "landed"
+      // is the word that matches what's actually checked here; it still does
+      // NOT imply a human received or read the message, only that text reached
+      // a pane. (kobo-596 option C, immediately below) when pane resolution
+      // itself degraded — resolveOraclePane hit a tmux error and silently fell
+      // back to the raw, unresolved target — that fallback must be visible
+      // here, not just internally logged: the text may have landed in the
+      // WRONG pane (or a dead one) with nothing about "landed" catching that.
+      if (paneResolution.degraded) {
+        console.log(`\x1b[33m⚠ sent (pane resolution degraded)\x1b[0m → ${target} \x1b[90m— tmux pane lookup failed (${paneResolution.error}), sent to the raw target as a fallback; verify this reached the right pane\x1b[0m`);
+      } else if (opts.verbose) {
+        console.log(`\x1b[32mlanded\x1b[0m → ${target}: ${outboundMessage}`);
+      } else {
+        console.log(`\x1b[32mlanded\x1b[0m → ${target} (${outboundMessage.length} chars)`);
+      }
+      // kobo-368: the captured tail-line stays in BOTH modes — it's a small, already-
+      // truncated (cfgLimit) diagnostic snippet of what the RECEIVER'S pane now shows,
+      // not an echo of what was just sent; it was never the flagged token-waste.
+      if (lastLine) console.log(`\x1b[90m  ⤷ ${lastLine.slice(0, cfgLimit("messageTruncate"))}\x1b[0m`);
+      await runPluginEventHooks("transport:after_send", {
+        event: "transport:after_send",
+        route: "local",
+        target,
+        to: query,
+        from: senderIdentity.display,
+        result: {
+          ok: true,
+          state: "local",
+          route: "local",
+        },
+        via: "tmux",
+        message: outboundMessage,
+      });
+      // #1980: warn on silent misdelivery to a window that isn't the named oracle.
+      const mismatch = detectWindowMismatch(query, result.target, sessions);
+      if (mismatch) console.log(`  \x1b[33m⚠\x1b[0m ${mismatch}`);
+    } catch (err) {
+      console.error(`  \x1b[31m✗\x1b[0m post-send bookkeeping failed (message already sent) — ${err instanceof Error ? err.message : String(err)}`);
+    }
     return;
   }
 

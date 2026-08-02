@@ -38,8 +38,8 @@ import { hostExec } from "maw-js/sdk";
 import { loadConfig } from "maw-js/config";
 import { loadCompany } from "../company/company-helpers";
 import { scopeOfOracle } from "../../../core/worklog/company-scope";
-import { teardownCrewWindows } from "../crew/teardown";
-import { BRAIN_MODEL } from "../crew/spawn";
+import { teardownCrewWindows } from "../pane-lifecycle/teardown";
+import { BRAIN_MODEL } from "../pane-lifecycle/spawn";
 
 // overridable for tests only (HEAD_SPAWN_POLL_MS) — production always polls at
 // 2s; read at call-time (not module load) so a test can set it in beforeEach.

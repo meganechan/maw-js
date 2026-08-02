@@ -51,7 +51,7 @@ describe("head command plugin standalone boundary", () => {
   // head/spawn.ts imports it rather than duplicating the string (4 sites became 1).
   test("spawn.ts: head cell = lead + conductor + reviewer, both spawned roles BRAIN_MODEL, NO worker window (head ≠ crew)", () => {
     const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/head/spawn.ts"), "utf8");
-    expect(spawnSrc).toContain('import { BRAIN_MODEL } from "../crew/spawn"');
+    expect(spawnSrc).toContain('import { BRAIN_MODEL } from "../pane-lifecycle/spawn"');
     expect(spawnSrc).toContain("--model ${BRAIN_MODEL}");
     expect(spawnSrc).not.toContain("claude-opus-5"); // never re-duplicated as a literal here
     expect(spawnSrc).not.toContain("hostExec(`tmux new-window"); // no worker window ever EXECUTED (not just mentioned in doc prose)
@@ -101,7 +101,7 @@ describe("head command plugin standalone boundary", () => {
 
   test("spawn.ts reuses crew/teardown.ts's teardownCrewWindows AS-IS (no copy, no reimplementation)", () => {
     const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/head/spawn.ts"), "utf8");
-    expect(spawnSrc).toContain('from "../crew/teardown"');
+    expect(spawnSrc).toContain('from "../pane-lifecycle/teardown"');
     expect(spawnSrc).toContain("teardownCrewWindows");
   });
 

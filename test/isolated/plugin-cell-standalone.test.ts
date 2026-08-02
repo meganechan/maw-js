@@ -8,7 +8,7 @@ describe("cell command plugin standalone boundary", () => {
     const imports = expectStandalonePluginBoundary({
       plugin: "cell",
       allowMawJs: [/^maw-js\/config$/],
-      allowRelative: [/^(?:\.\.\/){3}core\/worklog\//, /^\.\.\/crew\/teardown$/, /^\.\.\/crew\/spawn$/],
+      allowRelative: [/^(?:\.\.\/){3}core\/worklog\//, /^\.\.\/pane-lifecycle\/teardown$/, /^\.\.\/pane-lifecycle\/spawn$/],
     }).map((record) => record.spec);
 
     expect(imports).toContain("maw-js/sdk");

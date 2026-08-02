@@ -77,8 +77,8 @@ mock.module(join(import.meta.dir, "../../src/core/worklog/company-scope"), () =>
   scopeOfOracle: () => ({ company: "kobo", dept: "core", lead: "patchwork" }),
 }));
 
-const { crewSpawn, DEFAULT_WORKER_MODEL, FALLBACK_WORKER_MODEL } = await import("../../src/vendor/mpr-plugins/crew/spawn");
-const { isCrewOwnedPane, teardownCrewWindows } = await import("../../src/vendor/mpr-plugins/crew/teardown");
+const { crewSpawn, DEFAULT_WORKER_MODEL, FALLBACK_WORKER_MODEL } = await import("../../src/vendor/mpr-plugins/pane-lifecycle/spawn");
+const { isCrewOwnedPane, teardownCrewWindows } = await import("../../src/vendor/mpr-plugins/pane-lifecycle/teardown");
 
 let homeDir: string;
 let stateDir: string;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expectStandalonePluginBoundary } from "./helpers/plugin-standalone-boundary";
 
@@ -12,7 +12,7 @@ import { expectStandalonePluginBoundary } from "./helpers/plugin-standalone-boun
 describe("crew command plugin standalone boundary", () => {
   test("crew keeps explicit import boundaries (SDK + maw-js/config + core/worklog/company-scope)", () => {
     const imports = expectStandalonePluginBoundary({
-      plugin: "crew",
+      plugin: "pane-lifecycle",
       allowMawJs: [/^maw-js\/config$/],
       allowRelative: [/^(?:\.\.\/){3}core\/worklog\//],
     }).map((record) => record.spec);
@@ -21,34 +21,37 @@ describe("crew command plugin standalone boundary", () => {
     expect(imports).toContain("maw-js/config");
   });
 
-  test("module surface only — no top-level `cli.command` (mirrors home/worklog/task, cli-reorg pattern)", () => {
-    const pluginSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/crew/plugin.ts"), "utf8");
-    expect(pluginSrc).not.toContain("cli:");
-    expect(pluginSrc).toContain('"exports": ["runCrew"]');
+  // phase 1: dropping the manifest de-registers the plugin name `crew`, which is
+  // the clash with the third-party maw-crew. The module keeps working via direct
+  // sibling import; only the registry entry is gone.
+  test("no plugin manifest — the `crew` plugin name is de-registered", () => {
+    const dir = join(import.meta.dir, "../../src/vendor/mpr-plugins/pane-lifecycle");
+    expect(existsSync(join(dir, "plugin.ts"))).toBe(false);
+    expect(existsSync(join(dir, "plugin.json"))).toBe(false);
   });
 
   test("index.ts exports runCrew(args, emit) — the shared runner contract (home/task pattern)", () => {
-    const indexSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/crew/index.ts"), "utf8");
+    const indexSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/pane-lifecycle/index.ts"), "utf8");
     expect(indexSrc).toContain("export async function runCrew");
     expect(indexSrc).toContain('subcmd === "spawn"');
     expect(indexSrc).toContain("crewSpawn");
   });
 
   test("spawn.ts: worker defaults to the literal claude-sonnet-5 (kobo-358 Tony directive — not normalized)", () => {
-    const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/crew/spawn.ts"), "utf8");
+    const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/pane-lifecycle/spawn.ts"), "utf8");
     expect(spawnSrc).toContain('DEFAULT_WORKER_MODEL = "claude-sonnet-5"');
     expect(spawnSrc).toContain('FALLBACK_WORKER_MODEL = "sonnet"');
   });
 
   test("spawn.ts: self-heal poll-verify + kill-orphan-then-retry present (ported from kobo-352)", () => {
-    const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/crew/spawn.ts"), "utf8");
+    const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/pane-lifecycle/spawn.ts"), "utf8");
     expect(spawnSrc).toContain("pollBoot");
     expect(spawnSrc).toContain("tmux kill-window");
     expect(spawnSrc).toMatch(/spawnWorkerSelfHeal/);
   });
 
   test("spawn.ts: double-fail notify resolves a session:window.pane addr, not a bare pane-id (kobo-354/355 lesson)", () => {
-    const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/crew/spawn.ts"), "utf8");
+    const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/pane-lifecycle/spawn.ts"), "utf8");
     expect(spawnSrc).toContain("#{session_name}:#{window_index}.#{pane_index}");
     expect(spawnSrc).toContain("frontAddr");
   });
@@ -60,7 +63,7 @@ describe("crew command plugin standalone boundary", () => {
   // opening a 3rd column. -p 50 explicit on both splits (not tmux's implicit
   // default) so the ratio can't silently drift on a future edit.
   test("spawn.ts: W0 layout — conductor splits -h off front, reviewer splits -v off CONDUCTOR (not front), both -p 50 explicit", () => {
-    const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/crew/spawn.ts"), "utf8");
+    const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/pane-lifecycle/spawn.ts"), "utf8");
     expect(spawnSrc).toContain("split-window -h -p 50 -t ${shellArg(front)}");
     expect(spawnSrc).toContain("split-window -v -p 50 -t ${shellArg(conductor)}");
     // reviewer must NOT split off front (that's the old 3-column bug)
@@ -74,7 +77,7 @@ describe("crew command plugin standalone boundary", () => {
   // kobo-389 — the literal model id was still duplicated at 4 sites (this file's 2 +
   // head/spawn.ts's 2); hoisted to a single `BRAIN_MODEL` const, exported from here.
   test("spawn.ts: crew conductor + reviewer spawn with BRAIN_MODEL (W0-brains, kobo-381/382/389)", () => {
-    const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/crew/spawn.ts"), "utf8");
+    const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/pane-lifecycle/spawn.ts"), "utf8");
     expect(spawnSrc).toContain('export const BRAIN_MODEL = "claude-opus-5"');
     expect(spawnSrc).toContain('claude --model ${BRAIN_MODEL} --dangerously-skip-permissions --append-system-prompt "$(cat ${shellArg(join(stateDir, "conductor-contract.md"))})"');
     expect(spawnSrc).toContain('claude --model ${BRAIN_MODEL} --settings ${shellArg(settingsPath)} --dangerously-skip-permissions --append-system-prompt "$(cat ${shellArg(join(stateDir, "reviewer-contract.md"))})"');
@@ -85,13 +88,13 @@ describe("crew command plugin standalone boundary", () => {
   });
 
   test("teardown.ts: session-scoped (list-panes -s), never server-wide -a — protects other oracles' live crew cells", () => {
-    const teardownSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/crew/teardown.ts"), "utf8");
+    const teardownSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/pane-lifecycle/teardown.ts"), "utf8");
     expect(teardownSrc).toContain("tmux list-panes -s -t");
     expect(teardownSrc).not.toMatch(/tmux list-panes -a\b/);
   });
 
   test("teardown.ts: front/coord role is never kill-eligible; conductor/worker/reviewer + crew-workers window are", () => {
-    const teardownSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/crew/teardown.ts"), "utf8");
+    const teardownSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/pane-lifecycle/teardown.ts"), "utf8");
     expect(teardownSrc).not.toContain('"🧭"');
     expect(teardownSrc).toContain('"🎼"');
     expect(teardownSrc).toContain('"⚒"');
@@ -105,7 +108,7 @@ describe("crew command plugin standalone boundary", () => {
   // fires BEFORE the resolve, not just as an incidental empty-string check
   // somewhere downstream.
   test("teardown.ts: refuses fail-closed on an empty protectPaneId, BEFORE any tmux resolve call", () => {
-    const teardownSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/crew/teardown.ts"), "utf8");
+    const teardownSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/pane-lifecycle/teardown.ts"), "utf8");
     const guardIdx = teardownSrc.indexOf("empty protectPaneId");
     const resolveIdx = teardownSrc.indexOf("hostExec(`tmux display-message"); // the actual call, not the explanatory comment prose
     expect(guardIdx).toBeGreaterThan(-1);
@@ -119,10 +122,10 @@ describe("crew command plugin standalone boundary", () => {
   // module-surface contract; behavioral coverage (populated fields, exact emit-line shape)
   // lives in plugin-crew-spawn.test.ts.
   test("index.ts: runCrew's return type is CrewSpawnResult, not the narrower { ok, error } (kobo-384)", () => {
-    const indexSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/crew/index.ts"), "utf8");
+    const indexSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/pane-lifecycle/index.ts"), "utf8");
     expect(indexSrc).toContain('import { crewSpawn, type CrewSpawnResult } from "./spawn"');
     expect(indexSrc).toContain("Promise<CrewSpawnResult>");
-    const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/crew/spawn.ts"), "utf8");
+    const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/pane-lifecycle/spawn.ts"), "utf8");
     expect(spawnSrc).toContain("export interface CrewSpawnResult");
     expect(spawnSrc).toContain("front?: string");
     expect(spawnSrc).toContain("workerModel?: string");
@@ -133,7 +136,7 @@ describe("crew command plugin standalone boundary", () => {
       join(import.meta.dir, "../../src/vendor/mpr-plugins/company/index.ts"),
       "utf8",
     );
-    expect(companyIndexSrc).toContain('from "../crew/index"');
+    expect(companyIndexSrc).toContain('from "../pane-lifecycle/index"');
     expect(companyIndexSrc).toContain("runCrew");
     expect(companyIndexSrc).toContain('=== "crew"');
   });

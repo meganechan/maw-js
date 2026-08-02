@@ -17,8 +17,8 @@ import { checkBusyGuard, cmdWake, findWindow, hostExec, listSessions, type Sessi
 import { loadConfig } from "maw-js/config";
 import { loadCompany, type Company } from "../company/company-helpers";
 import { scopeOfOracle } from "../../../core/worklog/company-scope";
-import { teardownCrewWindows } from "../crew/teardown";
-import { BRAIN_MODEL, DEFAULT_WORKER_MODEL } from "../crew/spawn";
+import { teardownCrewWindows } from "../pane-lifecycle/teardown";
+import { BRAIN_MODEL, DEFAULT_WORKER_MODEL } from "../pane-lifecycle/spawn";
 
 const CELL_WORKERS_WINDOW = "cell-workers";
 const DEFAULT_STATE_DIR = "ψ/active/cell";

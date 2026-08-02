@@ -22,7 +22,7 @@ import {
 // imports (not core/* reaches), so outside the boundary guard.
 import { runHome } from "../home/index";
 import { runWorklog } from "../watch/index";
-import { runCrew } from "../crew/index";
+import { runCrew } from "../pane-lifecycle/index";
 import { runHead } from "../head/index";
 import { runCell } from "../cell/index";
 import { runCompanyUp, runCompanyDown } from "./company-fleet";

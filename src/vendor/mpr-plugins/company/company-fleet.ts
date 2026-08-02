@@ -48,7 +48,7 @@
  */
 import { hostExec, listSessions, findWindow, checkBusyGuard, cmdWake, type Session } from "maw-js/sdk";
 import { loadCompany, type Company } from "./company-helpers";
-import { teardownCrewWindows } from "../crew/teardown";
+import { teardownCrewWindows } from "../pane-lifecycle/teardown";
 
 interface RosterMember {
   oracle: string;

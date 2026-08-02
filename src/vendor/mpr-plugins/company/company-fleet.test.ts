@@ -10,7 +10,7 @@ import { join } from "path";
 import { companyUp, companyDown, runCompanyUp, runCompanyDown, type CompanyFleetDeps } from "./company-fleet";
 import { _setCompaniesDir, saveCompany, COMPANIES_DIR } from "./company-helpers";
 import type { Session } from "maw-js/sdk";
-import { teardownCrewWindows, type TeardownResult } from "../crew/teardown";
+import { teardownCrewWindows, type TeardownResult } from "../pane-lifecycle/teardown";
 
 const origCompaniesDir = COMPANIES_DIR;
 let dir: string;

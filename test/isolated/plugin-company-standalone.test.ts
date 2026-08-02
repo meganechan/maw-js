@@ -82,7 +82,7 @@ describe("company command plugin standalone boundary", () => {
       join(import.meta.dir, "../../src/vendor/mpr-plugins/company/index.ts"),
       "utf8",
     );
-    expect(indexSrc).toContain('from "../crew/index"');
+    expect(indexSrc).toContain('from "../pane-lifecycle/index"');
     expect(indexSrc).toContain("runCrew");
     expect(indexSrc).toContain('=== "crew"');
     expect(indexSrc).toContain("|crew|"); // usage string mentions the new verb
@@ -137,7 +137,7 @@ describe("company command plugin standalone boundary", () => {
       join(import.meta.dir, "../../src/vendor/mpr-plugins/company/company-fleet.ts"),
       "utf8",
     );
-    expect(fleetSrc).toContain('from "../crew/teardown"'); // reuses kobo-358 AS-IS, doesn't re-port it
+    expect(fleetSrc).toContain('from "../pane-lifecycle/teardown"'); // reuses kobo-358 AS-IS, doesn't re-port it
     expect(fleetSrc).toContain("cmdWake"); // session-tier cold-start (empirically verified, eq3 2-tier ruling)
     expect(fleetSrc).toContain("maw company head spawn"); // kobo-366: manager repairs via the head-spawn verb
     expect(fleetSrc).toContain("maw company crew spawn"); // crew-front repairs via the crew-spawn verb

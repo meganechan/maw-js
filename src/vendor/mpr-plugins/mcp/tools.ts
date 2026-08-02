@@ -104,18 +104,6 @@ export function deptArgs(input: DeptInput): string[] {
   }
 }
 
-/**
- * Map a task-board tool call to `maw company task <verb> …` argv — 1:1 with the
- * CLI, no new behavior. `--company`/`--from` apply to every verb; the rest are
- * per-action. `--from` is optional: when the `maw mcp` subprocess spawns
- * `maw company task`, CLAUDE_AGENT_NAME is inherited so the actor already
- * resolves; `from` only overrides it (tests / explicit sender).
- *
- * Targets the canonical `maw company task` (cli-reorg kobo-24) — NOT the
- * `maw task` deprecation shim, so no "moved" notice leaks into MCP output.
- */
-
-
 // ── spawn-and-collect ───────────────────────────────────────────────────────
 
 export interface RunResult {

@@ -1,12 +1,19 @@
 /**
- * Shared crew-teardown helper (kobo-358) — narrow scope by design:
+ * Shared agent-pane helpers — pane teardown + the model-tier constants used by
+ * the cell spawner.
+ *
+ * Relocated from the retired `crew` plugin (kobo-358). Crew and head were both
+ * retired along with `maw company up/down`; only the cell topology is in use.
+ * These helpers outlived all of them — cell/spawn.ts depends on all three
+ * exports — so they live here in core rather than in a deleted plugin.
+ *
+ * Teardown scope is narrow by design:
  *   (1) predicate "is this pane crew-owned + safe-to-kill?"
  *   (2) guarded kill.
  *
  * Ported from kobo-343 /teardown SAFETY INVARIANTS (that skill is prose-only —
  * no bash helper exists there, so nothing to literally import; this module
- * re-implements the same invariants for `maw company crew spawn`'s pre-spawn
- * idempotency step):
+ * re-implements the same invariants for a spawner's pre-spawn idempotency step):
  *   - crew-tagged (conductor/worker/worker-N/reviewer @role) OR crew-workers
  *     window ONLY — nothing else is a kill candidate.
  *   - protect the invoker pane (front is NEVER crew-spawned, never killed here)
@@ -18,10 +25,17 @@
  *     guess; any pane whose role/window doesn't match a known crew pattern is
  *     left alone (default-deny, not default-allow).
  *
- * do NOT rewrite /teardown to adopt this helper in kobo-358 — that's a
- * separate follow-up (eq3 scope-out ruling).
+ * do NOT rewrite /teardown to adopt this helper — that's a separate follow-up
+ * (eq3 scope-out ruling).
  */
 import { hostExec } from "maw-js/sdk";
+
+// kobo-358 Tony directive (post-cutoff model, DO NOT normalize/correct to a
+// pre-cutoff string): default the worker to claude-sonnet-5 verbatim.
+export const DEFAULT_WORKER_MODEL = "claude-sonnet-5";
+// kobo-389: single source for the brain tier (conductor/reviewer, both crew and head) —
+// the literal id, not the `opus` alias (kobo-382: `opus` resolves to Opus 4.8, not 5).
+export const BRAIN_MODEL = "claude-opus-5";
 
 // worker / worker-N / conductor / reviewer role tags — NOT "🧭 coord" (front is
 // the invoker, never crew-spawned, never a kill candidate).

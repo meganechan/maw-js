@@ -803,7 +803,11 @@ describe("wake-cmd thirteenth-pass isolated coverage", () => {
     );
 
     expect(result).toBe("54-neo:neo-oracle");
+    // `respawnCalls` captures every tmux.run. kobo-782 added the `@oracle_pane`
+    // identity scan that decides whether this window needs creating at all; it
+    // runs before the respawn and goes through this same mocked runner.
     expect(respawnCalls).toEqual([
+      ["list-panes", "-a", "-F", "#{pane_id}|||#{session_name}|||#{window_index}|||#{window_name}|||#{@oracle_pane}"],
       ["respawn-pane", "-k", "-t", "54-neo:neo-oracle", `cd ${repoPath} && claude --agent neo-oracle`],
     ]);
     expect(sentText).toEqual([]);

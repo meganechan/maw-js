@@ -71,3 +71,107 @@ export async function stampPaneIdentity(
     return false;
   }
 }
+
+/** A pane that carries an `@oracle_pane` identity, plus where it lives. */
+export interface IdentifiedPane {
+  /** tmux pane id (`%42`) — a valid send-keys/select-window target on its own. */
+  paneId: string;
+  session: string;
+  windowIndex: string;
+  windowName: string;
+  oracle: string;
+  role: string;
+}
+
+/**
+ * Reverse of `paneIdentity`. Blank option (the pane maw never birthed), or a
+ * value missing either half, reads as "unknown" — null, never a guess.
+ */
+export function parsePaneIdentity(value: string | null | undefined): { oracle: string; role: string } | null {
+  const parts = (value ?? "").trim().split(":");
+  if (parts.length !== 2) return null;
+  const [oracle = "", role = ""] = parts;
+  return oracle && role ? { oracle, role } : null;
+}
+
+const SCAN_SEP = "|||";
+const SCAN_FORMAT =
+  `#{pane_id}${SCAN_SEP}#{session_name}${SCAN_SEP}#{window_index}${SCAN_SEP}#{window_name}${SCAN_SEP}#{${ORACLE_PANE_OPTION}}`;
+
+/**
+ * Every identity-carrying pane on the tmux SERVER (`list-panes -a`), not just one
+ * session (kobo-782). The whole point of asking identity instead of a window name
+ * is that the oracle may not be where the name says — scoping the scan to the
+ * session we already guessed would reintroduce the guess.
+ *
+ * `run` is injected (`Tmux#run` / sdk `tmux.run` shape) to keep this module free
+ * of the sdk barrel. tmux errors → empty list: "cannot see any pane" must read as
+ * no evidence, which leaves callers on their legacy path.
+ */
+export async function scanIdentifiedPanes(
+  run: (...args: string[]) => Promise<string>,
+): Promise<IdentifiedPane[]> {
+  let raw = "";
+  try {
+    raw = await run("list-panes", "-a", "-F", SCAN_FORMAT);
+  } catch {
+    return [];
+  }
+  const panes: IdentifiedPane[] = [];
+  for (const line of raw.split("\n")) {
+    const [paneId = "", session = "", windowIndex = "", windowName = "", identity = ""] = line.trim().split(SCAN_SEP);
+    const parsed = parsePaneIdentity(identity);
+    if (!paneId || !parsed) continue;
+    panes.push({ paneId, session, windowIndex, windowName, ...parsed });
+  }
+  return panes;
+}
+
+/** `%42` → 42, for ordering. Unparseable ids sort last rather than first. */
+function paneIdNum(paneId: string): number {
+  const n = Number(paneId.replace(/^%/, ""));
+  return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * The oracle's panes, and which one is "the" pane for `role`.
+ *
+ * Two panes CAN claim the same identity (a stamp landed on a newly adopted pane
+ * while the old one still carried its own). Both look equally valid, so the
+ * winner is a STATED rule rather than tmux's listing order: LOWEST PANE ID = the
+ * oldest pane = the one the oracle has been living in (tmux hands out `%N`
+ * monotonically). This is the same rule cell down/spawn's `findHeadPane` uses
+ * (kobo-775 / PR #432) — mirrored rather than imported because that helper is
+ * private to the cell plugin, which must stay out of this module's graph. If the
+ * two ever disagree, they are one rule with two copies: fix both.
+ *
+ * `role` omitted → any role, which is the presence question ("does this oracle
+ * live anywhere?") as opposed to the delivery question ("which pane is its head?").
+ */
+export function pickIdentifiedPane(
+  panes: IdentifiedPane[],
+  oracle: string,
+  role?: PaneRole,
+): { pane?: IdentifiedPane; duplicates: IdentifiedPane[] } {
+  const claimants = panes
+    .filter((p) => p.oracle === oracle && (!role || p.role === role))
+    .sort((a, b) => paneIdNum(a.paneId) - paneIdNum(b.paneId) || a.paneId.localeCompare(b.paneId));
+  return { pane: claimants[0], duplicates: claimants.slice(1) };
+}
+
+/**
+ * kobo-782 — guidance, never an action. Duplicate heads are LIVE panes with a
+ * live agent in them; killing one or clearing its stamp automatically would
+ * destroy work to tidy a label. Name every claimant and hand the operator the
+ * exact clear command for the losers.
+ */
+export function duplicateIdentityWarning(
+  oracle: string,
+  role: PaneRole,
+  winner: IdentifiedPane,
+  duplicates: IdentifiedPane[],
+): string {
+  const all = [winner, ...duplicates];
+  const clears = duplicates.map((p) => `tmux set-option -pu -t ${p.paneId} ${ORACLE_PANE_OPTION}`).join("; ");
+  return `⚠ ${oracle}: ${all.length} panes claim ${ORACLE_PANE_OPTION}=${oracle}:${role} — ${all.map((p) => `${p.paneId} (${p.session}:${p.windowName})`).join(", ")}; using ${winner.paneId} (lowest pane id = oldest). Clear the stale one(s) with: ${clears}`;
+}

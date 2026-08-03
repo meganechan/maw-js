@@ -11,7 +11,13 @@ import { prefixCommandWithSpawnSessionEnv } from "../../core/fleet/parent-sessio
 import { normalizeTarget } from "../../core/matcher/normalize-target";
 import { assertValidOracleName } from "../../core/fleet/validate";
 import { canonicalSessionName } from "../../core/fleet/session-name";
-import { stampPaneIdentity } from "../../core/pane-identity";
+import {
+  duplicateIdentityWarning,
+  pickIdentifiedPane,
+  scanIdentifiedPanes,
+  stampPaneIdentity,
+  type IdentifiedPane,
+} from "../../core/pane-identity";
 import { resolveOracle, findWorktrees, findReusableWorktreeBySlug, getSessionMap, resolveFleetSession, detectSession, setSessionEnv, sanitizeBranchName } from "./wake-resolve";
 import { stripOracleRepoSuffix, bringCwdMetadata, deriveOracleFromCwd } from "./wake-cwd";
 // #2569 — re-export so the wake barrel surface still exposes deriveOracleFromCwd.
@@ -1098,6 +1104,29 @@ function findExistingWakeWindow(windowNames: Iterable<string>, oracle: string, w
   return findExistingWakeWindowEntry([...windowNames].map(name => ({ name })), oracle, windowName)?.name;
 }
 
+/**
+ * kobo-782 — "does this oracle already have a pane?" answered by `@oracle_pane`
+ * identity instead of by a window NAME.
+ *
+ * Identity is the authority; the window name is a fallback hint only. An oracle
+ * with NO stamped pane anywhere (the fleet is mid-backfill, and every pane older
+ * than kobo-759 has none) returns undefined and the caller's historical
+ * name-based lookup answers exactly as before.
+ *
+ * Presence and delivery are two questions: the oracle LIVES if it has any pane
+ * at all, but a message goes to its HEAD. When it has panes and none is head,
+ * the lowest-id pane it does have still blocks creation — minting a second head
+ * beside a live pane is the failure this exists to stop.
+ */
+async function resolveIdentityHeadPane(oracle: string): Promise<IdentifiedPane | undefined> {
+  const panes = await scanIdentifiedPanes((...args) => tmux.run(...args));
+  const head = pickIdentifiedPane(panes, oracle, "head");
+  if (head.pane && head.duplicates.length > 0) {
+    console.log(`\x1b[33m${duplicateIdentityWarning(oracle, "head", head.pane, head.duplicates)}\x1b[0m`);
+  }
+  return head.pane ?? pickIdentifiedPane(panes, oracle).pane;
+}
+
 export function shouldMarkWakeInboxRead(opts: Pick<WakeOptions, "dryRun" | "listWt">, env: NodeJS.ProcessEnv = process.env): boolean {
   return env.MAW_ATTACH_FOLLOWS === "1" && !opts.dryRun && !opts.listWt;
 }
@@ -1724,9 +1753,22 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
     }
   };
 
-  const existingWindow = findExistingWakeWindow(knownWindows, oracle, windowName);
+  // kobo-782 — the ONE gate in front of `tmux.newWindow` for the oracle's own
+  // window. Ask identity BEFORE the window name: a cell-up oracle's head window
+  // is renamed `cell-head`, so the name lookup missed it on every dispatch and
+  // minted a fresh `<oracle>-oracle` window that stampWakePane then stamped
+  // `{oracle}:head` — a NEW duplicate head per dispatch, amplifying forever.
+  // Only for the oracle's main window: a `--task`/`--wt` window is a different
+  // pane on purpose and keeps the historical name lookup.
+  const identityHead = windowName === mainWindowName
+    ? await resolveIdentityHeadPane(oracle)
+    : undefined;
+  const existingWindow = identityHead?.windowName ?? findExistingWakeWindow(knownWindows, oracle, windowName);
   if (existingWindow) {
-      const target = `${session}:${existingWindow}`;
+      // A pane id is an exact tmux target; `session:window` is not — the head
+      // window of a live cell holds worker/reviewer panes too, and the bare
+      // window form lands on whichever was last active.
+      const target = identityHead?.paneId ?? `${session}:${existingWindow}`;
       registerWorktreeWindow(existingWindow);
       if (opts.prompt) {
         await tmux.selectWindow(target);

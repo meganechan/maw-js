@@ -46,8 +46,23 @@ describe("cell command plugin standalone boundary", () => {
     expect(spawnSrc).toContain("maw company cell self-spawn");
     expect(spawnSrc).toContain("headLaunchCommand(company)");
     expect(spawnSrc).toContain("head-contract.md");
-    expect(spawnSrc).toContain("exec claude");
     expect(spawnSrc).toContain("CREW_ROLE=head");
+    // kobo-765 — the head launch line is a guarded shell chain, no longer `exec
+    // claude`: `exec` replaced the pane's shell, so a boot failure killed the pane
+    // outright and no fallback could ever land. B5: it will not start head at all
+    // unless the contract file is non-empty. B7: BRAIN_MODEL → DEFAULT_WORKER_MODEL
+    // in-pane. (Behaviour — including the expanded system prompt — is proven by
+    // RUNNING the line in test/isolated/cell-spawn-state-dir.test.ts.)
+    expect(spawnSrc).toContain("if test -s ${shellArg(contract)}; then");
+    expect(spawnSrc).toContain("${claude(BRAIN_MODEL)} || ${claude(DEFAULT_WORKER_MODEL)}");
+    // kobo-765/B5 — ONE derivation point for the state dir: the pane's inherited
+    // env is never read, in either the writer or the launch line.
+    expect(spawnSrc).toContain("const stateDir = DEFAULT_STATE_DIR;");
+    expect(spawnSrc).not.toContain("process.env.CREW_STATE_DIR");
+    // kobo-765/B7 — a landed injection is not a repair until head boots
+    expect(spawnSrc).toContain("if (await pollHeadReady(injectTarget)) { repaired++; continue; }");
+    expect(spawnSrc).toContain("head boot FAILED");
+    expect(spawnSrc).toContain("${bootFailed} head-boot-failed");
     expect(spawnSrc).toContain('tmux set-option -p -t ${shellArg(head)} @role ${shellArg("👤 head")}');
     expect(spawnSrc).toContain('tmux select-pane -t ${shellArg(head)} -T ${shellArg("👤 head")}');
     expect(spawnSrc).toContain('tmux rename-window -t ${shellArg(head)} ${shellArg("cell-head")}');

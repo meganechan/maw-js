@@ -78,16 +78,22 @@ Do not run `self-spawn` by hand unless debugging a single target pane.
 Public company spawn is complete when the command prints:
 
 ```text
-✓ cell spawn <company>: <ready> ready, <repaired> repaired, <refused> refused/failed (<N> oracles)
+✓ cell spawn <company>: <ready> ready, <repaired> repaired, <boot-failed> head-boot-failed, <refused> refused/failed (<N> oracles)
 ```
 
-Each target pane's local self-spawn prints before the head pane execs Claude:
+`repaired` means the head pane came up. A pane where the repair line ran but no
+Claude prompt appeared counts as **head-boot-failed**, never repaired — that pane
+is named in a `⚠ head boot FAILED` line above the summary; go look at it.
+
+Each target pane's local self-spawn prints before the head pane starts Claude:
 
 ```text
 ✓ cell spawned — head=<pane> worker=<pane> (<model>) reviewer=<pane>
 ```
 
-After that, the head pane should be a live Claude process, not a shell.
+After that, the head pane should be a live Claude process, not a shell. If head
+refuses to start, the pane says so instead: an empty/missing
+`ψ/active/cell/head-contract.md` never boots a head with a blank system prompt.
 
 If it reports a missing contract asset, run:
 

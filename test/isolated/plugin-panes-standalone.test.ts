@@ -110,11 +110,14 @@ describe("panes plugin standalone boundary", () => {
     expect(result.output).toContain("maw panes");
   });
 
-  test("default command lists current panes without resolving sessions", async () => {
+  test("default command lists the CALLER's panes without resolving sessions", async () => {
+    // tmux-selfcheck-footgun: the default used to emit a bare `list-panes` (empty
+    // target flag) — the ATTACHED CLIENT's current window, not the caller's.
+    process.env.TMUX_PANE = "%me";
     const { result, output } = await invokeCli([]);
 
     expect(result.ok).toBe(true);
-    expect(hostExecCalls).toEqual(["tmux-test list-panes  -F '#{session_name}:#{window_index}.#{pane_index}|||#{pane_width}x#{pane_height}|||#{pane_current_command}|||#{pane_title}'"]);
+    expect(hostExecCalls).toEqual(["tmux-test list-panes -t '%me' -F '#{session_name}:#{window_index}.#{pane_index}|||#{pane_width}x#{pane_height}|||#{pane_current_command}|||#{pane_title}'"]);
     expect(output).toContain("TARGET");
     expect(output).toContain("alpha:0.1");
     expect(output).toContain("codex");

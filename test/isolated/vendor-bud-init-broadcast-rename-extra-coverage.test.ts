@@ -105,7 +105,8 @@ mock.module("maw-js/sdk", () => ({
   tmux: {
     run: async (...args: string[]) => {
       tmuxRunCalls.push(args);
-      if (args[0] === "display-message" && args[1] === "-p" && args[2] === "#{window_name}") {
+      // tmux-selfcheck-footgun: the sender probe now passes -t $TMUX_PANE
+      if (args[0] === "display-message" && args.includes("#{window_name}")) {
         if (tmuxDisplayError) throw tmuxDisplayError;
         return tmuxCurrentWindow;
       }
@@ -208,6 +209,10 @@ function output() {
 }
 
 beforeEach(() => {
+  // tmux-selfcheck-footgun: these paths identify themselves by $TMUX_PANE now —
+  // bare tmux queries answered for the ATTACHED CLIENT's active pane.
+  process.env.TMUX_PANE = "%bud";
+
   config = { githubOrg: "TestOrg" };
   ghqRoot = "/ghq";
   parseWakeTargetResult = null;
@@ -317,7 +322,7 @@ describe("bud impl extra isolated coverage", () => {
 
     await cmdBud("sprout", { dryRun: true });
 
-    expect(hostExecCalls).toEqual(["tmux display-message -p '#{pane_current_path}'"]);
+    expect(hostExecCalls).toEqual(["tmux display-message -p -t '%bud' '#{pane_current_path}'"]);
     expect(output()).toContain("parent → sprout");
     expect(output()).toContain("born blank — pull memory later: maw soul-sync parent --from");
     expect(ensureBudRepoCalls).toEqual([]);
@@ -326,7 +331,7 @@ describe("bud impl extra isolated coverage", () => {
   test("parent autodetect failure asks for --from or --root before repo creation", async () => {
     hostExecError = new Error("not in tmux");
     await expect(cmdBud("sprout", {})).rejects.toThrow("could not detect parent oracle");
-    expect(hostExecCalls).toEqual(["tmux display-message -p '#{pane_current_path}'"]);
+    expect(hostExecCalls).toEqual(["tmux display-message -p -t '%bud' '#{pane_current_path}'"]);
     expect(ensureBudRepoCalls).toEqual([]);
   });
 

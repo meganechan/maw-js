@@ -211,7 +211,12 @@ function isLeadPane(pane: TeamPaneSnapshot, leadWindowRef: string | undefined): 
 }
 
 async function currentWindowRef(tmux: Pick<Tmux, "run">): Promise<string | undefined> {
-  const ref = (await tmux.run("display-message", "-p", "#{session_id}:#{window_id}")).trim();
+  // tmux-selfcheck-footgun: -t $TMUX_PANE. This ref decides which pane is treated
+  // as the LEAD (isLeadPane above); bare, the attached client's active window was
+  // crowned lead regardless of who was asking.
+  const self = process.env.TMUX_PANE;
+  if (!self) return undefined;
+  const ref = (await tmux.run("display-message", "-p", "-t", self, "#{session_id}:#{window_id}")).trim();
   return ref || undefined;
 }
 

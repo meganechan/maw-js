@@ -25,7 +25,8 @@ mock.module("maw-js/sdk", () => ({
   tmux: {
     run: async (subcommand: string, ...args: string[]) => {
       if (subcommand !== "display-message") return "";
-      if (args[0] === "-p" && args[1] === "#{window_name}") return "sender\n";
+      // tmux-selfcheck-footgun: the sender probe now passes -t $TMUX_PANE
+      if (args.includes("#{window_name}")) return "sender\n";
       const targetIndex = args.indexOf("-t");
       if (targetIndex >= 0) return `${paneCommands.get(args[targetIndex + 1]!) ?? "zsh"}\n`;
       return "";
@@ -43,6 +44,10 @@ function stripAnsi(value: string | undefined) {
 }
 
 beforeEach(() => {
+  // tmux-selfcheck-footgun: these paths identify themselves by $TMUX_PANE now —
+  // bare tmux queries answered for the ATTACHED CLIENT's active pane.
+  process.env.TMUX_PANE = "%bcast";
+
   paneCommands = new Map();
   sessions = [];
   teamMembers = [];

@@ -46,12 +46,15 @@ export async function probeTmuxServer(): Promise<boolean> {
 async function restoreSplitLayout(anchor?: string): Promise<void> {
   try {
     const windowTarget = anchor || process.env.TMUX_PANE;
-    const targetFlag = windowTarget ? `-t ${shellArg(windowTarget)} ` : "";
-    const raw = await hostExec(`tmux list-panes ${targetFlag}| wc -l`);
+    // tmux-selfcheck-footgun: no target → no guess. The empty flag made this a
+    // bare list-panes, counting the panes of the ATTACHED CLIENT's window and
+    // then restoring a layout based on that count.
+    if (!windowTarget) return;
+    const raw = await hostExec(`tmux list-panes -t ${shellArg(windowTarget)} | wc -l`);
     const total = Number.parseInt(String(raw).trim(), 10);
     if (!Number.isFinite(total) || total <= 2) return;
     const layout = total > 4 ? "tiled" : "main-vertical";
-    await hostExec(`tmux select-layout ${targetFlag}${layout}`);
+    await hostExec(`tmux select-layout -t ${shellArg(windowTarget)} ${layout}`);
   } catch {
     // Best-effort polish only: split succeeded, so never fail delivery because
     // the caller's tmux cannot reflow the current window.
@@ -174,8 +177,9 @@ function parsePaneGeometry(raw: string): PaneGeometry[] {
 /** @internal — exported for tests only. */
 export async function findTopRightPane(anchor?: string): Promise<string | null> {
   if (!anchor) return null;
-  const targetFlag = `-t ${shellArg(anchor)} `;
-  const raw = await hostExec(`tmux list-panes ${targetFlag}-F '#{pane_id}|#{pane_top}|#{pane_left}|#{@maw_tile}'`);
+  // -t inline rather than via a variable: the anchor is already guaranteed above,
+  // and a flag hidden behind a variable is a flag no reader (or grep) can check.
+  const raw = await hostExec(`tmux list-panes -t ${shellArg(anchor)} -F '#{pane_id}|#{pane_top}|#{pane_left}|#{@maw_tile}'`);
   const panes = parsePaneGeometry(String(raw)).filter(p => p.id !== anchor);
   if (panes.length === 0) return null;
 

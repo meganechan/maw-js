@@ -196,17 +196,21 @@ describe("wake maybeSplit", () => {
     expect(hostExecCalls.some(cmd => cmd.includes("pane_current_command"))).toBe(false);
   });
 
-  test("can split without TMUX_PANE by omitting anchor", async () => {
+  test("splits without an anchor when TMUX_PANE is unset, but does NOT reflow a window it cannot name", async () => {
     delete process.env.TMUX_PANE;
 
     await maybeSplit("20-homekeeper:homekeeper-oracle", { split: true });
 
-    expect(hostExecCalls).toHaveLength(4);
+    // The split itself still goes ahead untargeted (unchanged behaviour). What is
+    // gone is the layout restore: it used to run `list-panes`/`select-layout` with
+    // no target, counting and re-arranging the ATTACHED CLIENT's window —
+    // tmux-selfcheck-footgun.
+    expect(hostExecCalls).toHaveLength(2);
     expect(hostExecCalls[0]).not.toContain("-t '%");
     expect(hostExecCalls[0]).toContain("tmux split-window -h -l 50%");
-    expect(hostExecCalls[1]).toContain("tmux list-panes ");
-    expect(hostExecCalls[2]).toContain("tmux select-layout main-vertical");
-    expect(hostExecCalls[3]).toBe("tmux refresh-client -S");
+    expect(hostExecCalls.some(cmd => cmd.includes("list-panes"))).toBe(false);
+    expect(hostExecCalls.some(cmd => cmd.includes("select-layout"))).toBe(false);
+    expect(hostExecCalls[1]).toBe("tmux refresh-client -S");
   });
 
   test("uses tiled layout after split when pane count is high", async () => {

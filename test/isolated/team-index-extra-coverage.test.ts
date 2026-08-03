@@ -369,7 +369,9 @@ describe("team index extra isolated coverage", () => {
 
     let result = await teamHandler({ source: "cli", args: ["close"] });
     expect(result.ok).toBe(true);
-    expect(calls.hostExec).toEqual([["tmux list-panes -F '#{pane_id}'"]]);
+    // tmux-selfcheck-footgun: scoped to the caller's own pane. Unscoped, this
+    // enumerated the ATTACHED CLIENT's window and killed panes there.
+    expect(calls.hostExec).toEqual([["tmux list-panes -t '%1' -F '#{pane_id}'"]]);
 
     resetCalls();
     hostExecQueue = ["%1\n%2\n%3\n", "", new Error("dead pane")];
@@ -377,7 +379,7 @@ describe("team index extra isolated coverage", () => {
     expect(result.ok).toBe(true);
     expect(result.output).toContain("closed 1 pane");
     expect(calls.hostExec).toEqual([
-      ["tmux list-panes -F '#{pane_id}'"],
+      ["tmux list-panes -t '%1' -F '#{pane_id}'"],
       ["tmux kill-pane -t '%2'"],
       ["tmux kill-pane -t '%3'"],
     ]);

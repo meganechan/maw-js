@@ -425,7 +425,10 @@ describe("wake maybe split/window coverage", () => {
     listPanesResponse = "5\n";
     await maybeSplit("no:anchor", { split: true });
     expect(hostExecCalls[0]).toContain("tmux split-window -h -l 50%");
-    expect(hostExecCalls.some(cmd => cmd.includes("select-layout tiled"))).toBe(true);
+    // tmux-selfcheck-footgun: with no pane of its own, the layout restore no
+    // longer runs at all. It used to emit an unscoped `select-layout tiled`,
+    // re-arranging whatever window the ATTACHED CLIENT had active.
+    expect(hostExecCalls.some(cmd => cmd.includes("select-layout"))).toBe(false);
 
     resetEnv(true);
     hostExecCalls = [];

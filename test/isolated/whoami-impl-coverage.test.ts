@@ -6,6 +6,7 @@ let hostExecResult = "oracle-session\n";
 let logs: string[] = [];
 
 const originalTmux = process.env.TMUX;
+const originalTmuxPane = process.env.TMUX_PANE;
 const originalLog = console.log;
 
 mock.module("maw-js/sdk", () => ({
@@ -22,12 +23,17 @@ beforeEach(() => {
   hostExecResult = "oracle-session\n";
   logs = [];
   process.env.TMUX = "/tmp/tmux-1000/default,1,0";
+  // tmux-selfcheck-footgun: whoami now identifies ITSELF by $TMUX_PANE instead of
+  // asking tmux which pane is active (that answered for the attached client).
+  process.env.TMUX_PANE = "%77";
   console.log = (...args: unknown[]) => logs.push(args.map(String).join(" "));
 });
 
 afterEach(() => {
   if (originalTmux === undefined) delete process.env.TMUX;
   else process.env.TMUX = originalTmux;
+  if (originalTmuxPane === undefined) delete process.env.TMUX_PANE;
+  else process.env.TMUX_PANE = originalTmuxPane;
   console.log = originalLog;
 });
 
@@ -45,7 +51,7 @@ describe("whoami impl isolated coverage", () => {
 
     await cmdWhoami(["--short"]);
 
-    expect(hostExecCalls).toEqual([`tmux display-message -p '#S'`]);
+    expect(hostExecCalls).toEqual([`tmux display-message -p -t '%77' '#S'`]);
     expect(logs).toEqual(["live-oracle"]);
   });
 
@@ -55,7 +61,7 @@ describe("whoami impl isolated coverage", () => {
     await cmdWhoami();
 
     expect(hostExecCalls).toEqual([
-      `tmux display-message -p '#S\t#W\t#{window_id}\t#{pane_title}\t#{pane_id}'`,
+      `tmux display-message -p -t '%77' '#S\t#W\t#{window_id}\t#{pane_title}\t#{pane_id}'`,
     ]);
     expect(logs.join("\n")).toContain("session  live-oracle");
     expect(logs.join("\n")).toContain("window   main");

@@ -77,7 +77,15 @@ export async function cmdPanes(target?: string, opts: PanesOpts = {}) {
   // #{pane_pid} only appended when --pid requested, to keep default output stable.
   const baseFmt = "#{session_name}:#{window_index}.#{pane_index}|||#{pane_width}x#{pane_height}|||#{pane_current_command}|||#{pane_title}";
   const fmt = opts.pid ? `${baseFmt}|||#{pane_pid}` : baseFmt;
-  const targetFlag = opts.all ? "-a" : (filter ? `-s -t '${filter}'` : "");
+  // tmux-selfcheck-footgun: the no-filter default was an empty flag — a bare
+  // list-panes, i.e. the ATTACHED CLIENT's current window rather than the
+  // caller's. "My window" now means $TMUX_PANE's window; outside tmux there is no
+  // such thing, so say so instead of listing a stranger's panes.
+  const selfPane = process.env.TMUX_PANE;
+  if (!opts.all && !filter && !selfPane) {
+    throw new Error("panes: not in a tmux pane (TMUX_PANE unset) — pass a target or --all");
+  }
+  const targetFlag = opts.all ? "-a" : (filter ? `-s -t '${filter}'` : `-t '${selfPane}'`);
   let raw: string;
   try {
     raw = await hostExec(`${tmux} list-panes ${targetFlag} -F '${fmt}'`);

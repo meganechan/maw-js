@@ -402,7 +402,12 @@ export async function invokeDirectHandler(
     if (process.env.MAW_TEST_MODE !== "1") {
       try {
         const { execSync } = await import("child_process");
-        const raw = execSync(`tmux display-message -p '#{session_name}:#{window_name}'`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+        // tmux-selfcheck-footgun: -t $TMUX_PANE — bare, "the caller's CURRENT
+        // window" is actually the attached client's, so layout re-tiled a window
+        // the caller was not in.
+        const self = process.env.TMUX_PANE;
+        if (!self) throw new Error("TMUX_PANE unset");
+        const raw = execSync(`tmux display-message -p -t '${self}' '#{session_name}:#{window_name}'`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
         if (raw) target = raw;
       } catch {
         error("✗ maw layout: not in a tmux session — pass an explicit target: maw tmux layout <target> <preset>");

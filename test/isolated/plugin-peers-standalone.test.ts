@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { expectStandalonePluginBoundary } from "./helpers/plugin-standalone-boundary";
+
+const root = join(import.meta.dir, "../..");
 
 const duplicateDetect = await import("../../src/vendor/mpr-plugins/peers/duplicate-detect.ts?plugin-peers-standalone");
 
@@ -36,6 +40,15 @@ describe("peers plugin standalone boundary (#2413)", () => {
 
     expect(imports.map((record) => record.spec)).toContain("../../../core/xdg");
     expect(typeof duplicateDetect.findDuplicateIdentities).toBe("function");
+  });
+
+  // kobo-783: this plugin vendors its own copy of the peers file lock. Three defects that let
+  // two processes into one critical section (silent lost writes) were fixed in all five copies
+  // at once — a copy that drifts from the canonical one keeps the bug, silently.
+  test("the vendored file lock has not drifted from the canonical copy (kobo-783)", () => {
+    expect(readFileSync(join(root, "src/vendor/mpr-plugins/peers/lock.ts"), "utf8")).toBe(
+      readFileSync(join(root, "src/lib/peers/lock.ts"), "utf8"),
+    );
   });
 
   test("finds stable duplicate identity claims and skips legacy peers", () => {

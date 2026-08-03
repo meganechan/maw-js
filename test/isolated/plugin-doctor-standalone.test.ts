@@ -98,6 +98,15 @@ describe("doctor plugin standalone boundary (#2328)", () => {
     }
   });
 
+  // kobo-783: this plugin vendors its own copy of the peers file lock. Three defects that let
+  // two processes into one critical section (silent lost writes) were fixed in all five copies
+  // at once — a copy that drifts from the canonical one keeps the bug, silently.
+  test("the vendored file lock has not drifted from the canonical copy (kobo-783)", () => {
+    expect(readFileSync(join(root, "src/vendor/mpr-plugins/doctor/internal/lock.ts"), "utf8")).toBe(
+      readFileSync(join(root, "src/lib/peers/lock.ts"), "utf8"),
+    );
+  });
+
   test("API peers check runs through SDK-backed config and peer store", async () => {
     peersStore.savePeers({
       version: 1,

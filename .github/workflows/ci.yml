@@ -3,8 +3,14 @@ name: CI
 on:
   push:
     branches: [alpha, main]
+  # kobo-785: NO base-branch filter, and `edited` in the types. The filter meant
+  # a PR stacked on a feature branch ran ZERO CI for its entire life (PR #434:
+  # no workflow runs in branch history), and retargeting the base later fires
+  # only `edited`, which the default type list does not include — so the fix
+  # for a checkless PR was close+reopen, which nobody knows to do. Every PR
+  # runs CI now regardless of base; merge-when-green needs the checks to exist.
   pull_request:
-    branches: [alpha, main]
+    types: [opened, synchronize, reopened, edited]
 
 jobs:
   plugin-coverage-gate:

@@ -114,6 +114,18 @@ Exempt: type-definition files, specs/docs, generated/scaffolded boilerplate.
 
 PRs to `main` come from one source: `alpha` itself, on a stable cut.
 
+### Merging: CLEAN is not green (kobo-785)
+
+`mergeStateStatus: CLEAN` means **no conflicts** — it says nothing about
+checks. Before merging anything, confirm the PR actually carries CI runs and
+they passed; a PR with zero checks renders exactly like a passing one in most
+views. CI runs on every PR regardless of base since kobo-785 (stacked PRs
+included), and retargeting a PR's base re-triggers CI (`edited` is in the
+trigger types) — but if you ever meet a PR with no checks at all, close and
+reopen it rather than merging on CLEAN. `alpha` and `main` carry branch
+protection requiring the test matrix, so GitHub blocks a checkless merge —
+do not remove that protection to get a merge through.
+
 ## Versioning
 
 **maw-js uses CalVer as of 2026-04-18.**

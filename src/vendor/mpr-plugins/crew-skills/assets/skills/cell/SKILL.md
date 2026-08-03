@@ -52,6 +52,22 @@ maw company cell self-spawn <company>
 
 Do not run `self-spawn` by hand unless debugging a single target pane.
 
+## Two spawn modes — chosen per pane, never by a flag
+
+Spawn looks at what the target pane is actually running and picks the only route that pane can receive:
+
+| Pane is running | Mode | What happens | Counted as |
+|---|---|---|---|
+| a shell (`zsh`, `bash`, …) | **inject** | the self-spawn + head launch line is typed into it | `repaired` (once head boots) |
+| an agent REPL (`claude`, `node`, `bun`) | **prompt handoff** | `maw hey` delivers a message asking the AGENT to run self-spawn itself | `handed-off` |
+| anything else, or unreadable | — | nothing is sent | `refused/failed` |
+
+A shell line is never typed into an agent pane — it would land as prompt text and never run. A pane running neither a shell nor an agent (an editor, a pager, a database client) is left alone: a message typed at it is the same blind send.
+
+**Handed-off is not done.** The agent acts on its own clock, so `handed-off` means "asked", not "cell is up". Re-run `maw company cell spawn <company>` afterwards to see it turn into `ready`.
+
+**The head-contract caveat.** A head started by the inject mode receives its contract through `claude --append-system-prompt`. An agent that is **already running** cannot be handed a system prompt by anyone — so the handoff message tells it to read `ψ/active/cell/head-contract.md` from disk instead. That file is written by `self-spawn`, so the order is: run self-spawn first, then read the contract. An agent that skips the read is a head that never got its contract: alive, and behaving like a stranger.
+
 ## Cell rules
 
 1. One active card per oracle cell.
@@ -78,12 +94,16 @@ Do not run `self-spawn` by hand unless debugging a single target pane.
 Public company spawn is complete when the command prints:
 
 ```text
-✓ cell spawn <company>: <ready> ready, <repaired> repaired, <boot-failed> head-boot-failed, <refused> refused/failed (<N> oracles)
+✓ cell spawn <company>: <ready> ready, <repaired> repaired, <handed-off> handed-off, <boot-failed> head-boot-failed, <refused> refused/failed (<N> oracles)
 ```
 
 `repaired` means the head pane came up. A pane where the repair line ran but no
 Claude prompt appeared counts as **head-boot-failed**, never repaired — that pane
 is named in a `⚠ head boot FAILED` line above the summary; go look at it.
+
+`handed-off` means an agent pane was asked (see spawn modes above) — each one is
+named in a `↗ HANDED OFF` line. `refused/failed` is reserved for panes nothing
+could be delivered to at all.
 
 Each target pane's local self-spawn prints before the head pane starts Claude:
 

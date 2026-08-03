@@ -41,6 +41,7 @@ mock.module("maw-js/sdk", () => ({
     // separate outcome is proven in cell-spawn-state-dir.test.ts).
     if (cmd.includes("capture-pane")) return "bypass permissions\n";
     if (cmd.includes("tmux list-panes")) return "%head|||👤 head|||cell-head\n";
+    if (cmd.includes("session_name")) return "42-patchwork:0.1\n"; // kobo-776 hey address
     return "";
   },
   listSessions: async () => [],
@@ -83,20 +84,32 @@ describe("cell spawn repair injection is classified before it types (cell-spawn-
     // Not one keystroke: not the command, not the Enter, not even the C-u that
     // would edit the REPL's prompt box.
     expect(sentKeys()).toEqual([]);
-    expect(commands.some((c) => c.includes("cell self-spawn"))).toBe(false);
+    expect(commands.some((c) => c.includes("send-keys") && c.includes("cell self-spawn"))).toBe(false);
 
-    // ...and the summary reflects the failure instead of claiming a repair.
+    // ...and the summary does not claim a repair. kobo-776: this pane is now
+    // ASKED instead (handed-off), which is a different outcome from refused —
+    // the guard above is unchanged, only what happens after it.
     const summary = out.at(-1) ?? "";
     expect(summary).toContain("0 repaired");
-    expect(summary).toContain("1 refused/failed");
-    expect(out.some((l) => l.includes("REFUSED repair injection") && l.includes("'claude'"))).toBe(true);
+    expect(summary).toContain("1 handed-off");
+    expect(summary).toContain("0 refused/failed");
   });
 
-  test("NEGATIVE: agent pane reported as a node wrapper is refused the same way", async () => {
+  test("NEGATIVE: agent pane reported as a node wrapper takes the same route", async () => {
     paneCommand = "node";
     const out = await spawn();
     expect(sentKeys()).toEqual([]);
     expect(out.at(-1)).toContain("0 repaired");
+    expect(out.at(-1)).toContain("1 handed-off");
+  });
+
+  test("NEGATIVE: a pane running neither a shell nor an agent is still REFUSED — no keys, no message", async () => {
+    paneCommand = "vim";
+    const out = await spawn();
+    expect(sentKeys()).toEqual([]);
+    expect(commands.some((c) => c.startsWith("maw hey"))).toBe(false);
+    expect(out.at(-1)).toContain("1 refused/failed");
+    expect(out.some((l) => l.includes("REFUSED repair injection") && l.includes("'vim'"))).toBe(true);
   });
 
   test("fail closed: pane command unreadable (probe throws) → refuse, never blind-send", async () => {

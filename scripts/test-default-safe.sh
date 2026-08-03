@@ -169,21 +169,11 @@ if [[ "$SRC_MODE" -eq 1 ]]; then
   # subtree here would just move the blind spot rather than close it.
   SRC_EXCLUDED_PREFIXES=(
     "src/commands/plugins/" # already run by `test:plugin` (package.json) — a separate job's job
-    # kobo-472 — pre-existing on origin/alpha, NOT introduced by kobo-472 (verified:
-    # identical failures reproduce on bare origin/alpha with this PR's changes absent).
-    # The task/board subsystem was deleted (3fe50a48 "delete the task store, the task
-    # plugin and the dead sweep") after this test file was written. pr-watch.ts's own
-    # repo-discovery moved from a card→repo link (`openPrLinkedRepos()`, now GONE — a
-    # stale call site throws `TypeError: openPrLinkedRepos is not a function`) to
-    # `scanWorktrees()`, and its merge-ping moved from the linked card's assignee to
-    # `scopeOfOracle(author)`. This file still seeds fake task-store `card()` JSON
-    # fixtures and asserts the OLD assignee-from-card behavior, so most of it exercises
-    # deleted functionality rather than the current code — on top of that, a handful of
-    # its timing-based assertions (skip-threshold counters, in-flight-promise races)
-    # flip pass/fail between runs, which the known-red allowlist's own two-way check
-    # can't tolerate. Needs a real rewrite (mock `scanWorktrees()`, update the assignee
-    # assertions, replace the timing races) as its own follow-up card — ask Tony for one.
-    "src/core/worklog/pr-watch-resilience.test.ts"
+    # kobo-733 removed the second entry (src/core/worklog/pr-watch-resilience.test.ts):
+    # that file was excluded because it tested the deleted task/board subsystem and
+    # raced real clocks. It has been rewritten against current pr-watch.ts behavior
+    # (stated repo list via __setReposForTest, event-driven waits, no timing
+    # assertions) and now runs in the src/ sweep like every other src test.
   )
   src_is_excluded() {
     local f="$1" p

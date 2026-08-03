@@ -1,61 +1,70 @@
 /**
- * kobo-472 note: EXCLUDED from the src/ CI wiring (see
- * scripts/test-default-safe.sh SRC_EXCLUDED_PREFIXES) — this file tests
- * deleted functionality. The task/board subsystem was deleted (3fe50a48
- * "delete the task store, the task plugin and the dead sweep") after this
- * file was written. pr-watch.ts's repo-discovery moved from a card→repo
- * link (`openPrLinkedRepos()`, now GONE — a stale call site throws
- * `TypeError: openPrLinkedRepos is not a function`) to `scanWorktrees()`,
- * and its merge-ping moved from the linked card's assignee to
- * `scopeOfOracle(author)`. This file still seeds fake `card()` JSON
- * fixtures and asserts the OLD assignee-from-card behavior — on top of
- * that, several of its timing-based assertions are flaky (pass/fail flips
- * between runs). Needs a real rewrite (mock `scanWorktrees()`, update the
- * assignee assertions, de-flake the timing races) as its own follow-up
- * card — ask Tony for a dedicated one. Verified: the same failures
- * reproduce on bare `origin/alpha`, so kobo-472 does not own or worsen this.
+ * pr-watch resilience — rewritten against the CURRENT pr-watch.ts (kobo-733).
  *
- * pr-watch resilience — kobo-631: a repo-level failure must not cost every
- * OTHER repo's already-completed work (the actual root cause behind kobo-630's
- * 86-minute incident: one unguarded throw anywhere aborted the whole pass
- * before the single end-of-pass `saveSnapshot`), and a failure must be LOUD,
- * not silently absorbed.
+ * The previous version of this file was written before 3fe50a48 deleted the
+ * task/board subsystem: it seeded fake `card()` JSON, called the now-gone
+ * `openPrLinkedRepos()`, asserted the card-assignee merge-ping, and tuned
+ * several assertions around the wall-clock cost of a REAL `scanWorktrees()`
+ * (~286ms on one machine) — so it was excluded from CI wholesale
+ * (scripts/test-default-safe.sh SRC_EXCLUDED_PREFIXES). The property list
+ * below is re-derived from what pr-watch.ts actually does today, not from the
+ * old file's shape:
  *
- * ⚠️ ISOLATION, TWO LAYERS, BOTH REQUIRED — a real incident this round proved
- * one layer alone isn't enough: an earlier draft of this file set only
- * `MAW_DATA_DIR`, believing it isolated every file `pollPrsOnce` touches. It
- * does NOT — `snapshotPath()` uses `mawStatePath()`, gated on `MAW_HOME`/
- * `MAW_STATE_DIR`, a DIFFERENT env var than `MAW_DATA_DIR` (see xdg.ts: 4
- * separate dir-kind resolvers — config/data/state/cache — each gated on its
- * OWN env var after a shared `MAW_HOME` override). That draft's test writes
- * landed in the REAL machine's `~/.maw/watch-pr-state.json`, corrupting the
- * exact evidence file kobo-630's incident depends on. Fixed here with BOTH:
- *   (1) `MAW_HOME` (not the narrower `MAW_DATA_DIR`) — covers every xdg-based
- *       path this file or its dependencies could ever touch, present or future,
- *       without needing to enumerate each one.
- *   (2) `__setSnapshotPathForTest` — an explicit path override for the
- *       snapshot specifically, so this file's OWN tests never depend on env
- *       vars alone even being correct, matching this codebase's established
- *       injectable-seam convention (kobo-546/kobo-608's own lesson: an env
- *       var is never a trust root for something this consequential).
- * Real `gh` calls are avoided via `__setGhForTest` (no network/CLI). Real
- * `spawnHeyProcess` is auto-stubbed fleet-wide for EVERY `bun test` run
- * (test/helpers/hey-spawn-fail-closed.ts, kobo-405) — safe to let
- * `pollPrsOnce`'s real `pingOnMerge` call run without spawning a real `maw hey`.
+ *   snapshot lifecycle — first run seeds without logging · each transition
+ *   logs exactly once · a repeat poll is a no-op · a CORRUPT snapshot is not
+ *   silently downgraded to a first run
+ *   persistence — tmp+rename (inode changes) · nothing written when no repo
+ *   changed · one repo's failure never costs another repo's committed work
+ *   loud failure — a repo failure and a stuck pass are worklog `kind:"error"`
+ *   rows, fanned out to EVERY company, and to a company-less row when there
+ *   are none
+ *   malformed input — unparseable `gh pr list`, empty output, failing
+ *   `gh pr view`
+ *   liveness — reentrancy dedupe · consecutive-skip alarm · per-pass timeout
+ *   releasing the guard · mid-repo abort · stale-generation write discarded
+ *
+ * NO TEST BELOW ASSERTS ON ELAPSED TIME. Where a pass must hang, it hangs
+ * *structurally* — a promise this file alone can resolve — so any positive
+ * injected timeout wins the race by construction; where a background pass must
+ * finish, the test polls for that pass's own observable EVENT (`waitFor`)
+ * rather than sleeping a guessed number of milliseconds.
+ *
+ * ISOLATION, THREE LAYERS:
+ *   1. `MAW_HOME` — one var covering every xdg dir-kind (config/runtimeHome/
+ *      data/state/cache), asserted positively in `beforeEach` rather than
+ *      assumed (the incident that produced `__setSnapshotPathForTest` came
+ *      from setting the NARROWER `MAW_DATA_DIR` and believing it was enough).
+ *   2. `__setSnapshotPathForTest` — the snapshot path stated directly, so it
+ *      cannot reach the real `~/.maw/watch-pr-state.json` even if layer 1 were
+ *      wrong.
+ *   3. `__setReposForTest` — the repo list stated directly. Without it these
+ *      tests poll whatever worktrees the host happens to have, and on a
+ *      scrubbed HOME (zero worktrees) `pollPrsOnce` early-outs and EVERY
+ *      assertion here passes vacuously.
+ * `_setCompaniesDir` likewise points the company registry at the test root, so
+ * the loud-failure fan-out is a stated 0/1/2 companies instead of whatever
+ * this machine is running.
+ *
+ * `gh` never runs (`__setGhForTest`). Real `maw hey` never spawns — the
+ * fleet-wide preload stub (test/helpers/hey-spawn-fail-closed.ts, kobo-405)
+ * makes `pingOnMerge`'s default sender a no-op, which is why the merge path
+ * below asserts the durable worklog row, not the (best-effort) ping.
+ *
+ * @maw-test-isolate — own bun process. This file mutates module-level
+ * singletons (the company registry dir, MAW_HOME) and, in the timeout tests,
+ * deliberately leaves a superseded pass running in the background; a shared
+ * sweep process is the wrong place for either.
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { _setCompaniesDir, COMPANIES_DIR } from "../../vendor/mpr-plugins/company/company-helpers";
 
 const ORIG_HOME = process.env.MAW_HOME;
+const ORIG_PORT = process.env.MAW_PORT;
+const ORIG_COMPANIES_DIR = COMPANIES_DIR;
 let root: string;
-
-function card(company: string, id: string, fields: Record<string, unknown>): void {
-  const dir = join(root, "companies", company, "tasks");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, `${id}.json`), JSON.stringify({ id, company, title: id, ts: 1, ...fields }));
-}
 
 function snapshotFile(): string {
   return join(root, "watch-pr-state.json");
@@ -65,761 +74,437 @@ function readSnapshot(): Record<string, any> {
   return JSON.parse(readFileSync(snapshotFile(), "utf8"));
 }
 
-function readWorklogLines(company: string): any[] {
+function writeSnapshot(snap: Record<string, unknown>): void {
+  writeFileSync(snapshotFile(), JSON.stringify(snap));
+}
+
+/** Register a company + its `core` team in the test-root registry. */
+function company(name: string, lead: string, members: string[] = []): void {
+  mkdirSync(join(root, "companies"), { recursive: true });
+  writeFileSync(
+    join(root, "companies", `${name}.json`),
+    JSON.stringify({
+      name,
+      teams: { core: { lead, members: [lead, ...members].map((oracle) => ({ oracle, role: oracle === lead ? "lead" : "dev" })) } },
+    }),
+  );
+}
+
+function readWorklog(company = "_unscoped"): any[] {
   const p = join(root, "companies", company, "worklog.jsonl");
   if (!existsSync(p)) return [];
   return readFileSync(p, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
 }
 
-/** GH pr list/view stub, keyed by repo. Any repo not in the map (e.g. a real
- *  worktree this test machine happens to have) answers with an empty list —
- *  keeps the test hermetic against whatever local worktrees actually exist. */
-function makeGhStub(prsByRepo: Record<string, any[]>) {
+/** `gh` stub over a per-repo PR listing. A repo with no entry answers empty. */
+function ghStub(prsByRepo: Record<string, unknown[]>, mergedByLogin = "meganechan") {
   return async (args: string[]): Promise<string> => {
-    const repoIdx = args.indexOf("--repo");
-    const repo = repoIdx >= 0 ? args[repoIdx + 1] : undefined;
-    if (args[0] === "pr" && args[1] === "list") {
-      return JSON.stringify((repo && prsByRepo[repo]) || []);
-    }
-    if (args[0] === "pr" && args[1] === "view") {
-      return JSON.stringify({ mergedBy: { login: "meganechan" } });
-    }
+    const repo = args[args.indexOf("--repo") + 1];
+    if (args[0] === "pr" && args[1] === "list") return JSON.stringify(prsByRepo[repo] ?? []);
+    if (args[0] === "pr" && args[1] === "view") return JSON.stringify({ mergedBy: { login: mergedByLogin } });
     return "[]";
   };
 }
 
+function pr(number: number, state: "OPEN" | "MERGED" | "CLOSED", extra: Record<string, unknown> = {}) {
+  return {
+    number,
+    title: `pr-${number}`,
+    state: state === "MERGED" ? "MERGED" : state,
+    mergedAt: state === "MERGED" ? "2026-01-01T00:00:00Z" : null,
+    author: { login: "meganechan" },
+    ...extra,
+  };
+}
+
+/**
+ * Wait for an EVENT a background pass produces, not for a duration. Failure
+ * mode is "the event never happened", named — never "the machine was slow"
+ * silently passing.
+ */
+// 3s, comfortably under bun's own 5s per-test default so a missing event
+// surfaces as the named error below rather than as an anonymous test timeout.
+async function waitFor(pred: () => boolean, what: string, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (pred()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error(`waitFor: ${what} never happened within ${timeoutMs}ms`);
+}
+
+/**
+ * Fresh, unshared pr-watch instance per test (`?query` suffix — Bun gives each
+ * one its own module record), pre-wired to this test's root. Module-level state
+ * (in-flight promise, generation counter, every seam) is therefore per-test:
+ * no reset bookkeeping, and no bleed between tests.
+ */
+async function load(tag: string, repos: string[]) {
+  const mod = await import(`./pr-watch.ts?kobo733-${tag}`);
+  mod.__setSnapshotPathForTest(() => snapshotFile());
+  mod.__setReposForTest(async () => repos);
+  return mod as any;
+}
+
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "maw-prwatch-resilience-"));
-  process.env.MAW_HOME = root; // layer 1 — covers config/runtimeHome/data/state/cache at once
-  // kobo-631 — POSITIVE assertion, not an assumption: the incident this round
-  // happened because a prior draft BELIEVED an env var isolated everything,
-  // never checked. `mawStateDir()` gates `pollPrsOnce`'s snapshot writes;
-  // `mawDataDir()` gates `appendWorklog()` (the worklog file) AND
-  // `reconcileMergedCards()`'s task-store writes — the latter overwrites REAL
-  // CARDS on the board, a strictly worse blast radius than the snapshot file.
-  // If either ever resolves outside `root` (e.g. a leftover MAW_STATE_DIR set
-  // in the ambient environment, or this test file itself regressing), THIS
-  // assertion fails the test immediately, in this file, before any write
-  // happens — instead of silently landing on the real machine again.
+  process.env.MAW_HOME = root;
+  process.env.MAW_PORT = "1"; // `record()`'s best-effort live-feed POST must not reach a real local maw server
+  _setCompaniesDir(join(root, "companies"));
+  // POSITIVE assertion, not an assumption — the incident behind
+  // `__setSnapshotPathForTest` was a draft that BELIEVED an env var isolated
+  // everything and never checked. `mawStateDir()` gates the snapshot;
+  // `mawDataDir()` gates the worklog. If either escapes the test root (a
+  // leftover MAW_STATE_DIR in the ambient env, or this file regressing), fail
+  // HERE — before any write, not on the operator's real home.
   const { mawStateDir, mawDataDir } = await import("../xdg.ts");
   if (!mawStateDir().startsWith(root)) throw new Error(`mawStateDir() escaped the test root: ${mawStateDir()}`);
   if (!mawDataDir().startsWith(root)) throw new Error(`mawDataDir() escaped the test root: ${mawDataDir()}`);
 });
 
 afterEach(() => {
-  if (ORIG_HOME === undefined) delete process.env.MAW_HOME;
-  else process.env.MAW_HOME = ORIG_HOME;
+  if (ORIG_HOME === undefined) delete process.env.MAW_HOME; else process.env.MAW_HOME = ORIG_HOME;
+  if (ORIG_PORT === undefined) delete process.env.MAW_PORT; else process.env.MAW_PORT = ORIG_PORT;
+  _setCompaniesDir(ORIG_COMPANIES_DIR);
   try { rmSync(root, { recursive: true, force: true }); } catch {}
-  // No __resetGhForTest()/__resetSnapshotPathForTest() needed: every test below
-  // imports `./pr-watch.ts` with its OWN unique `?query` suffix (same
-  // convention as pr-watch-repos.test.ts), which Bun gives a fresh, unshared
-  // module instance — both overrides live only on that one instance, never
-  // bleeding into another test's import.
 });
 
-/**
- * MUTATION CONTROL — the 6-item list below is LOCKED, derived from kobo-631's
- * own AC (not from this test file or the source code — a code-derived list
- * only surfaces gaps someone already noticed; this exact distinction is why
- * this list has 6 items where an earlier code-derived gap report found only
- * 4 — "atomic write" and "incremental persistence" were invisible to
- * code-tracing because nobody had ever written a test around either):
- *   1. Atomic write — revert tmp+rename to a direct write → must go RED
- *   2. Incremental persistence — revert to single end-of-pass write → RED
- *   3. `recordStuckPoll` — remove → RED
- *   4. Consecutive-skip counter — remove → RED
- *   5. `signal.aborted` OR generation check — remove either → RED
- *   6. Timeout — remove → RED
- * Each test below must go red because BEHAVIOR changed when the guard is
- * removed — never because a source string/shape search failed to find text
- * (that would just be a source-shape test wearing a mutation-control label).
- */
-describe("MUTATION CONTROL 1/6 — atomic write (kobo-631 AC clause 1)", () => {
-  it("the snapshot file's INODE changes after a write — proves tmp+rename replaced it, not an in-place overwrite", async () => {
-    // A direct `writeFileSync(path, ...)` (default 'w' flag) truncates and
-    // rewrites the SAME inode. `writeFileSync(tmp,...)` + `renameSync(tmp,
-    // path)` always produces a NEW inode at `path`. This is a real OS-level
-    // behavioral signal, not a source-shape check — if `saveSnapshotAtomic`
-    // were mutated back to a direct write, this test goes red because the
-    // inode would stay IDENTICAL, not because a string search failed.
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest } = await import("./pr-watch.ts?mutation-atomic-write");
-    __setSnapshotPathForTest(() => snapshotFile());
-    card("kobo", "kobo-12", { state: "review", pr: 120, repo: "x/y", assignee: "patchwork" });
-    writeFileSync(snapshotFile(), JSON.stringify({ "x/y#120": { state: "OPEN", repo: "x/y", number: 120, title: "t" } }));
-    const inodeBefore = statSync(snapshotFile()).ino;
+describe("pollPrsOnce — snapshot lifecycle", () => {
+  it("first run seeds the baseline and logs NOTHING (no fleet-wide replay of every historical PR)", async () => {
+    const { pollPrsOnce, __setGhForTest } = await load("firstrun", ["x/y"]);
+    __setGhForTest(ghStub({ "x/y": [pr(1, "OPEN"), pr(2, "MERGED")] }));
 
-    __setGhForTest(async (args: string[]) => {
-      const repoIdx = args.indexOf("--repo");
-      const repo = repoIdx >= 0 ? args[repoIdx + 1] : undefined;
-      if (args[0] === "pr" && args[1] === "list") {
-        if (repo !== "x/y") return "[]";
-        return JSON.stringify([{ number: 120, title: "t", state: "MERGED", mergedAt: "2026-01-01T00:00:00Z", author: { login: "meganechan" } }]);
-      }
-      return JSON.stringify({ mergedBy: { login: "meganechan" } });
-    });
+    const recorded = await pollPrsOnce();
+
+    expect(recorded).toEqual([]);
+    expect(readSnapshot()["x/y#1"].state).toBe("OPEN");
+    expect(readSnapshot()["x/y#2"].state).toBe("MERGED");
+    expect(readWorklog("_unscoped")).toEqual([]);
+  });
+
+  it("each transition logs exactly once — a repeat poll over unchanged state records nothing", async () => {
+    const { pollPrsOnce, __setGhForTest } = await load("once", ["x/y"]);
+    writeSnapshot({ "x/y#1": { state: "OPEN", repo: "x/y", number: 1, title: "pr-1" } });
+    __setGhForTest(ghStub({ "x/y": [pr(1, "MERGED")] }));
+
+    const first = await pollPrsOnce();
+    const second = await pollPrsOnce();
+
+    expect(first.map((e: any) => e.kind)).toEqual(["pr-merged"]);
+    expect(first[0].pr).toBe(1);
+    expect(first[0].by).toBe("meganechan"); // resolved via `gh pr view --json mergedBy`
+    expect(second).toEqual([]);
+    expect(readWorklog("_unscoped").filter((l) => l.kind === "pr-merged")).toHaveLength(1);
+  });
+
+  it("a PR unseen before is pr-opened; an OPEN→CLOSED edge is pr-closed", async () => {
+    const { pollPrsOnce, __setGhForTest } = await load("open-closed", ["x/y"]);
+    writeSnapshot({ "x/y#9": { state: "OPEN", repo: "x/y", number: 9, title: "pr-9" } });
+    __setGhForTest(ghStub({ "x/y": [pr(9, "CLOSED"), pr(10, "OPEN")] }));
+
+    const recorded = await pollPrsOnce();
+
+    expect(recorded.map((e: any) => [e.kind, e.pr])).toEqual([["pr-closed", 9], ["pr-opened", 10]]);
+  });
+
+  it("a CORRUPT snapshot file is NOT downgraded to a first run — transitions still log instead of being silently re-seeded", async () => {
+    // loadSnapshot()'s catch returns `firstRun: false` deliberately. Were it
+    // `true`, a single unreadable byte would silently swallow every pending
+    // transition on the fleet exactly once, with no error anywhere.
+    const { pollPrsOnce, __setGhForTest } = await load("corrupt-snap", ["x/y"]);
+    writeFileSync(snapshotFile(), "{not json");
+    __setGhForTest(ghStub({ "x/y": [pr(3, "MERGED")] }));
+
+    const recorded = await pollPrsOnce();
+
+    expect(recorded.map((e: any) => e.kind)).toEqual(["pr-merged"]);
+    expect(readSnapshot()["x/y#3"].state).toBe("MERGED"); // and the file is valid JSON again
+  });
+
+  it("a transition is scoped to the AUTHOR's company (the card-assignee link it replaced is gone)", async () => {
+    company("kobo", "eq3", ["meganechan"]);
+    const { pollPrsOnce, __setGhForTest } = await load("author-company", ["x/y"]);
+    writeSnapshot({ "x/y#4": { state: "OPEN", repo: "x/y", number: 4, title: "pr-4" } });
+    __setGhForTest(ghStub({ "x/y": [pr(4, "MERGED")] }));
 
     await pollPrsOnce();
-    const inodeAfter = statSync(snapshotFile()).ino;
-    expect(inodeAfter).not.toBe(inodeBefore);
-  });
-});
 
-describe("pollPrsOnce — per-repo isolation (kobo-631, the actual incident)", () => {
-  it("a later repo's gh-list failure does NOT lose an earlier repo's already-completed work", async () => {
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest } = await import("./pr-watch.ts?resilience-isolation");
-    __setSnapshotPathForTest(() => snapshotFile()); // layer 2 — belt-and-suspenders on top of MAW_HOME
-    card("kobo", "kobo-1", { state: "review", pr: 10, repo: "ok/repo", assignee: "patchwork" });
-    card("kobo", "kobo-2", { state: "review", pr: 20, repo: "bad/repo", assignee: "patchwork" });
-
-    __setGhForTest(async (args: string[]) => {
-      const repoIdx = args.indexOf("--repo");
-      const repo = repoIdx >= 0 ? args[repoIdx + 1] : undefined;
-      if (repo === "bad/repo") throw new Error("simulated gh failure");
-      if (args[0] === "pr" && args[1] === "list" && repo === "ok/repo") {
-        return JSON.stringify([{ number: 10, title: "t", state: "MERGED", mergedAt: "2026-01-01T00:00:00Z", author: { login: "meganechan" } }]);
-      }
-      if (args[0] === "pr" && args[1] === "view") return JSON.stringify({ mergedBy: { login: "meganechan" } });
-      return "[]";
-    });
-
-    // pollPrsOnce must not throw even though one repo's gh call fails.
-    await expect(pollPrsOnce()).resolves.toBeArray();
-
-    const snap = readSnapshot();
-    // ok/repo's PR was fully processed and MUST be persisted...
-    expect(snap["ok/repo#10"]?.state).toBe("MERGED");
-    // ...even though bad/repo never got a chance to contribute anything.
-    expect(snap["bad/repo#20"]).toBeUndefined();
-  });
-
-  it("mutation-anchor: if per-repo persistence were reverted to a single end-of-pass save, this test goes red", async () => {
-    // Same scenario, repo ORDER matters this time: put the failing repo FIRST.
-    // Under the OLD (single end-of-pass saveSnapshot) design, a throw on the
-    // FIRST repo means the loop never reaches the second repo's persist at
-    // all — nothing survives. Under the fix, each repo persists independently
-    // regardless of processing order.
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest } = await import("./pr-watch.ts?resilience-order");
-    __setSnapshotPathForTest(() => snapshotFile()); // layer 2 — belt-and-suspenders on top of MAW_HOME
-    card("kobo", "kobo-3", { state: "review", pr: 30, repo: "aaa/first-fails", assignee: "patchwork" });
-    card("kobo", "kobo-4", { state: "review", pr: 40, repo: "zzz/second-ok", assignee: "patchwork" });
-
-    __setGhForTest(async (args: string[]) => {
-      const repoIdx = args.indexOf("--repo");
-      const repo = repoIdx >= 0 ? args[repoIdx + 1] : undefined;
-      if (repo === "aaa/first-fails") throw new Error("simulated gh failure");
-      if (args[0] === "pr" && args[1] === "list" && repo === "zzz/second-ok") {
-        return JSON.stringify([{ number: 40, title: "t", state: "MERGED", mergedAt: "2026-01-01T00:00:00Z", author: { login: "meganechan" } }]);
-      }
-      if (args[0] === "pr" && args[1] === "view") return JSON.stringify({ mergedBy: { login: "meganechan" } });
-      return "[]";
-    });
-
-    await pollPrsOnce();
-    const snap = readSnapshot();
-    expect(snap["zzz/second-ok#40"]?.state).toBe("MERGED"); // survives a FIRST-repo failure
-  });
-
-  it("MUTATION CONTROL 2/6 — an earlier repo's transition is durably on disk WHILE a later repo is still being processed, not only after the whole pass finishes", async () => {
-    // The earlier "mutation-anchor" test above does NOT actually distinguish
-    // incremental-vs-end-of-pass: a caught-and-continued failure still lets
-    // the loop reach its end either way, so a hypothetical "accumulate in
-    // memory, write once at the very end" design would produce the SAME
-    // final on-disk result in that scenario. The real distinguishing
-    // property is durability of ALREADY-PROCESSED work WHILE a later repo is
-    // still in flight (the actual kill-mid-pass scenario this card exists
-    // for) — proven here by making the second repo hang FOREVER and checking
-    // the file WITHOUT ever awaiting the overall pass to completion.
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest, __setPollTimeoutMsForTest } = await import("./pr-watch.ts?mutation-incremental");
-    __setSnapshotPathForTest(() => snapshotFile());
-    __setPollTimeoutMsForTest(2000); // so the never-resolving background pass cleans itself up quickly rather than lingering the real 90s default
-    card("kobo", "kobo-13", { state: "review", pr: 130, repo: "aaa/fast-repo", assignee: "patchwork" });
-    card("kobo", "kobo-14", { state: "review", pr: 140, repo: "zzz/hangs-forever", assignee: "patchwork" });
-
-    // Repo iteration order (scanWorktrees ∪ openPrLinkedRepos, via a Set) is
-    // NOT guaranteed to be creation/alphabetical order — measured directly,
-    // it is NOT what a naive reading of the source would suggest. Rather than
-    // assume which of these two repos gets visited first, make the FIRST of
-    // our two repos actually queried resolve fast (whichever one that is),
-    // and the SECOND one hang forever — deterministic regardless of order.
-    let ourRepoCallCount = 0;
-    __setGhForTest(async (args: string[]) => {
-      const repoIdx = args.indexOf("--repo");
-      const repo = repoIdx >= 0 ? args[repoIdx + 1] : undefined;
-      if (args[0] !== "pr" || args[1] !== "list") {
-        return JSON.stringify({ mergedBy: { login: "meganechan" } });
-      }
-      if (repo !== "aaa/fast-repo" && repo !== "zzz/hangs-forever") return "[]"; // this test machine's real local worktrees
-      ourRepoCallCount++;
-      if (ourRepoCallCount >= 2) return new Promise(() => {}); // whichever of ours is SECOND hangs forever
-      const num = repo === "aaa/fast-repo" ? 130 : 140;
-      return JSON.stringify([{ number: num, title: "t", state: "MERGED", mergedAt: "2026-01-01T00:00:00Z", author: { login: "meganechan" } }]);
-    });
-
-    pollPrsOnce().catch(() => {}); // deliberately NOT awaited — the pass never completes in this test (the second of our repos hangs forever); catch to avoid an unhandled-rejection warning once the 2s timeout eventually fires in the background
-    await new Promise((r) => setTimeout(r, 500)); // real scanWorktrees (~286ms) + the first repo's quick processing, well before the second's hang matters
-
-    // Whichever repo was queried FIRST must have its transition ALREADY
-    // durably on disk, even though the overall pass is still stuck on the
-    // SECOND repo and will never finish. Under an end-of-pass design,
-    // nothing would be written yet — the file would still be absent/unseeded.
-    expect(existsSync(snapshotFile())).toBe(true);
-    const snap = readSnapshot();
-    const oneOfOursIsMerged = snap["aaa/fast-repo#130"]?.state === "MERGED" || snap["zzz/hangs-forever#140"]?.state === "MERGED";
-    expect(oneOfOursIsMerged).toBe(true);
-    // and the OTHER one — the one that hung — must NOT be in the snapshot at all yet.
-    const bothPresent = snap["aaa/fast-repo#130"] !== undefined && snap["zzz/hangs-forever#140"] !== undefined;
-    expect(bothPresent).toBe(false);
-  });
-
-  it("the snapshot file is always valid JSON after a poll — proves the write is atomic, not interleaved/truncated", async () => {
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest } = await import("./pr-watch.ts?resilience-atomic");
-    __setSnapshotPathForTest(() => snapshotFile()); // layer 2 — belt-and-suspenders on top of MAW_HOME
-    card("kobo", "kobo-5", { state: "review", pr: 50, repo: "x/y", assignee: "patchwork" });
-    __setGhForTest(makeGhStub({
-      "x/y": [{ number: 50, title: "t", state: "MERGED", mergedAt: "2026-01-01T00:00:00Z", author: { login: "meganechan" } }],
-    }));
-
-    await pollPrsOnce();
-    expect(() => readSnapshot()).not.toThrow();
-    // no leftover .tmp file — rename cleaned it up
-    const files = readdirSync(root).filter((f) => f.endsWith(".tmp"));
-    expect(files).toEqual([]);
-  });
-
-  it("a poll with NO transition anywhere does not touch the snapshot file at all — the write-cost gate, behaviorally", async () => {
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest } = await import("./pr-watch.ts?resilience-nowrite");
-    __setSnapshotPathForTest(() => snapshotFile());
-    card("kobo", "kobo-6", { state: "review", pr: 60, repo: "x/y", assignee: "patchwork" });
-    const baseline = { "x/y#60": { state: "OPEN", repo: "x/y", number: 60, title: "t", author: "meganechan" } };
-    writeFileSync(snapshotFile(), JSON.stringify(baseline)); // pre-seed so firstRun is false and prev===cur
-    const before = readFileSync(snapshotFile()).toString();
-
-    // OPEN PR with no mergeable/mergeStateStatus (so kobo-594's task-store
-    // side write doesn't even fire) and identical state to the seeded
-    // baseline — genuinely nothing for this poll to do.
-    __setGhForTest(makeGhStub({
-      "x/y": [{ number: 60, title: "t", state: "OPEN", mergedAt: null, author: { login: "meganechan" } }],
-    }));
-
-    await pollPrsOnce();
-    const after = readFileSync(snapshotFile()).toString();
-    expect(after).toBe(before); // byte-identical — the file was never reopened for writing
+    const rows = readWorklog("kobo");
+    expect(rows.map((l) => [l.kind, l.pr, l.oracle])).toEqual([["pr-merged", 4, "meganechan"]]);
+    expect(readWorklog("_unscoped")).toEqual([]);
   });
 });
 
-describe("pollPrsOnce — reentrancy guard (kobo-631, reviewer-escalated: PID alone doesn't cover same-process overlap)", () => {
-  it("MUTATION CONTROL 4/6 — 3 consecutive skipped ticks while one pass is stuck in-flight get reported LOUDLY", async () => {
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest, __setPollTimeoutMsForTest } = await import("./pr-watch.ts?mutation-consecutive-skip");
-    __setSnapshotPathForTest(() => snapshotFile());
-    __setPollTimeoutMsForTest(2000); // bounded so this test's background pass doesn't linger the real 90s default
-    card("kobo", "kobo-15", { state: "review", pr: 150, repo: "x/y", assignee: "patchwork" });
-    __setGhForTest(() => new Promise(() => {})); // pass A hangs — we don't need it to ever resolve for this test
+describe("pollPrsOnce — persistence", () => {
+  it("the snapshot is replaced by tmp+rename: the file's INODE changes (a direct overwrite would keep it)", async () => {
+    const { pollPrsOnce, __setGhForTest } = await load("atomic", ["x/y"]);
+    writeSnapshot({ "x/y#5": { state: "OPEN", repo: "x/y", number: 5, title: "pr-5" } });
+    const before = statSync(snapshotFile()).ino;
+    __setGhForTest(ghStub({ "x/y": [pr(5, "MERGED")] }));
 
-    const first = pollPrsOnce().catch(() => {}); // starts the in-flight pass
-    pollPrsOnce(); // skip 1
-    pollPrsOnce(); // skip 2
-    pollPrsOnce(); // skip 3 — crosses STUCK_POLL_SKIP_THRESHOLD (3)
+    await pollPrsOnce();
 
-    await new Promise((r) => setTimeout(r, 50)); // let the synchronous skip-counting continuations flush
-    const lines = readWorklogLines("kobo");
-    expect(lines.some((l) => l.kind === "error" && String(l.summary).includes("consecutive ticks skipped"))).toBe(true);
-    void first;
+    expect(statSync(snapshotFile()).ino).not.toBe(before);
   });
 
-  it("an overlapping call while a poll is still in flight reuses the SAME promise instead of starting a second pass", async () => {
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest } = await import("./pr-watch.ts?resilience-reentrant");
-    __setSnapshotPathForTest(() => snapshotFile());
-    card("kobo", "kobo-7", { state: "review", pr: 70, repo: "x/y", assignee: "patchwork" });
-    let callCount = 0; // counts ONLY x/y — this test machine's real local worktrees (scanWorktrees()
-    // isn't stubbed) also get polled in the same pass; counting every repo would conflate
-    // "this repo got hit twice" with "the fleet just has more than one repo."
+  it("a poll with no transition anywhere does not touch the snapshot file at all", async () => {
+    // The `if (outcome.changed)` gate. The snapshot only grows (nothing prunes
+    // it — 958 keys / ~216KB measured live), so writing it per repo per poll
+    // regardless of change is ~30x the IO of writing it once.
+    const { pollPrsOnce, __setGhForTest } = await load("nochange", ["x/y"]);
+    writeSnapshot({ "x/y#6": { state: "OPEN", repo: "x/y", number: 6, title: "pr-6" } });
+    const before = statSync(snapshotFile());
+    __setGhForTest(ghStub({ "x/y": [pr(6, "OPEN")] }));
+
+    await pollPrsOnce();
+
+    const after = statSync(snapshotFile());
+    expect(after.ino).toBe(before.ino);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+
+  it("a later repo's failure does NOT cost an earlier repo's already-committed work", async () => {
+    const { pollPrsOnce, __setGhForTest } = await load("isolation-late", ["ok/repo", "bad/repo"]);
+    writeSnapshot({ "ok/repo#1": { state: "OPEN", repo: "ok/repo", number: 1, title: "pr-1" } });
+    const good = ghStub({ "ok/repo": [pr(1, "MERGED")] });
     __setGhForTest(async (args: string[]) => {
-      const repoIdx = args.indexOf("--repo");
-      const repo = repoIdx >= 0 ? args[repoIdx + 1] : undefined;
-      if (args[0] === "pr" && args[1] === "list") {
-        if (repo === "x/y") {
-          callCount++;
-          await new Promise((r) => setTimeout(r, 30)); // hold the pass open long enough to overlap
-          return JSON.stringify([{ number: 70, title: "t", state: "MERGED", mergedAt: "2026-01-01T00:00:00Z", author: { login: "meganechan" } }]);
-        }
-        return "[]";
-      }
-      if (args[0] === "pr" && args[1] === "view") return JSON.stringify({ mergedBy: { login: "meganechan" } });
-      return "[]";
+      if (args[args.indexOf("--repo") + 1] === "bad/repo") throw new Error("simulated gh failure");
+      return good(args);
+    });
+
+    await expect(pollPrsOnce()).resolves.toBeArray(); // never throws out of the pass
+
+    expect(readSnapshot()["ok/repo#1"].state).toBe("MERGED");
+    expect(readSnapshot()["bad/repo#2"]).toBeUndefined();
+  });
+
+  it("persistence is per-repo: the FIRST repo failing does not stop a later repo's state from landing", async () => {
+    // Ordering is the point. Under the old single end-of-pass save, a throw on
+    // repo #1 meant nothing at all survived the pass — the mechanism behind the
+    // 86-minute silent stall (kobo-630).
+    const { pollPrsOnce, __setGhForTest } = await load("isolation-early", ["bad/repo", "ok/repo"]);
+    writeSnapshot({ "ok/repo#2": { state: "OPEN", repo: "ok/repo", number: 2, title: "pr-2" } });
+    const good = ghStub({ "ok/repo": [pr(2, "MERGED")] });
+    __setGhForTest(async (args: string[]) => {
+      if (args[args.indexOf("--repo") + 1] === "bad/repo") throw new Error("simulated gh failure");
+      return good(args);
+    });
+
+    await pollPrsOnce();
+
+    expect(readSnapshot()["ok/repo#2"].state).toBe("MERGED");
+  });
+});
+
+describe("pollPrsOnce — malformed gh output", () => {
+  it("unparseable `gh pr list` output is a recorded failure, not a thrown pass", async () => {
+    const { pollPrsOnce, __setGhForTest } = await load("garbage-list", ["x/y"]);
+    const seeded = { "x/y#8": { state: "OPEN", repo: "x/y", number: 8, title: "pr-8" } };
+    writeSnapshot(seeded);
+    __setGhForTest(async () => "<!DOCTYPE html><html>gh printed a login page</html>");
+
+    await expect(pollPrsOnce()).resolves.toEqual([]);
+
+    const failure = readWorklog("_unscoped").find((l) => l.kind === "error");
+    expect(failure).toBeDefined();
+    expect(failure.summary).toContain("poll failed for x/y");
+    expect(readSnapshot()).toEqual(seeded); // the known state survives the failure untouched
+  });
+
+  it("EMPTY `gh pr list` output means an empty repo, not a failure", async () => {
+    const { pollPrsOnce, __setGhForTest } = await load("empty-list", ["x/y"]);
+    __setGhForTest(async () => "");
+
+    await expect(pollPrsOnce()).resolves.toEqual([]);
+
+    expect(readWorklog("_unscoped").filter((l) => l.kind === "error")).toEqual([]);
+  });
+
+  it("a failing `gh pr view` still records the merge — `by` is simply unknown", async () => {
+    const { pollPrsOnce, __setGhForTest } = await load("view-fails", ["x/y"]);
+    writeSnapshot({ "x/y#7": { state: "OPEN", repo: "x/y", number: 7, title: "pr-7" } });
+    __setGhForTest(async (args: string[]) => {
+      if (args[1] === "view") throw new Error("gh exited 1");
+      return JSON.stringify([pr(7, "MERGED")]);
+    });
+
+    const recorded = await pollPrsOnce();
+
+    expect(recorded.map((e: any) => e.kind)).toEqual(["pr-merged"]);
+    expect(recorded[0].by).toBeUndefined();
+  });
+});
+
+describe("pollPrsOnce — a failure is LOUD", () => {
+  it("a repo failure is fanned out to EVERY company on this machine", async () => {
+    // The card→repo link that used to narrow this to "companies that care"
+    // retired with the board; a single fallback company would blind the others.
+    company("kobo", "eq3");
+    company("pgw", "thawanban");
+    const { pollPrsOnce, __setGhForTest } = await load("loud-fanout", ["bad/repo"]);
+    __setGhForTest(async () => { throw new Error("simulated gh failure"); });
+
+    await pollPrsOnce();
+
+    for (const c of ["kobo", "pgw"]) {
+      const failure = readWorklog(c).find((l) => l.kind === "error");
+      expect(failure, `no failure row for ${c}`).toBeDefined();
+      expect(failure.repo).toBe("bad/repo");
+      expect(failure.summary).toContain("simulated gh failure");
+    }
+  });
+
+  it("with NO companies registered the failure is still recorded, company-less — never dropped", async () => {
+    const { pollPrsOnce, __setGhForTest } = await load("loud-nocompany", ["bad/repo"]);
+    __setGhForTest(async () => { throw new Error("nobody owns this repo"); });
+
+    await pollPrsOnce();
+
+    const failure = readWorklog("_unscoped").find((l) => l.kind === "error");
+    expect(failure).toBeDefined();
+    expect(failure.company).toBeUndefined();
+    expect(failure.summary).toContain("nobody owns this repo");
+  });
+});
+
+describe("pollPrsOnce — repo discovery", () => {
+  it("no repos, or a discovery that throws, ends the pass quietly with no snapshot write", async () => {
+    const none = await load("repos-none", []);
+    none.__setGhForTest(async () => { throw new Error("gh must never be called"); });
+    await expect(none.pollPrsOnce()).resolves.toEqual([]);
+
+    const broken = await load("repos-throw", []);
+    broken.__setReposForTest(async () => { throw new Error("worktree scan failed"); });
+    broken.__setGhForTest(async () => { throw new Error("gh must never be called"); });
+    await expect(broken.pollPrsOnce()).resolves.toEqual([]);
+
+    expect(existsSync(snapshotFile())).toBe(false);
+  });
+});
+
+describe("pollPrsOnce — liveness (reentrancy, timeout, abort, generation)", () => {
+  it("an overlapping tick reuses the in-flight promise instead of starting a second pass", async () => {
+    const { pollPrsOnce, __setGhForTest } = await load("reentrant", ["x/y"]);
+    let listCalls = 0;
+    let releaseList: ((v: string) => void) | null = null;
+    __setGhForTest(async (args: string[]) => {
+      if (args[1] !== "list") return JSON.stringify({ mergedBy: { login: "meganechan" } });
+      listCalls++;
+      return new Promise<string>((resolve) => { releaseList = resolve; }); // held open until this test says so
     });
 
     const first = pollPrsOnce();
-    const second = pollPrsOnce(); // fired before `first` resolves — simulates the timer-tick overlap
-    expect(second).toBe(first); // literally the same in-flight promise, not a second pass
+    const second = pollPrsOnce(); // the timer's next tick, fired while the first pass is still open
+
+    expect(second).toBe(first); // literally the same promise — not a second pass
+    await waitFor(() => releaseList !== null, "gh pr list was invoked");
+    releaseList!(JSON.stringify([pr(11, "OPEN")]));
     await Promise.all([first, second]);
-    expect(callCount).toBe(1); // the `gh pr list` call only happened once, not twice
+    expect(listCalls).toBe(1);
   });
 
-  it("MUTATION CONTROL 3/6 — a pass that never resolves (gh wedged) times out, reports LOUDLY, and releases the guard for the NEXT call — never skips forever", async () => {
-    const mod = await import("./pr-watch.ts?resilience-hung");
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest, __setPollTimeoutMsForTest, __resetPollTimeoutMsForTest } = mod as any;
-    __setSnapshotPathForTest(() => snapshotFile());
-    __setPollTimeoutMsForTest(30); // real 90s has no place in a test
-    card("kobo", "kobo-8", { state: "review", pr: 80, repo: "x/y", assignee: "patchwork" });
+  it("consecutive skipped ticks against one stuck pass are reported LOUDLY at the threshold", async () => {
+    company("kobo", "eq3");
+    const { pollPrsOnce, __setGhForTest, __setPollTimeoutMsForTest } = await load("skips", ["x/y"]);
+    __setPollTimeoutMsForTest(50); // bounded so the stuck pass cannot outlive the file
+    __setGhForTest(() => new Promise<string>(() => {})); // structurally never resolves
 
-    __setGhForTest(() => new Promise(() => {})); // never resolves — simulates a wedged gh subprocess
+    const hung = pollPrsOnce().catch(() => {});
+    pollPrsOnce().catch(() => {}); // skip 1
+    pollPrsOnce().catch(() => {}); // skip 2
+    pollPrsOnce().catch(() => {}); // skip 3 — crosses STUCK_POLL_SKIP_THRESHOLD
 
-    await expect(pollPrsOnce()).rejects.toThrow(/exceeded 30ms timeout/);
-    // reported LOUDLY, not silently absorbed
-    const lines = readWorklogLines("kobo");
-    expect(lines.some((l) => l.kind === "error" && String(l.summary).includes("poll pass stuck"))).toBe(true);
+    const stuck = () => readWorklog("kobo").some((l) => l.kind === "error" && String(l.summary).includes("consecutive ticks skipped"));
+    await waitFor(stuck, "the consecutive-skip alarm fired");
+    await hung;
+  });
 
-    // the guard released — a FRESH call with a working gh stub completes normally,
-    // proving this does not skip forever. Reset the timeout FIRST: 30ms is
-    // artificially short for the test, and a real (non-stubbed) scanWorktrees()
-    // filesystem scan can easily exceed it on its own.
+  it("a wedged pass times out LOUDLY and RELEASES the guard — the next tick still runs (never skips forever)", async () => {
+    // A dedupe-only reentrancy guard is itself a silent-forever bug: one hung
+    // pass would make every later tick skip. Both halves are asserted here.
+    company("kobo", "eq3");
+    const { pollPrsOnce, __setGhForTest, __setPollTimeoutMsForTest, __resetPollTimeoutMsForTest } = await load("timeout", ["x/y"]);
+    __setPollTimeoutMsForTest(25);
+    __setGhForTest(() => new Promise<string>(() => {})); // hangs by construction — any positive timeout wins
+
+    await expect(pollPrsOnce()).rejects.toThrow(/exceeded 25ms timeout/);
+
+    const stuck = readWorklog("kobo").find((l) => l.kind === "error" && String(l.summary).includes("poll pass stuck"));
+    expect(stuck).toBeDefined();
+    expect(String(stuck.summary)).toContain("abort REQUESTED");
+
     __resetPollTimeoutMsForTest();
-    __setGhForTest(makeGhStub({ "x/y": [] }));
-    await expect(pollPrsOnce()).resolves.toBeArray();
+    __setGhForTest(ghStub({ "x/y": [pr(12, "OPEN")] }));
+    await expect(pollPrsOnce()).resolves.toBeArray(); // the guard released
   });
 
-  it("MUTATION CONTROL 6/6 — timeout mechanism, tested by INJECTING determinism instead of racing a clock: no assertion below references elapsed time", async () => {
-    // Corrected approach (front's call): the earlier version of this test
-    // raced a short injected timeout against real, unstubbed
-    // `scanWorktrees()` overhead (~286ms, machine-dependent) — a race, not a
-    // deterministic test. Fixed by making the underlying "hang" itself
-    // deterministic: pass A's gh call resolves ONLY when this test calls the
-    // captured resolver, never on its own, regardless of how much real time
-    // passes. Against a promise that structurally cannot resolve without
-    // explicit action, ANY positive timeout value will always eventually
-    // win the race — so `__setPollTimeoutMsForTest` (an existing seam, same
-    // convention as `__setGhForTest`/`__setSnapshotPathForTest` elsewhere in
-    // this file — no NEW production code needed here) no longer needs to
-    // "beat" anything uncertain.
-    //
-    // Three assertions, none reference elapsed wall-clock time:
-    //   1. the loud timeout record fires with the expected in-flight count
-    //   2. the NEXT tick can actually start — proves the guard was released
-    //   3. the abandoned pass, once it DOES resolve (test-triggered, not a
-    //      real-time wait), discards itself rather than clobbering the
-    //      next tick's already-legitimate write (generation+repo present
-    //      in that specific message)
-    // If `withTimeout` is mutated away, assertion 1 never happens (no
-    // record) and assertion 2 never happens (pass A never releases the
-    // guard) — RED because those events did not occur, not because
-    // anything ran slow.
-    const mod = await import("./pr-watch.ts?mutation-timeout-deterministic");
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest, __setPollTimeoutMsForTest, __resetPollTimeoutMsForTest } = mod as any;
-    __setSnapshotPathForTest(() => snapshotFile());
-    // 500ms — large enough that pass B's own REAL scanWorktrees() call
-    // (~286ms measured on this machine, unstubbed) comfortably completes
-    // without hitting this same timeout itself. This is NOT racing pass A —
-    // pass A's hang is deterministic (never resolves without the captured
-    // resolver below), so ANY finite value catches it; 500ms is chosen
-    // purely to give pass B's legitimate, real work enough room.
-    __setPollTimeoutMsForTest(500);
-    card("kobo", "kobo-18", { state: "review", pr: 180, repo: "x/y", assignee: "patchwork" });
-    writeFileSync(snapshotFile(), JSON.stringify({ "x/y#180": { state: "OPEN", repo: "x/y", number: 180, title: "t" } }));
-
-    let releasePassAView: ((v: string) => void) | null = null;
-    let viewCallCount = 0;
-    __setGhForTest(async (args: string[]) => {
-      const repoIdx = args.indexOf("--repo");
-      const repo = repoIdx >= 0 ? args[repoIdx + 1] : undefined;
-      if (args[0] === "pr" && args[1] === "list") {
-        if (repo !== "x/y") return "[]";
-        return JSON.stringify([{ number: 180, title: "t", state: "MERGED", mergedAt: "2026-01-01T00:00:00Z", author: { login: "meganechan" } }]);
-      }
-      if (args[0] === "pr" && args[1] === "view") {
-        viewCallCount++;
-        if (viewCallCount === 1) {
-          // pass A's own call — resolves ONLY when this test explicitly
-          // calls the captured resolver, deterministic, no real-time race.
-          return new Promise<string>((resolve) => { releasePassAView = resolve; });
-        }
-        return JSON.stringify({ mergedBy: { login: "meganechan" } }); // pass B's call — immediate
-      }
-      return "[]";
+  it("an aborted pass stops BEFORE the next PR's side effects, not merely before the final write", async () => {
+    // Checking the generation only at save time is not enough: by then a
+    // superseded pass has already written a worklog row for every OTHER PR in
+    // the repo. The per-PR `signal.aborted` check is what bounds that.
+    company("kobo", "eq3", ["meganechan"]); // author is a member, so its pr-merged row lands in kobo's log too
+    const { pollPrsOnce, __setGhForTest, __setPollTimeoutMsForTest } = await load("midloop", ["x/y"]);
+    __setPollTimeoutMsForTest(25);
+    writeSnapshot({
+      "x/y#20": { state: "OPEN", repo: "x/y", number: 20, title: "pr-20" },
+      "x/y#21": { state: "OPEN", repo: "x/y", number: 21, title: "pr-21" },
     });
 
-    // Pass A (generation 1) must be ENDED BY THE TIMEOUT MECHANISM. Awaiting
-    // the rejection directly would mean that removing `withTimeout` leaves
-    // nothing to settle this promise, so the test hangs at this line and
-    // never reaches a single assertion — measured: 46s of silent 100% CPU,
-    // killed by hand, no RED. Racing an in-test sentinel converts that into
-    // an assertion failure naming this exact line. The sentinel measures
-    // "did anything at all close this promise", not "was the code fast".
-    const passA = pollPrsOnce().then(() => "RESOLVED_WITHOUT_TIMEOUT").catch((e: unknown) => e);
-    const outcome = await Promise.race([passA, new Promise((r) => setTimeout(() => r("HUNG"), 2000))]);
-    expect(outcome).not.toBe("HUNG"); // fails HERE if the timeout mechanism is gone
-    expect(String((outcome as Error)?.message ?? outcome)).toMatch(/exceeded 500ms timeout/);
-
-    // ASSERTION 1 — the loud record fired, with the expected in-flight count.
-    const linesAfterTimeout = readWorklogLines("kobo");
-    const stuckEntry = linesAfterTimeout.find((l) => l.kind === "error" && String(l.summary).includes("abort REQUESTED"));
-    expect(stuckEntry).toBeDefined();
-    expect(String(stuckEntry!.summary)).toContain("1 pass(es)"); // zombiesInFlight === 1 at this point
-
-    // ASSERTION 2 — the NEXT tick can actually start: proves the guard was
-    // released (not skip-blocked forever). Pass B (generation 2) completes
-    // and legitimately persists — its own view call is #2, immediate.
-    // Pass B runs on the REAL timeout, not the injected one: pass B does its
-    // own unstubbed scanWorktrees() (~286ms here), and 500ms left it a 1.75x
-    // margin on one machine's measurement — narrower than the 3x slowdown we
-    // already treat as plausible. Restoring the real value deletes the margin
-    // instead of documenting it.
-    __resetPollTimeoutMsForTest();
-    await pollPrsOnce();
-    const snapAfterB = readSnapshot();
-    expect(snapAfterB["x/y#180"]?.state).toBe("MERGED");
-
-    // ASSERTION 3 — pass A's abandoned call, once it DOES resolve (this test
-    // decides exactly when, not a real-time wait), discards itself rather
-    // than clobbering pass B's already-legitimate write. `discarded a stale
-    // write for x/y — superseded by generation 2` — repo AND generation both
-    // present in this specific message.
-    expect(releasePassAView).not.toBeNull();
-    releasePassAView!(JSON.stringify({ mergedBy: { login: "meganechan" } }));
-    await new Promise((r) => setTimeout(r, 200)); // NOT racing anything — pass A's own remaining continuation (record/reconcile/generation-check) has no external dependency left at this point, just needs a moment to run to completion after being explicitly released above.
-
-    const linesAfterA = readWorklogLines("kobo");
-    const discardEntry = linesAfterA.find((l) => l.kind === "error" && String(l.summary).includes("discarded a stale write"));
-    expect(discardEntry).toBeDefined();
-    expect(String(discardEntry!.summary)).toContain("x/y"); // repo
-    expect(String(discardEntry!.summary)).toContain("generation 1"); // the STALE generation
-    expect(String(discardEntry!.summary)).toContain("generation 2"); // superseded by THIS generation
-    const snapAfterA = readSnapshot();
-    expect(snapAfterA).toEqual(snapAfterB); // pass A's stale write never landed
-  }, 3000); // speed only, not correctness: since the hang above is deterministic (never resolves without the timeout mechanism), this mutation is caught reliably at bun's 5000ms default too — tightening just gets feedback faster locally, unlike the old clock-racing version where the number itself was load-bearing.
-
-  it("once superseded, a stale pass stops BEFORE the next PR's side effects — not just before the final snapshot write", async () => {
-    // front's block, corrected from an earlier round: checking generation
-    // only right before saveSnapshotAtomic is NOT enough — by then a stale
-    // pass has already called record()/reconcileMergedCards for every OTHER
-    // PR in this repo's list. This proves the check inside pollRepoOnce's
-    // own per-PR loop actually stops a SECOND PR from being processed once
-    // the pass has been aborted mid-repo.
-    const mod = await import("./pr-watch.ts?resilience-midloop-abort");
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest, __setPollTimeoutMsForTest, __resetPollTimeoutMsForTest } = mod as any;
-    __setSnapshotPathForTest(() => snapshotFile());
-    // 400ms, not a tiny number: real scanWorktrees() (not stubbed — it shells
-    // to real git commands) measured ~286ms on its own on this machine, before
-    // the repo loop even starts. A too-short timeout fires during THAT setup
-    // phase instead of mid-PR-loop, which would test the wrong code path.
-    __setPollTimeoutMsForTest(400);
-    card("kobo", "kobo-9", { state: "review", pr: 90, repo: "x/y", assignee: "patchwork" });
-    card("kobo", "kobo-10", { state: "review", pr: 91, repo: "x/y", assignee: "patchwork" });
-    // seed a PRIOR state so this poll is a genuine OPEN→MERGED transition,
-    // not a firstRun baseline-seed (which has no side effects to skip at all).
-    writeFileSync(snapshotFile(), JSON.stringify({
-      "x/y#90": { state: "OPEN", repo: "x/y", number: 90, title: "first" },
-      "x/y#91": { state: "OPEN", repo: "x/y", number: 91, title: "second" },
-    }));
-
+    let releaseView: ((v: string) => void) | null = null;
     __setGhForTest(async (args: string[]) => {
-      const repoIdx = args.indexOf("--repo");
-      const repo = repoIdx >= 0 ? args[repoIdx + 1] : undefined;
-      if (args[0] === "pr" && args[1] === "list") {
-        if (repo !== "x/y") return "[]"; // this test machine's own real worktrees also get polled
-        return JSON.stringify([
-          { number: 90, title: "first", state: "MERGED", mergedAt: "2026-01-01T00:00:00Z", author: { login: "meganechan" } },
-          { number: 91, title: "second", state: "MERGED", mergedAt: "2026-01-01T00:00:00Z", author: { login: "meganechan" } },
-        ]);
-      }
-      if (args[0] === "pr" && args[1] === "view" && args[2] === "90") {
-        // slow enough that the 400ms timeout fires WHILE this PR is still
-        // being processed — by the time it resolves, the pass has already
-        // been aborted, so PR 91 (next in the loop) must not be touched.
-        await new Promise((r) => setTimeout(r, 500));
-        return JSON.stringify({ mergedBy: { login: "meganechan" } });
-      }
+      if (args[1] === "list") return JSON.stringify([pr(20, "MERGED"), pr(21, "MERGED")]);
+      if (args[2] === "20") return new Promise<string>((resolve) => { releaseView = resolve; }); // holds the pass open past its timeout
       return JSON.stringify({ mergedBy: { login: "meganechan" } });
     });
 
-    await expect(pollPrsOnce()).rejects.toThrow(/exceeded 400ms timeout/);
-    await new Promise((r) => setTimeout(r, 800)); // let the abandoned pass actually finish PR 90 and hit the PR-91 check
+    await expect(pollPrsOnce()).rejects.toThrow(/exceeded 25ms timeout/);
+    expect(releaseView).not.toBeNull(); // the pass really was inside PR 20 when the timeout fired
+    releaseView!(JSON.stringify({ mergedBy: { login: "meganechan" } }));
 
-    const lines = readWorklogLines("kobo");
-    expect(lines.some((l) => l.kind === "pr-merged" && l.pr === 90)).toBe(true); // already in flight when aborted — can't be undone
-    expect(lines.some((l) => l.kind === "pr-merged" && l.pr === 91)).toBe(false); // never reached — the mid-loop check stopped it
-    expect(lines.some((l) => l.kind === "error" && String(l.summary).includes("aborted mid-repo"))).toBe(true);
-    __resetPollTimeoutMsForTest();
+    const lines = () => readWorklog("kobo");
+    await waitFor(() => lines().some((l) => String(l.summary).includes("aborted mid-repo")), "the mid-repo abort was reported");
+    expect(lines().some((l) => l.kind === "pr-merged" && l.pr === 20)).toBe(true); // already in flight — cannot be undone
+    expect(lines().some((l) => l.kind === "pr-merged" && l.pr === 21)).toBe(false); // never reached
   });
 
-  it("MUTATION CONTROL 5/6 — a stale pass's own final write is DISCARDED once a newer generation has already started, not silently applied on top of it", async () => {
-    // The real "zombie" scenario, composed for real: pass A times out and
-    // its OWN abort is requested — but its background execution keeps
-    // running (a slow mergedBy call outlives the abort). Immediately after
-    // observing A's timeout-rejection, a fresh pollPrsOnce() call starts
-    // pass B (bumping currentGeneration). Pass B completes and legitimately
-    // persists ITS OWN state. Only THEN does pass A's slow call finally
-    // resolve — pass A must discard its own write at that point (its
-    // `generation` no longer matches `currentGeneration`), loudly, rather
-    // than silently clobbering whatever pass B already wrote.
-    const mod = await import("./pr-watch.ts?mutation-generation-discard");
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest, __setPollTimeoutMsForTest, __resetPollTimeoutMsForTest } = mod as any;
-    __setSnapshotPathForTest(() => snapshotFile());
-    // 600ms: real scanWorktrees() (~286ms, unstubbed) must complete before
-    // pass A even reaches the repo loop — too short a timeout fires during
-    // setup instead of mid-processing (the exact mistake this session caught
-    // once already). Pass B ALSO pays this same ~286ms setup cost on its own
-    // fresh call, so the timeout needs enough headroom for BOTH passes'
-    // setup, not just one.
-    __setPollTimeoutMsForTest(600);
-    card("kobo", "kobo-16", { state: "review", pr: 160, repo: "x/y", assignee: "patchwork" });
-    writeFileSync(snapshotFile(), JSON.stringify({ "x/y#160": { state: "OPEN", repo: "x/y", number: 160, title: "t" } }));
+  it("a superseded pass DISCARDS its own write, loudly, instead of clobbering the newer pass's state", async () => {
+    company("kobo", "eq3");
+    const { pollPrsOnce, __setGhForTest, __setPollTimeoutMsForTest, __resetPollTimeoutMsForTest } = await load("generation", ["x/y"]);
+    __setPollTimeoutMsForTest(25);
+    writeSnapshot({ "x/y#30": { state: "OPEN", repo: "x/y", number: 30, title: "pr-30" } });
 
-    // Pass A and pass B must see DIFFERENT data. With both passes seeing an
-    // identical listing, pass A clobbering pass B produces a byte-identical
-    // file, so the snapshot-equality assertion below holds whether or not the
-    // discard actually happened — vacuous, and invisible to mutation control
-    // too, since removing the guard would still leave the test green. The
-    // titles differ (not the state) because an OPEN listing would skip the
-    // `pr view` call entirely and there would be no slow call to outlive the
-    // abort — i.e. no zombie left to test.
-    let listCallCount = 0;
-    let viewCallCount = 0;
+    // The two passes must see DIFFERENT data, or "A clobbered B" and "A was
+    // discarded" produce byte-identical files and the assertion is vacuous.
+    let listCalls = 0;
+    let viewCalls = 0;
+    let releaseView: ((v: string) => void) | null = null;
     __setGhForTest(async (args: string[]) => {
-      const repoIdx = args.indexOf("--repo");
-      const repo = repoIdx >= 0 ? args[repoIdx + 1] : undefined;
-      if (args[0] === "pr" && args[1] === "list") {
-        if (repo !== "x/y") return "[]";
-        listCallCount++;
-        const title = listCallCount === 1 ? "title-seen-by-pass-A" : "title-seen-by-pass-B";
-        return JSON.stringify([{ number: 160, title, state: "MERGED", mergedAt: "2026-01-01T00:00:00Z", author: { login: "meganechan" } }]);
+      if (args[1] === "list") {
+        listCalls++;
+        return JSON.stringify([{ ...pr(30, "MERGED"), title: listCalls === 1 ? "seen-by-A" : "seen-by-B" }]);
       }
-      if (args[0] === "pr" && args[1] === "view") {
-        viewCallCount++;
-        if (viewCallCount === 1) {
-          // pass A's own call — outlives pass A's own timeout/abort
-          await new Promise((r) => setTimeout(r, 900));
-        }
-        // any later call (pass B's) resolves immediately
-        return JSON.stringify({ mergedBy: { login: "meganechan" } });
-      }
-      return "[]";
+      viewCalls++;
+      if (viewCalls === 1) return new Promise<string>((resolve) => { releaseView = resolve; }); // pass A outlives its own abort
+      return JSON.stringify({ mergedBy: { login: "meganechan" } });
     });
 
-    await expect(pollPrsOnce()).rejects.toThrow(/exceeded 600ms timeout/); // pass A (generation 1) times out
-    // Immediately start pass B (generation 2) — completes fast (view call #2,
-    // no delay). Pass B runs on the REAL timeout: it pays its own unstubbed
-    // scanWorktrees() cost, and pinning it to a value tuned on one machine is
-    // the clock-coupling this card already got wrong once.
+    await expect(pollPrsOnce()).rejects.toThrow(/exceeded 25ms timeout/); // pass A = generation 1
+
     __resetPollTimeoutMsForTest();
-    await pollPrsOnce();
+    await pollPrsOnce(); // pass B = generation 2, completes and legitimately persists
+    const afterB = readSnapshot();
+    expect(afterB["x/y#30"].title).toBe("seen-by-B");
 
-    const snapAfterB = readSnapshot();
-    expect(snapAfterB["x/y#160"]?.state).toBe("MERGED"); // pass B's legitimate write landed
-    // The discriminator is live: what is on disk is pass B's view, and pass
-    // A's differs. Without this the equality check below proves nothing.
-    expect(snapAfterB["x/y#160"]?.title).toBe("title-seen-by-pass-B");
+    releaseView!(JSON.stringify({ mergedBy: { login: "meganechan" } })); // now let A finish
+    await waitFor(
+      () => readWorklog("kobo").some((l) => String(l.summary).includes("discarded a stale write")),
+      "pass A reported discarding its stale write",
+    );
 
-    // Now wait for pass A's slow view call to finally resolve in the
-    // background (900ms from when it started) and reach its own generation
-    // check, well past pass B's completion.
-    await new Promise((r) => setTimeout(r, 900));
-
-    const lines = readWorklogLines("kobo");
-    expect(lines.some((l) => l.kind === "error" && String(l.summary).includes("discarded a stale write"))).toBe(true);
-    // and the file must be UNCHANGED from what pass B legitimately wrote —
-    // pass A's stale (re-)write of the same content never actually landed.
-    const snapAfterA = readSnapshot();
-    expect(snapAfterA).toEqual(snapAfterB);
-    __resetPollTimeoutMsForTest();
-  });
-});
-
-describe("pollPrsOnce — a repo failure is LOUD (kobo-631 AC clause 2)", () => {
-  it("records a kind:error worklog entry for every company with an open PR-linked card on the failing repo", async () => {
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest } = await import("./pr-watch.ts?loud-failure");
-    __setSnapshotPathForTest(() => snapshotFile()); // layer 2 — belt-and-suspenders on top of MAW_HOME
-    card("kobo", "kobo-6", { state: "review", pr: 60, repo: "bad/repo", assignee: "patchwork" });
-    __setGhForTest(async (args: string[]) => {
-      const repoIdx = args.indexOf("--repo");
-      if (args[repoIdx + 1] === "bad/repo") throw new Error("simulated gh failure for loud test");
-      return "[]";
-    });
-
-    await pollPrsOnce();
-    const entries = readWorklogLines("kobo");
-    const failure = entries.find((e) => e.kind === "error" && e.repo === "bad/repo");
-    expect(failure).toBeDefined();
-    expect(failure.summary).toContain("bad/repo");
-    expect(failure.summary).toContain("simulated gh failure for loud test");
-  });
-
-  it("mutation-anchor: a repo failure with NO open card anywhere still gets recorded, not dropped", async () => {
-    // No card at all references "orphan/repo" — companiesForRepo() returns [].
-    // The failure must still land somewhere, not vanish because no company
-    // "owns" it (this is what a naive `if (!companies.length) return;` would do).
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest } = await import("./pr-watch.ts?loud-orphan");
-    __setSnapshotPathForTest(() => snapshotFile()); // layer 2 — belt-and-suspenders on top of MAW_HOME
-    __setGhForTest(async () => { throw new Error("orphan repo failure"); });
-    // seed a card in a DIFFERENT repo so the poll set is non-empty and includes
-    // our orphan target via openPrLinkedRepos would require a card — instead
-    // rely on this being exercised through the repo directly via a worktree-less
-    // path is awkward to force deterministically here, so this test targets the
-    // company-less fallback branch directly at the unit level instead.
-    const { openPrLinkedRepos } = await import("./pr-watch.ts?loud-orphan-repos");
-    expect(openPrLinkedRepos()).toEqual([]); // sanity: no cards seeded, nothing to poll
-  });
-});
-
-describe("pollPrsOnce — assignee replaces the dead GitHub-author ping target (kobo-631, kobo-217)", () => {
-  it("does not throw and completes a MERGED transition even when the card has no assignee set", async () => {
-    // Regression guard for the fix itself: pingOnMerge's `lead` now comes from
-    // the card's assignee, not `scopeOfOracle(author)` — this must degrade to
-    // null gracefully (deliver() already drops falsy targets), never throw.
-    const { pollPrsOnce, __setGhForTest, __setSnapshotPathForTest } = await import("./pr-watch.ts?assignee-fix");
-    __setSnapshotPathForTest(() => snapshotFile()); // layer 2 — belt-and-suspenders on top of MAW_HOME
-    card("kobo", "kobo-7", { state: "review", pr: 70, repo: "x/y" }); // no assignee field at all
-    __setGhForTest(makeGhStub({
-      "x/y": [{ number: 70, title: "t", state: "MERGED", mergedAt: "2026-01-01T00:00:00Z", author: { login: "meganechan" } }],
-    }));
-
-    await expect(pollPrsOnce()).resolves.toBeArray();
-    const snap = readSnapshot();
-    expect(snap["x/y#70"]?.state).toBe("MERGED");
-  });
-});
-
-// kobo-631 — content-assert companion (same convention this file already uses
-// for the kobo-594 mergeable-write tests): the ordering fix and the
-// author→assignee fix are pinned structurally too, since a runtime test can't
-// easily force a mid-loop kill between "worklog written" and "entry committed".
-import { readFileSync as readFileSyncPw } from "node:fs";
-import { join as joinPw } from "node:path";
-
-describe("pr-watch.ts source shape — ordering + assignee wiring (kobo-631)", () => {
-  const src = readFileSyncPw(joinPw(import.meta.dir, "pr-watch.ts"), "utf8");
-
-  it("entries[key] is committed AFTER record(entry) in every transition branch, never before", () => {
-    // For each of the 3 transition kinds, the `entries[key] = ...` commit line
-    // must appear later in the function body than that branch's `record(entry)`
-    // call — if it moved earlier, a kill between "committed" and "worklog
-    // written" would silently drop the worklog entry while the snapshot claims
-    // the transition was already handled (the exact bug this card exists to close).
-    const fnStart = src.indexOf("async function pollRepoOnce");
-    const fnBody = src.slice(fnStart);
-    const lastRecordIdx = fnBody.lastIndexOf("record(entry);");
-    const commitIdx = fnBody.indexOf("entries[key] = { state: cur, repo, number: pr.number, title: pr.title, author };\n    }\n  } catch");
-    expect(lastRecordIdx).toBeGreaterThan(-1);
-    expect(commitIdx).toBeGreaterThan(-1);
-    expect(commitIdx).toBeGreaterThan(lastRecordIdx);
-  });
-
-  it("pingOnMerge's lead comes from the card's assignee, never from scopeOfOracle(author)", () => {
-    // scopeOfOracle is no longer IMPORTED (the functional removal) — it may
-    // still appear in a historical-context comment explaining what this file
-    // used to do and why that broke (kobo-217), which is legitimate documentation,
-    // not a bug. Check the import statement specifically, not a blanket string ban.
-    expect(src).not.toContain('import { scopeOfOracle');
-    expect(src).not.toMatch(/,\s*scopeOfOracle\b/);
-    const pingIdx = src.indexOf("pingOnMerge({");
-    expect(pingIdx).toBeGreaterThan(-1);
-    const pingCall = src.slice(pingIdx, src.indexOf("});", pingIdx));
-    expect(pingCall).toContain("lead: assignee");
-    expect(pingCall).toContain("author: null");
-    // `assignee` itself (the variable fed to pingOnMerge above) must trace
-    // back to the card's own assignee field, declared right before the call.
-    const assigneeDeclIdx = src.lastIndexOf("const assignee =", pingIdx);
-    expect(assigneeDeclIdx).toBeGreaterThan(-1);
-    expect(src.slice(assigneeDeclIdx, pingIdx)).toContain("cardHits[0]?.assignee");
-  });
-
-  it("saveSnapshotAtomic uses a PID-suffixed tmp file, not a fixed name — real concurrent writers exist", () => {
-    const fnStart = src.indexOf("function saveSnapshotAtomic");
-    const fnBody = src.slice(fnStart, src.indexOf("}", src.indexOf("renameSync", fnStart)));
-    expect(fnBody).toContain("process.pid");
-    expect(fnBody).toContain("renameSync(tmp, p)");
-  });
-
-  it("pollPrsOnce persists once per CHANGED repo, inside the loop — not once at the end of the whole pass", () => {
-    const fnStart = src.indexOf("async function runPollPrsOnce");
-    expect(fnStart).toBeGreaterThan(-1);
-    const fnBody = src.slice(fnStart);
-    const loopIdx = fnBody.indexOf("for (const repo of repos)");
-    const saveIdx = fnBody.indexOf("if (generation === currentGeneration) saveSnapshotAtomic(snap);");
-    const loopEndIdx = fnBody.indexOf("\n  }\n\n  return recorded;");
-    expect(loopIdx).toBeGreaterThan(-1);
-    expect(saveIdx).toBeGreaterThan(loopIdx);
-    expect(saveIdx).toBeLessThan(loopEndIdx); // save call is INSIDE the loop body
-  });
-
-  it("a no-transition poll writes the snapshot ZERO times, not once per repo — the write-cost multiplier this AC exists to prevent", () => {
-    // this is the literal AC front made mandatory: the gate is not a
-    // performance nicety, it's the difference between one ~216KB serialize
-    // per poll and one per repo (~29x today, ~6MB/poll) — see the doc
-    // comment directly above runPollPrsOnce for the full reasoning that must
-    // survive any future refactor.
-    expect(src).toContain("if (outcome.changed) {");
-    expect(src).toContain("NOT A PERFORMANCE OPTIMIZATION");
-  });
-
-  it("pollPrsOnce is reentrancy-guarded — an overlapping timer tick reuses the in-flight pass, never starts a second one", () => {
-    expect(src).toContain("let inFlightPoll: Promise<WorklogEntry[]> | null = null;");
-    const exportIdx = src.indexOf("export function pollPrsOnce");
-    expect(exportIdx).toBeGreaterThan(-1);
-    const guardBody = src.slice(exportIdx, src.indexOf("}", src.indexOf("inFlightPoll = withTimeout", exportIdx)));
-    expect(guardBody).toContain("if (inFlightPoll) {");
-    expect(guardBody).toContain("consecutiveSkips++");
-  });
-
-  it("a hung poll pass does not skip forever — timeout releases the guard AND reports it, backed by an independent consecutive-skip counter", () => {
-    // Tony's own original instruction ("skip if the previous round isn't
-    // done") reproduces this card's own root bug in a new shape if left at
-    // dedupe-only: a pass that never resolves (gh wedged, network gone) never
-    // clears `inFlightPoll`, so every future tick skips forever — silent,
-    // same visible symptom as the original incident. Both signals required.
-    expect(src).toContain("const POLL_TIMEOUT_MS = 90_000;");
-    expect(src).toContain("const STUCK_POLL_SKIP_THRESHOLD = 3;");
-    expect(src).toContain("function withTimeout");
-    expect(src).toContain("function recordStuckPoll");
-    expect(src).toContain("NOT yet confirmed stopped");
-    expect(src).toContain("if (consecutiveSkips >= STUCK_POLL_SKIP_THRESHOLD)");
-  });
-
-  it("the timeout message states its own uncertainty and an accumulation count, in the line itself — no source-reading required", () => {
-    // front's condition on item 6: a reader must be able to tell, from ONE
-    // worklog line, that a timed-out pass is NOT confirmed dead and that
-    // more than one could be piling up — not just "poll was slow."
-    expect(src).toContain("let zombiesInFlight = 0;");
-    expect(src).toContain("zombiesInFlight++");
-    expect(src).toContain("if (timedOut) zombiesInFlight--;");
-    expect(src).toMatch(/abort REQUESTED.*NOT yet confirmed stopped.*\$\{zombiesInFlight\}/);
-  });
-
-  it("a timed-out pass actually KILLS the gh subprocess via AbortSignal — reviewer-verified block: dedupe-only leaves an unbounded zombie accumulator, exactly kobo-630's own symptom class", () => {
-    // eq3: before this fix, AbortController/AbortSignal/kill appeared ZERO
-    // times in this file — realGh's Bun.spawn had no `signal` and kept no
-    // handle, so a timed-out pass could never be cancelled, only abandoned.
-    // Each abandoned pass would hold its own snap (958 keys/~216KB) PLUS an
-    // unkillable `gh` child process, uncapped, one per tick, for as long as
-    // `gh` stayed wedged — a direct memory-growth mechanism. This PR does not
-    // CREATE that risk (the pre-existing code had no reentrancy guard at all,
-    // so overlapping passes could already accumulate AND race-write with zero
-    // dedup — arguably worse) — it inherits a narrower version of it and now
-    // closes it with real cancellation instead of a cap added after the fact.
-    expect(src).toContain("const controller = new AbortController();");
-    expect(src).toContain("controller.abort();");
-    const spawnIdx = src.indexOf("Bun.spawn([\"gh\", ...args]");
-    expect(spawnIdx).toBeGreaterThan(-1);
-    expect(src.slice(spawnIdx, spawnIdx + 120)).toContain("signal");
-  });
-
-  it("a stale (superseded) pass discards its own write LOUDLY instead of silently clobbering a newer pass's state", () => {
-    // front's block: the timeout above releases inFlightPoll without
-    // cancelling runPollPrsOnce itself — a next tick can start a fresh pass
-    // while the old one is still alive. If the stale one later reaches
-    // saveSnapshotAtomic, its write would race the new pass's and whichever
-    // finishes last wins SILENTLY (this file's own doc comment already
-    // described exactly this race). The generation check below is the fix.
-    expect(src).toContain("let currentGeneration = 0;");
-    expect(src).toContain("const generation = ++currentGeneration;");
-    expect(src).toContain("function recordSuperseded(generation: number, repo: string): void {");
-    expect(src).toContain("if (generation === currentGeneration) saveSnapshotAtomic(snap);");
-    expect(src).toContain("else recordSuperseded(generation, repo);");
-  });
-
-  it("saveSnapshotAtomic's tmp filename includes a random suffix, not just the PID — defense-in-depth against a same-PID overlap the reentrancy guard might not cover", () => {
-    const fnStart = src.indexOf("function saveSnapshotAtomic");
-    const fnBody = src.slice(fnStart, src.indexOf("\n}\n", src.indexOf("unlinkSync", fnStart)));
-    expect(fnBody).toContain("randomUUID()");
-    expect(fnBody).toContain("unlinkSync(tmp)"); // tmp cleaned up on a failed write/rename, not left orphaned
+    const discard = readWorklog("kobo").find((l) => String(l.summary).includes("discarded a stale write"));
+    expect(String(discard.summary)).toContain("generation 1");
+    expect(String(discard.summary)).toContain("generation 2");
+    expect(String(discard.summary)).toContain("x/y");
+    expect(readSnapshot()).toEqual(afterB); // A's stale view never landed
   });
 });

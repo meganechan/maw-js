@@ -17,6 +17,7 @@ import { checkBusyGuard, cmdWake, findWindow, hostExec, listSessions, type Sessi
 import { loadCompany, type Company } from "../company/company-helpers";
 import { scopeOfOracle } from "../../../core/worklog/company-scope";
 import { teardownCrewWindows, BRAIN_MODEL, DEFAULT_WORKER_MODEL } from "../../../core/agent-panes";
+import { stampPaneIdentity, type PaneRole } from "../../../core/pane-identity";
 
 const CELL_WORKERS_WINDOW = "cell-workers";
 const DEFAULT_STATE_DIR = "ψ/active/cell";
@@ -212,6 +213,16 @@ function headLaunchCommand(company: string, stateDir = DEFAULT_STATE_DIR): strin
   ].join(" ");
 }
 
+/**
+ * kobo-759 — stamp `@oracle_pane` on a cell pane whose id we captured exactly.
+ * Loud on failure: a pane silently missing its identity reads as "unknown" to the
+ * observe layer, which is indistinguishable from a human-split pane.
+ */
+async function stampCellPane(paneId: string, oracle: string, role: PaneRole, emit: (line: string) => void): Promise<void> {
+  if (await stampPaneIdentity(paneId, oracle, role, hostExec)) return;
+  emit(`⚠ pane identity not set on ${paneId} (${role}) — oracle name unresolved or tmux refused; this pane will read as unknown`);
+}
+
 async function showPaneLabels(target: string): Promise<void> {
   await hostExec(`tmux set-window-option -t ${shellArg(target)} pane-border-status top`);
   await hostExec(`tmux set-window-option -t ${shellArg(target)} pane-border-format ${shellArg("#{pane_title}")}`);
@@ -358,6 +369,7 @@ export async function cellSelfSpawn(company: string | undefined, emit: (line: st
   for (const line of teardown.logs) emit(line);
   if (!teardown.ok) return { ok: false, error: teardown.error };
 
+  const self = selfOracleId();
   const dept = resolveSelfDept();
   const board = company;
   const stateDir = process.env.CREW_STATE_DIR || DEFAULT_STATE_DIR;
@@ -365,6 +377,9 @@ export async function cellSelfSpawn(company: string | undefined, emit: (line: st
   for (const f of STATE_FILES) { try { rmSync(join(stateDir, f)); } catch { /* absent */ } }
 
   await hostExec(`tmux set-option -p -t ${shellArg(head)} @role ${shellArg("👤 head")}`);
+  // The head pane is ADOPTED (this very pane, whatever it was before) — stamp it
+  // now so a previous occupant's identity cannot linger.
+  await stampCellPane(head, self, "head", emit);
   await hostExec(`tmux select-pane -t ${shellArg(head)} -T ${shellArg("👤 head")}`);
   await hostExec(`tmux rename-window -t ${shellArg(head)} ${shellArg("cell-head")}`);
   await showPaneLabels(head);
@@ -387,8 +402,10 @@ export async function cellSelfSpawn(company: string | undefined, emit: (line: st
   await hostExec(`tmux rename-window -t ${shellArg(worker.paneId)} ${shellArg(CELL_WORKERS_WINDOW)}`);
   await showPaneLabels(worker.paneId);
   await hostExec(`tmux set-option -p -t ${shellArg(worker.paneId)} @role ${shellArg("⚒ worker")}`);
+  await stampCellPane(worker.paneId, self, "worker", emit);
   await hostExec(`tmux select-pane -t ${shellArg(worker.paneId)} -T ${shellArg("⚒ worker")}`);
   await hostExec(`tmux set-option -p -t ${shellArg(reviewer)} @role ${shellArg("🔎 reviewer")}`);
+  await stampCellPane(reviewer, self, "reviewer", emit);
   await hostExec(`tmux select-pane -t ${shellArg(reviewer)} -T ${shellArg("🔎 reviewer")}`);
   await hostExec(`tmux set-option -p -t ${shellArg(worker.paneId)} @idle_notify_pane ${shellArg(reviewer)}`);
   await hostExec(`tmux set-option -p -t ${shellArg(reviewer)} @idle_notify_pane ${shellArg(head)}`);

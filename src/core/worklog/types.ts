@@ -55,6 +55,11 @@ export interface WorklogEntry {
   paneId?: string; // tmux pane id ($TMUX_PANE, e.g. "%40") — JOIN key: unique + stable, SAME
   //              as the presence file, so the board joins feed↔presence per-pane (kobo-109).
   //              Separate from `pane` so the join is by %N while display stays .0/.1.
+  identity?: string; // pane identity "{name}:{role}" from the tmux `@oracle_pane` option
+  //              (kobo-759) — says WHICH pane of which oracle produced this row, so a
+  //              cell's head/worker/reviewer are distinguishable without relying on the
+  //              ephemeral `pane` suffix. ABSENT means the pane was not born through a
+  //              maw path (human split) — consumers must read that as unknown, never guess.
   company?: string; // routing key — which company's log this belongs to
   kind: WorklogKind;
   summary: string; // human one-liner

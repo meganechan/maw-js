@@ -7,7 +7,10 @@ describe("cell command plugin standalone boundary", () => {
   test("cell keeps explicit import boundaries (SDK + core/worklog/company-scope)", () => {
     const imports = expectStandalonePluginBoundary({
       plugin: "cell",
-      allowRelative: [/^(?:\.\.\/){3}core\/worklog\//, /^(?:\.\.\/){3}core\/agent-panes$/],
+      // core/pane-identity (kobo-759) is dependency-free by design — the whole
+      // reason it exists as its own module is that plugins/hooks can reach the
+      // `@oracle_pane` contract without dragging the sdk barrel into their graph.
+      allowRelative: [/^(?:\.\.\/){3}core\/worklog\//, /^(?:\.\.\/){3}core\/agent-panes$/, /^(?:\.\.\/){3}core\/pane-identity$/],
     }).map((record) => record.spec);
 
     expect(imports).toContain("maw-js/sdk");
@@ -58,6 +61,11 @@ describe("cell command plugin standalone boundary", () => {
     expect(spawnSrc).toContain('tmux select-pane -t ${shellArg(reviewer)} -T ${shellArg("🔎 reviewer")}');
     expect(spawnSrc).toContain('tmux set-option -p -t ${shellArg(worker.paneId)} @idle_notify_pane ${shellArg(reviewer)}');
     expect(spawnSrc).toContain('tmux set-option -p -t ${shellArg(reviewer)} @idle_notify_pane ${shellArg(head)}');
+    // kobo-759 — all three panes are births; each carries `@oracle_pane` (behaviour
+    // proven in test/isolated/cell-pane-identity.test.ts, this is the boundary pin)
+    expect(spawnSrc).toContain('stampCellPane(head, self, "head", emit)');
+    expect(spawnSrc).toContain('stampCellPane(worker.paneId, self, "worker", emit)');
+    expect(spawnSrc).toContain('stampCellPane(reviewer, self, "reviewer", emit)');
     expect(spawnSrc).toContain('CREW_STATE_DIR=${shellArg(stateDir)}');
     expect(spawnSrc).toContain('emit(`✓ cell spawned — head=${head} worker=${worker.paneId} (${worker.model}) reviewer=${reviewer}`)');
     expect(spawnSrc).toContain("export async function companyCellDown");

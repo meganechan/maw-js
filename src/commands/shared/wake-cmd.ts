@@ -11,6 +11,7 @@ import { prefixCommandWithSpawnSessionEnv } from "../../core/fleet/parent-sessio
 import { normalizeTarget } from "../../core/matcher/normalize-target";
 import { assertValidOracleName } from "../../core/fleet/validate";
 import { canonicalSessionName } from "../../core/fleet/session-name";
+import { stampPaneIdentity } from "../../core/pane-identity";
 import { resolveOracle, findWorktrees, findReusableWorktreeBySlug, getSessionMap, resolveFleetSession, detectSession, setSessionEnv, sanitizeBranchName } from "./wake-resolve";
 import { stripOracleRepoSuffix, bringCwdMetadata, deriveOracleFromCwd } from "./wake-cwd";
 // #2569 — re-export so the wake barrel surface still exposes deriveOracleFromCwd.
@@ -447,6 +448,12 @@ export interface WakeOptions {
   wait?: boolean;
   /** Explicit wake session mode override. Auto mode infers from the resolved repo suffix. */
   sessionMode?: WakeSessionMode;
+  /**
+   * Internal (kobo-759): the RESOLVED oracle name, set by cmdWake once resolution
+   * settles. Feeds the `@oracle_pane` identity stamped into every launch command —
+   * not a user-facing flag, and left unset means "no identity", never a guess.
+   */
+  oracle?: string;
 }
 
 function isAttachOnlyWake(opts: WakeOptions): boolean {
@@ -530,6 +537,25 @@ function buildWakeCommand(windowName: string, cwd: string, opts: WakeCommandOpti
     buildCommandInDir(windowName, cwd, commandOpts),
     { explicit: opts.parentSessionId, sessionId: opts.sessionId, cwd },
   );
+}
+
+/**
+ * kobo-759 — stamp `@oracle_pane = "{oracle}:head"` on the pane a wake launch is
+ * about to land in. Wake never births a cell role, so the role is always `head`
+ * (solo oracle pane).
+ *
+ * Target is `session:window`, which tmux resolves to that window's ACTIVE pane —
+ * the SAME pane `tmux.sendText` types the launch line into, so the stamp and the
+ * agent cannot land on different panes. Called at every launch site rather than
+ * once at the end: a wake can birth several windows (worktree rehydrate, snapshot
+ * restore) and each is its own pane birth.
+ *
+ * Best-effort by construction: `stampPaneIdentity` writes nothing when the oracle
+ * name is unresolved (a pane with no identity reads as unknown — the honest
+ * answer) and swallows a tmux failure so a cosmetic option never blocks a wake.
+ */
+async function stampWakePane(target: string, oracle: string | undefined): Promise<void> {
+  await stampPaneIdentity(target, oracle ?? "", "head", hostExec);
 }
 
 async function buildWakeCommandForPane(windowName: string, cwd: string, opts: WakeCommandOptions, target: string): Promise<string> {
@@ -669,6 +695,7 @@ async function restoreSnapshotWindows(
   }
   for (const win of planned) {
     await tmux.newWindow(session, win.windowName, { cwd: win.cwd });
+    await stampWakePane(`${session}:${win.windowName}`, oracle);
     await tmux.sendText(`${session}:${win.windowName}`, buildWakeCommand(win.windowName, win.cwd, { engine }));
     existingWindows.add(win.windowName);
     const label = win.source === "worktree" ? "worktree" : "repo";
@@ -1145,6 +1172,10 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
     }
   }
   await normalizeBringDestinationWindow(oracle, opts);
+  // kobo-759 — oracle resolution has settled here (fleet/numeric/url forms all
+  // folded in). Carry it in opts so every buildWakeCommand call site downstream
+  // stamps pane identity without threading an extra argument through each one.
+  opts = { ...opts, oracle };
   const requestedForeignSession = opts.session?.trim();
   if (requestedForeignSession) validateForeignSessionName(requestedForeignSession);
 
@@ -1436,8 +1467,9 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
     await retryFreshSessionTmuxStep(session, "set session environment", () => setSessionEnv(session), {
       hasSession: tmux.hasSession,
     });
-    await retryFreshSessionTmuxStep(session, "launch main window", () => {
+    await retryFreshSessionTmuxStep(session, "launch main window", async () => {
       const command = buildWakeCommand(mainWindowName, repoPath, opts);
+      await stampWakePane(`${session}:${mainWindowName}`, opts.oracle);
       return sendWakeCommandAndPrompt(`${session}:${mainWindowName}`, opts.prompt, command, opts.engine);
     }, {
       hasSession: tmux.hasSession,
@@ -1497,6 +1529,7 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
         const wtEngine = wakeSession.readWorktreeEngineFile(wt.path);
         const wtOpts = wtEngine ? { ...opts, engine: wtEngine } : opts;
         const target = `${session}:${wt.windowName}`;
+        await stampWakePane(target, opts.oracle);
         await tmux.sendText(target, await buildWakeCommandForPane(wt.windowName, wt.path, wtOpts, target));
         if (opts.wait) await wakeSession.waitForEngine(target, getPaneInfos, isAgentCommand);
         existingWindows.add(wt.windowName);
@@ -1551,6 +1584,7 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
               const wtEngine = wakeSession.readWorktreeEngineFile(wt.path);
               const wtOpts = wtEngine ? { ...opts, engine: wtEngine } : opts;
               const target = `${session}:${wt.windowName}`;
+              await stampWakePane(target, opts.oracle);
               await tmux.sendText(target, await buildWakeCommandForPane(wt.windowName, wt.path, wtOpts, target));
               preExistingWindows.add(wt.windowName);
               preExistingWindowEntries.push({ name: wt.windowName, cwd: wt.path });
@@ -1697,6 +1731,9 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
       if (opts.prompt) {
         await tmux.selectWindow(target);
         const wakeCommand = buildWakeCommand(existingWindow, targetPath, opts);
+        // Re-used pane: overwrite identity before the launch — a pane that changed
+        // hands must never keep the previous occupant's name.
+        await stampWakePane(target, opts.oracle);
         if (opts.engine) {
           if (!(await respawnPaneWithCommand(target, wakeCommand))) {
             await sendWakeCommandAndPrompt(target, opts.prompt, wakeCommand, opts.engine);
@@ -1736,6 +1773,7 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
 
       if (!agentAlive) {
         console.log(`\x1b[33m⚡\x1b[0m '${existingWindow}' in ${session} — agent dead, re-launching fresh...`);
+        await stampWakePane(target, opts.oracle);
         await tmux.sendText(target, buildWakeCommand(existingWindow, targetPath, { ...opts, freshLaunch: true }));
         if (opts.wait) await wakeSession.waitForEngine(target, getPaneInfos, isAgentCommand);
         if (opts.attach) {
@@ -1751,6 +1789,7 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
       if (opts.engine) {
         console.log(`\x1b[33m⚡\x1b[0m '${existingWindow}' in ${session} — switching engine to ${opts.engine}...`);
         const command = buildWakeCommand(existingWindow, targetPath, opts);
+        await stampWakePane(target, opts.oracle);
         if (!(await respawnPaneWithCommand(target, command))) {
           await tmux.sendText(target, command);
         }
@@ -1798,6 +1837,7 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
   await tmux.newWindow(session, windowName, { cwd: targetPath });
   registerWorktreeWindow();
   const cmd = buildWakeCommand(windowName, targetPath, opts);
+  await stampWakePane(`${session}:${windowName}`, opts.oracle);
   if (opts.prompt) {
     await sendWakeCommandAndPrompt(`${session}:${windowName}`, opts.prompt, cmd, opts.engine);
   } else {

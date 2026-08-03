@@ -122,6 +122,24 @@ describe("cell command plugin standalone boundary", () => {
     expect(inject.indexOf("paneCurrentCommand(target)")).toBeLessThan(inject.indexOf("send-keys"));
   });
 
+  test("an agent-occupied pane is asked over `maw hey`, and only AFTER the guard refused to type (kobo-776)", () => {
+    const spawnSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/cell/spawn.ts"), "utf8");
+    // Second allowlist, same fail-closed shape: neither shell nor agent → refused.
+    expect(spawnSrc).toContain('const AGENT_CMDS = new Set(["claude", "node", "bun"])');
+    // Delivery reuses the sanctioned path spawn already shells out to, rather
+    // than importing cmdSend through the sdk barrel (which link-breaks every
+    // isolated suite that mocks maw-js/sdk with a partial object).
+    expect(spawnSrc).toContain("await hostExec(`maw hey ${shellArg(addr)} ${shellArg(handoffPrompt(company))}`)");
+    const sdkImport = /import \{([^}]*)\} from "maw-js\/sdk"/.exec(spawnSrc)?.[1] ?? "";
+    expect(sdkImport).not.toBe("");
+    expect(sdkImport).not.toContain("cmdSend");
+    // ORDER is the guard: the handoff branch reads injectCommand's verdict, so no
+    // keystroke can precede it. Behaviour in cell-spawn-prompt-handoff.test.ts.
+    const loop = spawnSrc.slice(spawnSrc.indexOf("export async function companyCellSpawn"));
+    expect(loop.indexOf("const injected = await injectCommand(")).toBeLessThan(loop.indexOf("AGENT_CMDS.has("));
+    expect(spawnSrc).toContain("${handed} handed-off");
+  });
+
   test("company/index.ts wires `cell` to runCell", () => {
     const companyIndexSrc = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/company/index.ts"), "utf8");
     expect(companyIndexSrc).toContain('from "../cell/index"');

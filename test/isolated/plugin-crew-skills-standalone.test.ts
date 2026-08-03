@@ -165,6 +165,12 @@ describe("crew-skills global asset contract", () => {
     expect(skill).toContain("maw company cell self-spawn <company>");
     expect(skill).toContain("This is NOT a caller-local split and NOT the older `/crew` 4-pane cell");
     expect(skill).toContain("After that, the head pane should be a live Claude process, not a shell");
+    // kobo-776 — the doc must name BOTH routes and the caveat that makes the
+    // agent route work, since a running agent can only get its contract by file
+    expect(skill).toContain("prompt handoff");
+    expect(skill).toContain("**Handed-off is not done.**");
+    expect(skill).toContain("cannot be handed a system prompt by anyone");
+    expect(skill).toContain("ψ/active/cell/head-contract.md");
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/head.md"), "utf8")).toContain("spawn/supervise a background implementation agent");
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/worker.md"), "utf8")).toContain("Act as execution supervisor by default");
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/worker.md"), "utf8")).toContain("Do not review your own work");

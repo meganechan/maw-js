@@ -283,6 +283,20 @@ function resolveMemberSession(oracle: string, sessions: Session[]): string | nul
  */
 const SHELL_CMDS = new Set(["zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh"]);
 
+/**
+ * kobo-776 — the OTHER kind of pane a cell instruction can reach: an agent REPL.
+ * It cannot run a shell line, but it can be TOLD to run one, which is what every
+ * oracle's steady state needs (a pane already running claude was previously a
+ * dead end, so bringing up a roster meant a human relaying commands by hand).
+ *
+ * Still an allowlist, and still fail-closed: a pane running vim or psql is
+ * neither a shell nor an agent, and a federation message typed at it is the same
+ * blind send 5371b28e killed — it stays REFUSED. `node`/`bun` are here because
+ * that is how a claude process reports itself through `pane_current_command`
+ * depending on how it was launched (the guard's own tests pin `node`).
+ */
+const AGENT_CMDS = new Set(["claude", "node", "bun"]);
+
 function paneCommandBasename(raw: string): string {
   const first = raw.trim().split(/\s+/)[0] ?? "";
   const base = first.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
@@ -298,7 +312,10 @@ async function paneCurrentCommand(target: string): Promise<string | null> {
   }
 }
 
-type InjectResult = { ok: true } | { ok: false; reason: string };
+/** `command` is set only when the pane was READ and turned out not to be a shell —
+ *  the caller needs the observed command to decide whether it can be talked to
+ *  (kobo-776). An unreadable pane has none, which is what keeps it refused. */
+type InjectResult = { ok: true } | { ok: false; reason: string; command?: string };
 
 async function injectCommand(target: string, command: string): Promise<InjectResult> {
   // Classify HERE, in the same call that sends the keys — never from an earlier
@@ -306,11 +323,62 @@ async function injectCommand(target: string, command: string): Promise<InjectRes
   // must wait for the verdict; in a REPL it edits the prompt box.
   const current = await paneCurrentCommand(target);
   if (current === null) return { ok: false, reason: `cannot read pane_current_command for ${target}` };
-  if (!SHELL_CMDS.has(paneCommandBasename(current))) return { ok: false, reason: `pane ${target} is running '${current}', not a shell` };
+  if (!SHELL_CMDS.has(paneCommandBasename(current))) return { ok: false, reason: `pane ${target} is running '${current}', not a shell`, command: current };
   await hostExec(`tmux send-keys -t ${shellArg(target)} C-u`);
   await hostExec(`tmux send-keys -t ${shellArg(target)} ${shellArg(command)}`);
   await sleep(INJECT_SETTLE_MS);
   await hostExec(`tmux send-keys -t ${shellArg(target)} Enter`);
+  return { ok: true };
+}
+
+/** The pane's `session:window.pane` address — what `maw hey` takes as a target. */
+async function paneAddress(target: string): Promise<string | null> {
+  try {
+    const addr = (await hostExec(`tmux display-message -t ${shellArg(target)} -p '#{session_name}:#{window_index}.#{pane_index}'`)).trim();
+    return addr || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * kobo-776 — what a running agent is asked to do, in ONE line.
+ *
+ * One line on purpose: the TUI treats a multi-line send as a paste and can eat or
+ * reflow it, and an instruction that arrives mangled is worse than none. Every
+ * command in here must be runnable verbatim — the reader is an agent that will
+ * copy it into its own Bash, not a human who will fix a typo.
+ *
+ * The caveat is not decoration. A head launched by the shell path gets the
+ * contract via `--append-system-prompt`; an agent that is ALREADY running cannot
+ * be handed a system prompt by anyone, so the file is the only channel it has.
+ * Leave that out and the pane becomes a head that never read its contract —
+ * alive, and behaving like a stranger (the failure kobo-765/B5 closed).
+ */
+function handoffPrompt(company: string): string {
+  const contract = join(DEFAULT_STATE_DIR, "head-contract.md");
+  return `[cell spawn ${company}] Your cell is not up and you are its head pane. Run this in your own Bash tool, exactly as written: \`maw company cell self-spawn ${company}\` — it adopts THIS pane as head (it anchors on $TMUX_PANE, which your Bash tool inherits) and opens the worker + reviewer panes beside you. Then read \`${contract}\` and follow it as your head contract. CAVEAT: you are already running, so that contract could NOT be appended to your system prompt the way a freshly launched head gets it — reading the file is the only way it reaches you. Do not restart yourself, do not run any \`claude --append-system-prompt\` launch line, and do not kill this pane.`;
+}
+
+/**
+ * kobo-776 — deliver the instruction as a federation message instead of typing a
+ * shell line into a REPL.
+ *
+ * Shelling out to `maw hey` rather than importing cmdSend: spawn.ts already
+ * reaches the fleet this way four functions down (the worker double-fail notify),
+ * `hey` is the sanctioned delivery path with its own idle/permission gates, and
+ * pulling cmdSend in through the sdk barrel would link-break every isolated suite
+ * that mocks `maw-js/sdk` with a partial object — the same hazard that made this
+ * file inline selfOracleId instead of importing resolveAgentSelf.
+ */
+async function handOffToAgent(target: string, company: string): Promise<InjectResult> {
+  const addr = await paneAddress(target);
+  if (!addr) return { ok: false, reason: `cannot resolve a hey address for ${target}` };
+  try {
+    await hostExec(`maw hey ${shellArg(addr)} ${shellArg(handoffPrompt(company))}`);
+  } catch (e: any) {
+    return { ok: false, reason: `maw hey to ${addr} failed (${e.message})` };
+  }
   return { ok: true };
 }
 
@@ -395,7 +463,7 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
   if (!co) return { ok: false, error: `company not found: ${company}` };
 
   const log = (line: string) => { if (verbose) emit(line); };
-  let ready = 0, repaired = 0, bootFailed = 0, refused = 0;
+  let ready = 0, repaired = 0, handed = 0, bootFailed = 0, refused = 0;
   const roster = companyRoster(co);
   let sessions = await listSessions();
 
@@ -432,6 +500,24 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
     try {
       const injected = await injectCommand(injectTarget, `maw company cell self-spawn ${company} && ${headLaunchCommand(company)}`);
       if (!injected.ok) {
+        // kobo-776 — a pane running an agent is not unreachable, it is reachable
+        // by a different channel: ASK it. Reached only after injectCommand has
+        // already refused to type, so the 5371b28e guard decides this, not us —
+        // no keystroke has been sent to this pane.
+        if (AGENT_CMDS.has(paneCommandBasename(injected.command ?? ""))) {
+          const handoff = await handOffToAgent(injectTarget, company);
+          if (handoff.ok) {
+            // Not `repaired`: the agent acts on its own clock, so nothing here has
+            // observed a cell come up. Its own counter, or the summary would be
+            // claiming a result that has not happened yet.
+            emit(`↗ ${member.oracle}: HANDED OFF to the agent on ${injectTarget} (running '${injected.command}') — asked it to run \`maw company cell self-spawn ${company}\` itself and read ${join(DEFAULT_STATE_DIR, "head-contract.md")}. Not yet a cell: check the board/pane for it acting on this.`);
+            handed++;
+            continue;
+          }
+          emit(`⚠ ${member.oracle}: handoff to the agent on ${injectTarget} FAILED — ${handoff.reason}`);
+          refused++;
+          continue;
+        }
         // Loud on purpose (emit, not log): this used to count as repaired while
         // the pane did nothing — the summary said the opposite of the truth.
         emit(`⚠ ${member.oracle}: REFUSED repair injection — ${injected.reason}; a typed command would land as prompt text, not run. Fix by running \`maw company cell self-spawn ${company}\` inside that pane.`);
@@ -452,7 +538,7 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
     }
   }
 
-  emit(`✓ cell spawn ${company}: ${ready} ready, ${repaired} repaired, ${bootFailed} head-boot-failed, ${refused} refused/failed (${roster.length} oracle${roster.length === 1 ? "" : "s"})`);
+  emit(`✓ cell spawn ${company}: ${ready} ready, ${repaired} repaired, ${handed} handed-off, ${bootFailed} head-boot-failed, ${refused} refused/failed (${roster.length} oracle${roster.length === 1 ? "" : "s"})`);
   return { ok: true };
 }
 
@@ -669,8 +755,8 @@ async function spawnWorkerSelfHeal(opts: { cwd: string; company: string; stateDi
   if (await pollBoot(paneId, RETRY_POLL_MAX)) return { ok: true, paneId, model };
 
   try {
-    const headAddr = (await hostExec(`tmux display-message -t ${shellArg(head)} -p '#{session_name}:#{window_index}.#{pane_index}'`)).trim();
-    await hostExec(`maw hey ${shellArg(headAddr)} ${shellArg(`[cell spawn double-fail] worker failed ${BRAIN_MODEL}+${DEFAULT_WORKER_MODEL} boot — manual recovery needed`)}`);
+    const headAddr = await paneAddress(head);
+    if (headAddr) await hostExec(`maw hey ${shellArg(headAddr)} ${shellArg(`[cell spawn double-fail] worker failed ${BRAIN_MODEL}+${DEFAULT_WORKER_MODEL} boot — manual recovery needed`)}`);
   } catch { /* best-effort */ }
   emit("⚠ worker double-fail — surfaced to head, pane left up for manual inspection");
   return { ok: true, paneId, model };

@@ -159,6 +159,9 @@ describe("crew-skills global asset contract", () => {
     expect(skill).toContain("maw company cell spawn <company>");
     expect(skill).toContain("maw company cell down <company> [--force]");
     expect(skill).toContain("requires an identifiable cell head pane before killing anything");
+    // kobo-764 — the doc must state the selector, not just "cell-owned panes"
+    expect(skill).toContain("`@oracle_pane` identity is `{that oracle}:worker` or `{that oracle}:reviewer`");
+    expect(skill).toContain("The head pane is never killed");
     expect(skill).toContain("maw company cell self-spawn <company>");
     expect(skill).toContain("This is NOT a caller-local split and NOT the older `/crew` 4-pane cell");
     expect(skill).toContain("After that, the head pane should be a live Claude process, not a shell");

@@ -42,7 +42,7 @@ maw company cell spawn kobo
 
 The public spawn verb controls the company fleet: wake missing oracle sessions headlessly, locate each oracle session, then inject the local self-spawn into that oracle's pane so tmux layout is created in the correct place and the head pane launches Claude afterward.
 
-The public down verb controls Cell v2 teardown for the company roster: it resolves each oracle session, requires an identifiable cell head pane before killing anything, honors busy guard unless `--force` is passed, and tears down cell-owned panes/windows only.
+The public down verb controls Cell v2 teardown for the company roster: it resolves each oracle session, requires an identifiable cell head pane before killing anything, honors busy guard unless `--force` is passed, and kills only the panes whose `@oracle_pane` identity is `{that oracle}:worker` or `{that oracle}:reviewer`. A pane carrying no identity, or another oracle's, is never killed — window name and pane title are not selectors. The head pane is never killed: it is the oracle's own adopted pane, so down stands it down instead (clears `@role`, removes the cell state files, keeps its `{oracle}:head` identity). `killed` counts panes verified gone; anything still standing is reported as a PARTIAL teardown and leaves the cell state in place.
 
 The hidden internal verb is:
 

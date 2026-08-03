@@ -28,5 +28,10 @@ export async function runCell(
     return await cellSelfSpawn(parseCellCompanyArg(args), emit);
   }
 
-  return { ok: false, error: "usage: maw company cell <spawn|down> <company> [--force] [--verbose|--full]" };
+  // `up` was the old verb and still lives in muscle memory and docs — name its
+  // replacement instead of printing a grammar the caller already believed.
+  return {
+    ok: false,
+    error: "usage: maw company cell <spawn|down> <company> [--force] [--verbose|--full] ('up' was replaced by 'spawn')",
+  };
 }

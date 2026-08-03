@@ -17,7 +17,7 @@ import { checkBusyGuard, cmdWake, findWindow, hostExec, listSessions, type Sessi
 import { loadCompany, type Company } from "../company/company-helpers";
 import { scopeOfOracle } from "../../../core/worklog/company-scope";
 import { teardownCrewWindows, BRAIN_MODEL, DEFAULT_WORKER_MODEL } from "../../../core/agent-panes";
-import { stampPaneIdentity, type PaneRole } from "../../../core/pane-identity";
+import { ORACLE_PANE_OPTION, stampPaneIdentity, type PaneRole } from "../../../core/pane-identity";
 
 const CELL_WORKERS_WINDOW = "cell-workers";
 const DEFAULT_STATE_DIR = "ψ/active/cell";
@@ -112,18 +112,18 @@ function companyRoster(co: Company): RosterMember[] {
   return out;
 }
 
-interface PaneRow { paneId: string; role: string; windowName: string }
+interface PaneRow { paneId: string; role: string; windowName: string; identity: string; path: string }
 
 async function listSessionPanes(sessionName: string): Promise<PaneRow[]> {
   let raw: string;
   try {
-    raw = await hostExec(`tmux list-panes -s -t ${shellArg(sessionName)} -F '#{pane_id}|||#{@role}|||#{window_name}'`);
+    raw = await hostExec(`tmux list-panes -s -t ${shellArg(sessionName)} -F '#{pane_id}|||#{@role}|||#{window_name}|||#{${ORACLE_PANE_OPTION}}|||#{pane_current_path}'`);
   } catch {
     return [];
   }
   return raw.split("\n").filter(Boolean).map((line) => {
-    const [paneId = "", role = "", windowName = ""] = line.split("|||");
-    return { paneId, role, windowName };
+    const [paneId = "", role = "", windowName = "", identity = "", path = ""] = line.split("|||");
+    return { paneId, role, windowName, identity, path };
   });
 }
 
@@ -135,15 +135,37 @@ function findRolePane(panes: PaneRow[], prefix: string): string | undefined {
   return panes.find((p) => p.role.startsWith(prefix))?.paneId;
 }
 
-function isCellOwnedPane(p: PaneRow): boolean {
-  if (p.role.startsWith("👤") || p.role.startsWith("⚒") || p.role.startsWith("🔎")) return true;
-  if (p.windowName === "cell-head" || p.windowName === CELL_WORKERS_WINDOW) return true;
-  return false;
+/**
+ * kobo-764 — teardown selection is the `@oracle_pane` identity and NOTHING else.
+ *
+ * What it replaces: a pane counted as "cell owned" if its `@role` started with a
+ * cell emoji OR its window was named `cell-head`/`cell-workers`. Both are shared
+ * namespaces — one tmux session holds several oracles' cells plus human panes, so
+ * `down A` reached B's panes and any human split that happened to sit in a
+ * cell-named window. Window name and pane title are decoration anything can write;
+ * the option is only written by a deliberate `tmux set-option`.
+ *
+ * A pane with NO identity is NOT ours: never killed (fail-closed).
+ */
+function paneIdentityOf(p: PaneRow): { oracle: string; role: string } | null {
+  const raw = (p.identity ?? "").trim();
+  const i = raw.indexOf(":");
+  if (i <= 0 || i === raw.length - 1) return null;
+  return { oracle: raw.slice(0, i), role: raw.slice(i + 1) };
 }
 
-function killOrder(p: PaneRow): number {
-  if (p.role.startsWith("👤") || p.windowName === "cell-head") return 2;
-  return 1;
+/** The kill list: this oracle's cell-born panes only. head is never a target — it
+ *  is the ADOPTED pane the oracle already lived in before the cell existed. */
+function isTeardownTarget(p: PaneRow, oracle: string): boolean {
+  const id = paneIdentityOf(p);
+  return !!id && id.oracle === oracle && (id.role === "worker" || id.role === "reviewer");
+}
+
+function findHeadPane(panes: PaneRow[], oracle: string): PaneRow | undefined {
+  return panes.find((p) => {
+    const id = paneIdentityOf(p);
+    return id?.oracle === oracle && id.role === "head";
+  });
 }
 
 function parseCompanyArg(args: string[]): string | undefined {
@@ -300,7 +322,7 @@ export async function companyCellDown(company: string | undefined, opts: { force
   if (!co) return { ok: false, error: `company not found: ${company}` };
 
   const log = (line: string) => { if (opts.verbose) emit(line); };
-  let torn = 0, skipped = 0, refused = 0;
+  let torn = 0, partial = 0, skipped = 0, refused = 0;
   const roster = companyRoster(co);
   const sessions = await listSessions();
   const invokerPane = (process.env.TMUX_PANE || "").trim();
@@ -310,10 +332,10 @@ export async function companyCellDown(company: string | undefined, opts: { force
     if (!resolved) { log(`${member.oracle}: no session found — nothing to tear down`); skipped++; continue; }
     const sessionName = sessionNameOf(resolved);
     const panes = await listSessionPanes(sessionName);
-    const headPane = findRolePane(panes, "👤") ?? panes.find((p) => p.windowName === "cell-head")?.paneId;
+    const headPane = findHeadPane(panes, member.oracle);
 
     if (!headPane) {
-      log(`⚠ ${member.oracle}: no cell head pane found in session ${sessionName} — skipping teardown fail-closed`);
+      log(`⚠ ${member.oracle}: no pane carrying ${ORACLE_PANE_OPTION}=${member.oracle}:head in session ${sessionName} — skipping teardown fail-closed`);
       skipped++;
       continue;
     }
@@ -328,28 +350,64 @@ export async function companyCellDown(company: string | undefined, opts: { force
     }
 
     const toKill = panes
-      .filter(isCellOwnedPane)
-      .filter((p) => p.paneId && p.paneId !== invokerPane)
-      .sort((a, b) => killOrder(a) - killOrder(b));
+      .filter((p) => p.paneId && p.paneId !== invokerPane && isTeardownTarget(p, member.oracle));
 
-    if (toKill.length === 0) { log(`${member.oracle}: no killable cell panes (invoker/head protected?)`); skipped++; continue; }
-
-    let killed = 0;
     for (const pane of toKill) {
-      try {
-        await hostExec(`tmux kill-pane -t ${shellArg(pane.paneId)}`);
-        killed++;
-      } catch {
-        /* already gone — race with manual teardown is fine */
-        killed++;
+      try { await hostExec(`tmux kill-pane -t ${shellArg(pane.paneId)}`); } catch { /* verified below, not here */ }
+    }
+
+    // Count from what the SERVER says, not from what kill-pane returned: a kill
+    // that threw may still have landed, and one that returned cleanly may not
+    // have. `killed` must mean "pane is gone".
+    let killed = 0;
+    let survivors = panes.length;
+    const failures: string[] = [];
+    if (toKill.length > 0) {
+      const after = await listSessionPanes(sessionName);
+      const alive = new Set(after.map((p) => p.paneId));
+      survivors = after.length;
+      // Negative control: head is never a target, so a listing that lost it is a
+      // failed probe, not an empty session — refuse to read it as success.
+      const probeOk = alive.has(headPane.paneId);
+      for (const pane of toKill) {
+        if (probeOk && !alive.has(pane.paneId)) { killed++; continue; }
+        failures.push(probeOk ? pane.paneId : `${pane.paneId} (unverifiable: pane listing lost the head pane)`);
       }
     }
+
+    if (failures.length > 0) {
+      // Loud on purpose (emit, not log): this used to count every attempt as a
+      // kill, so a cell still standing reported as torn down.
+      emit(`⚠ ${member.oracle}: cell teardown PARTIAL — killed ${killed}/${toKill.length}, still up: ${failures.join(", ")}; state left in place`);
+      partial++;
+      continue;
+    }
+
     log(`${member.oracle}: killed ${killed}/${toKill.length} cell pane(s)`);
+    // Head is the last pane standing → say so out loud, not only under --verbose:
+    // "the session went quiet" must not read as "the oracle was killed too".
+    await standDownHead(headPane, member.oracle, survivors <= 1 ? emit : log);
     torn++;
   }
 
-  emit(`✓ cell down ${company}: ${torn} torn, ${skipped} skipped, ${refused} refused (${roster.length} oracle${roster.length === 1 ? "" : "s"})`);
+  emit(`✓ cell down ${company}: ${torn} torn, ${partial} partial, ${skipped} skipped, ${refused} refused (${roster.length} oracle${roster.length === 1 ? "" : "s"})`);
   return { ok: true };
+}
+
+/**
+ * The head pane outlives the cell — it is the oracle's own pane, adopted at
+ * self-spawn. Down puts it back to a plain oracle pane instead: drop the cell
+ * `@role`, drop the cell state files, keep `@oracle_pane={oracle}:head` (that is
+ * exactly what a solo `maw wake` pane carries — the oracle is still there).
+ */
+async function standDownHead(head: PaneRow, oracle: string, report: (line: string) => void): Promise<void> {
+  try { await hostExec(`tmux set-option -pu -t ${shellArg(head.paneId)} @role`); } catch { /* pane may be gone */ }
+  // The head pane's own cwd — down runs from the invoker's process, so the state
+  // dir is never relative to us. ponytail: pane_current_path is what tmux knows;
+  // a head whose shell wandered elsewhere keeps its state, which is the safe miss.
+  const stateDir = head.path ? join(head.path, DEFAULT_STATE_DIR) : "";
+  if (stateDir) for (const f of STATE_FILES) { try { rmSync(join(stateDir, f)); } catch { /* absent */ } }
+  report(`${oracle}: head ${head.paneId} kept (the oracle's own pane — never killed by down), @role cleared, cell state removed`);
 }
 
 export function parseCellCompanyArg(args: string[]): string | undefined { return parseCompanyArg(args); }

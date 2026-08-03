@@ -70,10 +70,16 @@ describe("cell command plugin standalone boundary", () => {
     expect(spawnSrc).toContain('emit(`✓ cell spawned — head=${head} worker=${worker.paneId} (${worker.model}) reviewer=${reviewer}`)');
     expect(spawnSrc).toContain("export async function companyCellDown");
     expect(spawnSrc).toContain("usage: maw company cell down <company> [--force] [--verbose|--full]");
-    expect(spawnSrc).toContain("no cell head pane found");
     expect(spawnSrc).toContain("BUSY — refusing cell teardown");
     expect(spawnSrc).toContain("tmux kill-pane -t ${shellArg(pane.paneId)}");
     expect(spawnSrc).toContain("✓ cell down");
+    // kobo-764 — teardown selects on the @oracle_pane identity ONLY: no emoji
+    // @role, no window name (behaviour proven in cell-down-identity.test.ts).
+    expect(spawnSrc).toContain("isTeardownTarget(p, member.oracle)");
+    expect(spawnSrc).toContain('id.role === "worker" || id.role === "reviewer"');
+    expect(spawnSrc).toContain("findHeadPane(panes, member.oracle)");
+    expect(spawnSrc).toContain("standDownHead(headPane, member.oracle");
+    expect(spawnSrc).toContain("cell teardown PARTIAL");
   });
 
   test("spawn repair classifies the pane before typing into it — allowlist + fail closed (cell-spawn-inject-blind)", () => {

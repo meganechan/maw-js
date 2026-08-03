@@ -1,14 +1,10 @@
-// kobo-472 known-red note (scripts/test-src-known-red.json): 3 of the
-// "room feed listener" tests below are RED in a fresh environment (no
-// ambient company registry) — pre-existing on origin/alpha, not introduced
-// by kobo-472 (this file is the first time src/ tests run in CI at all).
-// Same root cause as store.test.ts's own known-red note: this suite only
-// isolates MAW_DATA_DIR, but onRoomFeedEvent's room lookup (via
-// findRoomCompany-style resolution) iterates the REAL listCompanies()
-// registry — a machine with "kobo" already registered ambiently passes,
-// a clean runner can't resolve the room's company at all. Needs a real fix
-// (seed a fake company registry inside the isolated dir, or inject
-// listCompanies for the test) as its own follow-up card.
+// kobo-734: onRoomFeedEvent's room lookup goes through findRoomCompany() →
+// listCompanies(), which reads COMPANIES_DIR (gated on MAW_HOME/config — a
+// different resolver than the MAW_DATA_DIR this suite isolates). Fixed by
+// pointing COMPANIES_DIR at an isolated dir via the `_setCompaniesDir` seam
+// sibling suites already use (company-scope.test.ts et al) and seeding a
+// "kobo" registry entry there, instead of relying on the real machine's
+// ambient ~/.maw/companies/kobo.json.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
@@ -16,10 +12,24 @@ import { join } from "path";
 import { parseRoomId, stripRoomTag, onRoomFeedEvent } from "./listener";
 import { openRoom, closeRoom, readRoom } from "./store";
 import type { FeedEvent } from "../../lib/feed";
+import { _setCompaniesDir, saveCompany, COMPANIES_DIR } from "../../vendor/mpr-plugins/company/company-helpers";
 
 let dir: string; const prev = process.env.MAW_DATA_DIR;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "maw-roomlsn-")); process.env.MAW_DATA_DIR = dir; });
-afterEach(() => { if (prev === undefined) delete process.env.MAW_DATA_DIR; else process.env.MAW_DATA_DIR = prev; rmSync(dir, { recursive: true, force: true }); });
+const ORIGINAL_COMPANIES_DIR = COMPANIES_DIR;
+let companiesDir: string;
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "maw-roomlsn-"));
+  process.env.MAW_DATA_DIR = dir;
+  companiesDir = mkdtempSync(join(tmpdir(), "maw-roomlsn-companies-"));
+  _setCompaniesDir(companiesDir);
+  saveCompany({ name: "kobo", teams: {} });
+});
+afterEach(() => {
+  if (prev === undefined) delete process.env.MAW_DATA_DIR; else process.env.MAW_DATA_DIR = prev;
+  rmSync(dir, { recursive: true, force: true });
+  _setCompaniesDir(ORIGINAL_COMPANIES_DIR);
+  rmSync(companiesDir, { recursive: true, force: true });
+});
 
 const ev = (over: Partial<FeedEvent> & { data?: unknown }): FeedEvent => ({
   timestamp: "x", oracle: "web", host: "local", event: "MessageSend", project: "", sessionId: "", message: "", ts: 1, ...over,

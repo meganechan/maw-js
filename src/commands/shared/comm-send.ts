@@ -25,6 +25,10 @@ import { checkBusyGuard, queueForDispatch } from "../../core/agent-status-guard"
 import { runPluginEventHooks } from "../../plugin/event-hooks";
 import { notifyLiveInboxReceiver } from "./live-inbox-notify";
 import { getPaneRoute } from "../../core/pane-routes";
+import { ORACLE_PANE_OPTION, parsePaneIdentity } from "../../core/pane-identity";
+
+/** kobo-782 — separates the historical `<index> <command>` prefix from the identity. */
+const PANE_IDENTITY_SEP = "|||";
 // Pane-aware oracle extraction for the presence gate: unlike agent-status-guard's
 // (which takes the last `:`-segment → returns "0.2" for a crew pane address like
 // "13-patchwork:0.2"), this pulls the session slug → "patchwork". kobo-120: the gate
@@ -98,20 +102,32 @@ export async function resolveOraclePane(
   try {
     const run = deps.tmuxRun ?? ((...args: string[]) => new Tmux().run(...args));
     const isAgent = deps.isAgentCommandFn ?? isAgentCommand;
-    const raw = await run("list-panes", "-t", target, "-F", "#{pane_index} #{pane_current_command}");
+    // kobo-782 — the `@oracle_pane` identity rides along on the SAME list-panes
+    // call (appended after `|||` so the historical `<index> <command>` prefix and
+    // its parsing are untouched; a canned/older reply with no `|||` reads as "no
+    // identity" and takes the historical path).
+    const raw = await run("list-panes", "-t", target, "-F", `#{pane_index} #{pane_current_command}${PANE_IDENTITY_SEP}#{${ORACLE_PANE_OPTION}}`);
     const lines = raw.split("\n").map((l: string) => l.trim()).filter(Boolean);
     if (lines.length <= 1) return target; // single-pane window: active pane is the only pane
 
     const paneIndexes = new Set<number>();
     const agentIndexes: number[] = [];
-    for (const line of lines) {
+    const headIndexes: number[] = [];
+    for (const rawLine of lines) {
+      const [line = "", identity = ""] = rawLine.split(PANE_IDENTITY_SEP);
       const spaceIdx = line.indexOf(" ");
       if (spaceIdx < 0) continue;
       const idx = parseInt(line.slice(0, spaceIdx), 10);
       if (!Number.isFinite(idx)) continue;
       paneIndexes.add(idx);
       const cmd = line.slice(spaceIdx + 1);
-      if (isAgent(cmd)) agentIndexes.push(idx);
+      if (!isAgent(cmd)) continue;
+      agentIndexes.push(idx);
+      // Only agent panes are candidates: a head whose agent died is a bare shell,
+      // and delivering there types the message at a shell prompt. Identity picks
+      // WHICH agent pane, it does not make a dead one deliverable.
+      const parsed = parsePaneIdentity(identity);
+      if (parsed && parsed.role === "head" && (!route.oracle || parsed.oracle === route.oracle)) headIndexes.push(idx);
     }
 
     // kobo-36 — channel→pane registry consult. Only overrides the default when a
@@ -123,6 +139,16 @@ export async function resolveOraclePane(
       const mapped = getRoute(route.oracle, route.channel);
       if (mapped !== null && paneIndexes.has(mapped)) return `${target}.${mapped}`;
     }
+
+    // kobo-782 — a cell's head window holds worker and reviewer panes too, and
+    // "lowest agent pane index" is a POSITION, not evidence of whose pane it is:
+    // a split that lands below the head, or a head adopted after the others,
+    // silently retargets the oracle's mail at a teammate. `{oracle}:head` says
+    // which pane is the oracle. Lowest index among claimants — the same
+    // oldest-wins tie-break cell down/spawn uses (kobo-775) expressed in the
+    // units this function speaks. No claimant (an un-backfilled pane, which is
+    // most of the fleet) → the historical default below, unchanged.
+    if (headIndexes.length > 0) return `${target}.${Math.min(...headIndexes)}`;
 
     if (agentIndexes.length === 0) return target;
     return `${target}.${Math.min(...agentIndexes)}`;

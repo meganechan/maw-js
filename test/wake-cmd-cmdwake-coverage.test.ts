@@ -186,6 +186,16 @@ let ensureTeamConfigReturn: boolean;
 let hasSessions: Set<string>;
 let newSessionVisibleToHasSession: boolean;
 let windowsBySession: Record<string, TmuxWindow[]>;
+// kobo-782 — panes carrying an `@oracle_pane` identity, as `tmux list-panes -a`
+// would report them. Empty by default: an un-backfilled fleet, which is what
+// every pre-existing test in this file assumes.
+let identifiedPanes: Array<{
+  paneId: string;
+  session: string;
+  windowIndex: number | string;
+  windowName: string;
+  identity: string;
+}>;
 let paneCommandDefault: string;
 let paneCommands: Record<string, string>;
 let liveTileRoles: string[];
@@ -378,6 +388,12 @@ mock.module(join(import.meta.dir, "../src/sdk"), () => ({
         return realCallForbidden("tmux.run");
       }
       tmuxRunCalls.push([subcommand, ...args]);
+      // kobo-782 — the identity scan (`list-panes -a -F ...`).
+      if (subcommand === "list-panes" && args.includes("-a")) {
+        return identifiedPanes
+          .map((p) => [p.paneId, p.session, p.windowIndex, p.windowName, p.identity].join("|||"))
+          .join("\n");
+      }
       return "";
     },
     sendText: async (target: string, text: string) => {
@@ -797,6 +813,7 @@ beforeEach(() => {
       { index: 0, name: "mawjs-oracle", active: true, cwd: repoPath },
     ],
   };
+  identifiedPanes = [];
   paneCommandDefault = "codex";
   paneCommands = {};
   liveTileRoles = [];
@@ -2317,5 +2334,118 @@ describe("wake stamps @oracle_pane at every pane birth (kobo-759)", () => {
     await captureLogs(() => cmdWake("mawjs", { dryRun: true }));
 
     expect(identityWrites()).toEqual([]);
+  });
+});
+
+/**
+ * kobo-782 — ensure-pane decides presence by `@oracle_pane` IDENTITY, not by a
+ * window NAME.
+ *
+ * A cell-up oracle's head window is renamed `cell-head`, so the name lookup
+ * missed the pane the oracle is actually living in and wake created a fresh
+ * `<oracle>-oracle` window — which kobo-759 then stamped `{oracle}:head`. That
+ * is a NEW duplicate head PER DISPATCH: it amplifies, it is not residue.
+ */
+describe("wake ensures a pane by identity, not by window name (kobo-782)", () => {
+  const cellHeadPane = (identity = "mawjs:head", paneId = "%12") => ({
+    paneId,
+    session: "54-mawjs",
+    windowIndex: 0,
+    windowName: "cell-head",
+    identity,
+  });
+
+  function cellIsUp(...panes: ReturnType<typeof cellHeadPane>[]): void {
+    // The ONLY window is the renamed cell head — exactly the live shape that
+    // made every dispatch mint a duplicate.
+    windowsBySession = {
+      "54-mawjs": [{ index: 0, name: "cell-head", active: true, cwd: repoPath }],
+    };
+    identifiedPanes = panes;
+    paneCommandDefault = "claude"; // the head pane has a live agent in it
+  }
+
+  test("AC1: a dispatch to a cell-up oracle lands on the head pane and creates nothing", async () => {
+    cellIsUp(cellHeadPane());
+
+    const { result } = await captureLogs(() => cmdWake("mawjs", {}));
+
+    expect(result).toBe("%12");
+    expect(newWindowCalls).toEqual([]);
+    expect(newSessionCalls).toEqual([]);
+    expect(identityWrites()).toEqual([]); // no birth ⇒ no second `mawjs:head`
+  });
+
+  test("AC2 anti-amplification: repeating the dispatch still creates nothing", async () => {
+    cellIsUp(cellHeadPane());
+    const paneCountBefore = identifiedPanes.length;
+
+    await captureLogs(() => cmdWake("mawjs", {}));
+    await captureLogs(() => cmdWake("mawjs", {}));
+    await captureLogs(() => cmdWake("mawjs", {}));
+
+    expect(newWindowCalls).toEqual([]);
+    expect(windowsBySession["54-mawjs"]!.map((w) => w.name)).toEqual(["cell-head"]);
+    expect(identifiedPanes.length).toBe(paneCountBefore);
+  });
+
+  test("delivery targets the head PANE, not the head window — a cell window holds worker/reviewer panes too", async () => {
+    cellIsUp(
+      cellHeadPane(),
+      { ...cellHeadPane("mawjs:worker", "%13") },
+      { ...cellHeadPane("mawjs:reviewer", "%14") },
+    );
+    paneCommandDefault = "zsh"; // dead agent → wake relaunches into the target
+
+    await captureLogs(() => cmdWake("mawjs", {}));
+
+    expect(sendTextCalls.map((c) => c.target)).toEqual(["%12"]);
+    expect(sendTextCalls.map((c) => c.target)).not.toContain("54-mawjs:cell-head");
+  });
+
+  test("another oracle's panes are not this oracle's presence", async () => {
+    cellIsUp({ ...cellHeadPane("thawanban:head", "%99") });
+    windowsBySession["54-mawjs"] = [];
+
+    await captureLogs(() => cmdWake("mawjs", { noRehydrate: true, noFleet: true }));
+
+    expect(newWindowCalls.map((c) => c.name)).toEqual(["mawjs-oracle"]);
+  });
+
+  test("legacy: an oracle with no stamped pane and no named window wakes exactly as before", async () => {
+    windowsBySession = { "54-mawjs": [] };
+    identifiedPanes = [];
+
+    await captureLogs(() => cmdWake("mawjs", { noRehydrate: true, noFleet: true }));
+
+    expect(newWindowCalls).toEqual([
+      { session: "54-mawjs", name: "mawjs-oracle", opts: { cwd: repoPath } },
+    ]);
+    expect(identityWrites()).toEqual([stampFor("54-mawjs:mawjs-oracle")]);
+  });
+
+  test("dual head: delivery picks the LOWEST pane id and the loser gets a clear command, never a kill", async () => {
+    cellIsUp(cellHeadPane("mawjs:head", "%77"), cellHeadPane("mawjs:head", "%12"));
+
+    const { result, logs } = await captureLogs(() => cmdWake("mawjs", {}));
+
+    expect(result).toBe("%12"); // oldest pane wins, not tmux listing order
+    const warning = logs.find((l) => l.includes("panes claim @oracle_pane"));
+    expect(warning).toBeDefined();
+    expect(warning).toContain("2 panes claim @oracle_pane=mawjs:head");
+    expect(warning).toContain("using %12 (lowest pane id = oldest)");
+    expect(warning).toContain("tmux set-option -pu -t %77 @oracle_pane");
+    // guidance only — nothing is killed and no stamp is cleared for us
+    expect(hostExecCalls.some((c) => c.includes("kill-pane"))).toBe(false);
+    expect(hostExecCalls.some((c) => c.includes("set-option") && c.includes("-u"))).toBe(false);
+  });
+
+  test("a --task window keeps the historical name lookup — identity gates the oracle's own window only", async () => {
+    cellIsUp(cellHeadPane());
+    branchName = "feature/fix-b";
+
+    await captureLogs(() => cmdWake("mawjs", { task: "fix-b" }));
+
+    expect(newWindowCalls.map((c) => c.name)).toEqual(["mawjs-fix-b"]);
   });
 });

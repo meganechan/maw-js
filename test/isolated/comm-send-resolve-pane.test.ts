@@ -83,7 +83,10 @@ describe("resolveOraclePane — H1 defensive refactor", () => {
     // Should have called Tmux.run with discrete args
     expect(runCalls).toHaveLength(1);
     expect(runCalls[0].subcommand).toBe("list-panes");
-    expect(runCalls[0].args).toEqual(["-t", "mawjs-session:mawjs-oracle", "-F", "#{pane_index} #{pane_current_command}"]);
+    // kobo-782 appended `|||#{@oracle_pane}` — the identity rides along on this
+    // same call rather than costing a second one. The `<index> <command>` prefix
+    // is unchanged, which is why this case's canned reply still parses.
+    expect(runCalls[0].args).toEqual(["-t", "mawjs-session:mawjs-oracle", "-F", "#{pane_index} #{pane_current_command}|||#{@oracle_pane}"]);
   });
 
   test("Case 2 — injection character in target does NOT reach shell as interpreted text", async () => {
@@ -236,5 +239,79 @@ describe("resolveOraclePane — kobo-36 channel→pane routing", () => {
     );
     expect(result).toBe("eq3:eq3-oracle.2");
     expect(runCalls).toHaveLength(0); // short-circuits before list-panes
+  });
+});
+
+/**
+ * kobo-782 — which pane of a cell-up oracle's window gets the message.
+ *
+ * "Lowest agent pane index" is a POSITION. A cell head window also holds the
+ * worker and reviewer panes, so position silently retargets the oracle's mail at
+ * a teammate whenever the head is not the lowest index. `@oracle_pane` says
+ * which pane is the oracle.
+ */
+describe("resolveOraclePane picks the head pane by identity (kobo-782)", () => {
+  beforeEach(() => {
+    runCalls = [];
+    runReturnValue = "";
+  });
+
+  test("the head pane wins even when a teammate sits at a lower index", async () => {
+    runReturnValue = [
+      "0 claude|||eq3:worker",
+      "1 claude|||eq3:head",
+      "2 claude|||eq3:reviewer",
+    ].join("\n");
+
+    expect(await resolveOraclePane("54-eq3:cell-head", {}, { oracle: "eq3" })).toBe("54-eq3:cell-head.1");
+  });
+
+  test("another oracle's head in the same window is not this oracle's pane", async () => {
+    runReturnValue = [
+      "0 claude|||thawanban:head",
+      "1 claude|||eq3:head",
+    ].join("\n");
+
+    // position alone would answer .0 — the identity is what makes it .1
+    expect(await resolveOraclePane("54-shared:w", {}, { oracle: "eq3" })).toBe("54-shared:w.1");
+  });
+
+  test("duplicate heads in one window resolve to the lowest index — the same oldest-wins rule", async () => {
+    runReturnValue = [
+      "0 claude|||eq3:worker",
+      "1 claude|||eq3:head",
+      "2 claude|||eq3:head",
+    ].join("\n");
+
+    expect(await resolveOraclePane("54-eq3:cell-head", {}, { oracle: "eq3" })).toBe("54-eq3:cell-head.1");
+  });
+
+  test("legacy: no pane carries an identity → the historical lowest-agent-pane default", async () => {
+    runReturnValue = "0 zsh|||\n1 claude|||\n";
+
+    expect(await resolveOraclePane("54-eq3:eq3-oracle", {}, { oracle: "eq3" })).toBe("54-eq3:eq3-oracle.1");
+  });
+
+  test("a reply with no identity field at all still parses (fail-open on the older format)", async () => {
+    runReturnValue = "0 zsh\n1 claude\n";
+
+    expect(await resolveOraclePane("54-eq3:eq3-oracle", {}, { oracle: "eq3" })).toBe("54-eq3:eq3-oracle.1");
+  });
+
+  test("a head whose agent died is not deliverable — the live agent default stands", async () => {
+    runReturnValue = "0 zsh|||eq3:head\n1 claude|||eq3:worker\n";
+
+    expect(await resolveOraclePane("54-eq3:cell-head", {}, { oracle: "eq3" })).toBe("54-eq3:cell-head.1");
+  });
+
+  test("an explicit channel→pane mapping still wins — identity does not override a declared route", async () => {
+    runReturnValue = "0 claude|||eq3:worker\n1 claude|||eq3:head\n";
+
+    const result = await resolveOraclePane(
+      "54-eq3:cell-head",
+      { getPaneRouteFn: () => 0 },
+      { oracle: "eq3", channel: "task-events" },
+    );
+    expect(result).toBe("54-eq3:cell-head.0");
   });
 });

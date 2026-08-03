@@ -23,7 +23,7 @@ process.env.MAW_DATA_DIR = dir;
 mkdirSync(join(dir, "companies"), { recursive: true });
 // pgw: manager=eq3 (above depts), dept core members thawanban + somsri. patchwork NOT a member.
 writeFileSync(join(dir, "companies", "pgw.json"),
-  JSON.stringify({ name: "pgw", manager: "eq3", departments: { core: { members: [{ oracle: "thawanban" }, { oracle: "somsri" }], lead: "thawanban" } } }));
+  JSON.stringify({ name: "pgw", manager: "eq3", teams: { core: { members: [{ oracle: "thawanban" }, { oracle: "somsri" }], lead: "thawanban" } } }));
 
 const { companyScopeViolation } = await import("../../src/core/worklog/company-scope");
 const { COMPANIES_DIR, _setCompaniesDir } = await import("../../src/vendor/mpr-plugins/company/company-helpers");

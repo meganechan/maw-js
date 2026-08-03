@@ -18,7 +18,7 @@ process.env.MAW_DATA_DIR = dir;
 mkdirSync(join(dir, "companies"), { recursive: true });
 // kobo: manager=eq3 (above depts, no dept), dept "utils" has utils-worker.
 writeFileSync(join(dir, "companies", "kobo.json"),
-  JSON.stringify({ name: "kobo", manager: "eq3", departments: { utils: { members: [{ oracle: "utils-worker" }], lead: "utils-worker" } } }));
+  JSON.stringify({ name: "kobo", manager: "eq3", teams: { utils: { members: [{ oracle: "utils-worker" }], lead: "utils-worker" } } }));
 
 const { resolveSelfDept } = await import("../../src/vendor/mpr-plugins/cell/spawn");
 const { COMPANIES_DIR, _setCompaniesDir } = await import("../../src/vendor/mpr-plugins/company/company-helpers");

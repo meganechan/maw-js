@@ -85,26 +85,26 @@ describe("maw-statusline.sh badge registry-fallback when MAW_ROOM_COMPANY is emp
   }
 
   test("empty env + registry manager-match + away marker → ○ away (was blind before)", () => {
-    const out = badgeNoCompany([marker(PANE, "away")], { name: COMPANY, manager: "patchwork", departments: {} });
+    const out = badgeNoCompany([marker(PANE, "away")], { name: COMPANY, manager: "patchwork", teams: {} });
     expect(out).toContain("○ away");
     expect(out).not.toContain("● online");
   });
 
   test("empty env + registry dept-member-match + away marker → ○ away", () => {
-    const registry = { name: COMPANY, manager: "someone-else", departments: { core: { members: [{ oracle: "patchwork" }] } } };
+    const registry = { name: COMPANY, manager: "someone-else", teams: { core: { members: [{ oracle: "patchwork" }] } } };
     const out = badgeNoCompany([marker(PANE, "away")], registry);
     expect(out).toContain("○ away");
     expect(out).not.toContain("● online");
   });
 
   test("empty env + NO registry match → ● online (fallback finds nothing, never faults)", () => {
-    const out = badgeNoCompany([marker(PANE, "away")], { name: COMPANY, manager: "not-me", departments: {} });
+    const out = badgeNoCompany([marker(PANE, "away")], { name: COMPANY, manager: "not-me", teams: {} });
     expect(out).toContain("● online");
     expect(out).not.toContain("○ away");
   });
 
   test("empty env + registry match + back marker → ● online (sticky flip still honored)", () => {
-    const out = badgeNoCompany([marker(PANE, "away"), marker(PANE, "back")], { name: COMPANY, manager: "patchwork", departments: {} });
+    const out = badgeNoCompany([marker(PANE, "away"), marker(PANE, "back")], { name: COMPANY, manager: "patchwork", teams: {} });
     expect(out).toContain("● online");
     expect(out).not.toContain("○ away");
   });

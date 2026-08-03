@@ -36,6 +36,10 @@ mock.module("maw-js/sdk", () => ({
       if (probeThrows) throw new Error("no server running on socket");
       return `${paneCommand}\n`;
     }
+    // kobo-765: a landed injection is only a repair once head BOOTS, so these
+    // repair cases need a booted head to still count as repaired (head boot as a
+    // separate outcome is proven in cell-spawn-state-dir.test.ts).
+    if (cmd.includes("capture-pane")) return "bypass permissions\n";
     if (cmd.includes("tmux list-panes")) return "%head|||👤 head|||cell-head\n";
     return "";
   },
@@ -60,6 +64,7 @@ beforeEach(() => {
   commands = [];
   paneCommand = "zsh";
   probeThrows = false;
+  process.env.CELL_SPAWN_POLL_MS = "1"; // kobo-765 head boot poll — no real waiting
 });
 
 async function spawn(): Promise<string[]> {

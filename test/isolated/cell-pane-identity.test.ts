@@ -24,6 +24,7 @@ const prevHome = process.env.HOME;
 const prevAgent = process.env.CLAUDE_AGENT_NAME;
 const prevPane = process.env.TMUX_PANE;
 const prevStateDir = process.env.CREW_STATE_DIR;
+const prevCwd = process.cwd();
 
 process.env.MAW_DATA_DIR = dir;
 process.env.HOME = home;
@@ -61,6 +62,7 @@ const prevCompaniesDir = COMPANIES_DIR;
 _setCompaniesDir(join(dir, "companies"));
 
 afterAll(() => {
+  process.chdir(prevCwd);
   _setCompaniesDir(prevCompaniesDir);
   if (prevDataDir === undefined) delete process.env.MAW_DATA_DIR; else process.env.MAW_DATA_DIR = prevDataDir;
   if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
@@ -72,6 +74,10 @@ afterAll(() => {
 
 beforeEach(() => {
   commands = [];
+  // kobo-765: the state dir is `ψ/active/cell` RELATIVE to the pane's cwd and no
+  // longer reads CREW_STATE_DIR — so the sandbox is the cwd, not that env var
+  // (still set here as the stale value self-spawn must ignore).
+  process.chdir(dir);
   process.env.TMUX_PANE = "%head";
   process.env.CLAUDE_AGENT_NAME = "patchwork";
   process.env.CREW_STATE_DIR = join(dir, "state");

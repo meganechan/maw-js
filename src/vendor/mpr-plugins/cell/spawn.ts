@@ -20,6 +20,14 @@ import { teardownCrewWindows, BRAIN_MODEL, DEFAULT_WORKER_MODEL } from "../../..
 import { ORACLE_PANE_OPTION, stampPaneIdentity, type PaneRole } from "../../../core/pane-identity";
 
 const CELL_WORKERS_WINDOW = "cell-workers";
+const CELL_HEAD_WINDOW = "cell-head";
+/**
+ * kobo-775 — where self-spawn parks the head window's ORIGINAL name so down can
+ * put it back. Down cannot derive it: by then the only name on the window is the
+ * one self-spawn wrote. A tmux user option, for the same reason `@oracle_pane` is
+ * one (core/pane-identity): only a deliberate set-option writes it.
+ */
+const PREV_WINDOW_OPTION = "@cell_prev_window";
 /**
  * kobo-765/B5 — the ONE point where the cell state dir is decided, for BOTH the
  * process that WRITES the contracts (cellSelfSpawn) and the launch line that
@@ -168,12 +176,17 @@ async function listSessionPanes(sessionName: string): Promise<PaneRow[]> {
   });
 }
 
-function hasRole(panes: PaneRow[], prefix: string): boolean {
-  return panes.some((p) => p.role.startsWith(prefix));
-}
-
-function findRolePane(panes: PaneRow[], prefix: string): string | undefined {
-  return panes.find((p) => p.role.startsWith(prefix))?.paneId;
+/**
+ * kobo-775 — the pre-759 fallback target: a pane wearing the head `@role` and NO
+ * identity at all. Those exist because `@oracle_pane` is younger than the cell.
+ *
+ * Only when there is EXACTLY ONE in the session: `@role` is a shared namespace
+ * (one session holds several oracles' panes plus human splits), so two claimants
+ * name nobody. An unidentified pane that is not unique is not evidence.
+ */
+function soleLegacyHeadPane(panes: PaneRow[]): string | undefined {
+  const legacy = panes.filter((p) => p.role.startsWith("👤") && !paneIdentityOf(p));
+  return legacy.length === 1 ? legacy[0]!.paneId : undefined;
 }
 
 /**
@@ -202,11 +215,51 @@ function isTeardownTarget(p: PaneRow, oracle: string): boolean {
   return !!id && id.oracle === oracle && (id.role === "worker" || id.role === "reviewer");
 }
 
-function findHeadPane(panes: PaneRow[], oracle: string): PaneRow | undefined {
-  return panes.find((p) => {
+/**
+ * kobo-775 — the roles THIS oracle actually has panes for, by identity.
+ *
+ * Readiness used to be "the session has a 👤 pane and a ⚒ pane and a 🔎 pane",
+ * which asks about the SESSION, not the oracle: with A's cell down and B's cell
+ * up in the same session, A read as ready and was never repaired. It also had to
+ * disagree with down by construction — down clears the head's `@role` and kills
+ * the panes that carried the other two, so what it leaves behind cannot be what
+ * readiness reads. Identity is the one thing down and spawn can both name.
+ */
+function cellRolesOf(panes: PaneRow[], oracle: string): Set<string> {
+  const roles = new Set<string>();
+  for (const p of panes) {
     const id = paneIdentityOf(p);
-    return id?.oracle === oracle && id.role === "head";
-  });
+    if (id?.oracle === oracle) roles.add(id.role);
+  }
+  return roles;
+}
+
+/** `%42` → 42, for ordering. Unparseable ids sort last rather than first. */
+function paneIdNum(paneId: string): number {
+  const n = Number(paneId.replace(/^%/, ""));
+  return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * kobo-775 — two panes CAN claim `{oracle}:head` (a stamp landed on a newly
+ * adopted pane while the old one still carried its own). Both look equally
+ * valid, so the winner is a stated rule rather than tmux's listing order:
+ * LOWEST PANE ID = the oldest pane = the one the oracle has been living in
+ * (tmux hands out `%N` monotonically). Every loser is named to the caller —
+ * this pane is where a repair line gets typed, so a silent pick is a blind send.
+ */
+function findHeadPane(panes: PaneRow[], oracle: string): { pane?: PaneRow; duplicates: PaneRow[] } {
+  const claimants = panes
+    .filter((p) => {
+      const id = paneIdentityOf(p);
+      return id?.oracle === oracle && id.role === "head";
+    })
+    .sort((a, b) => paneIdNum(a.paneId) - paneIdNum(b.paneId) || a.paneId.localeCompare(b.paneId));
+  return { pane: claimants[0], duplicates: claimants.slice(1) };
+}
+
+function dualHeadWarning(oracle: string, winner: PaneRow, duplicates: PaneRow[]): string {
+  return `⚠ ${oracle}: ${duplicates.length + 1} panes claim ${ORACLE_PANE_OPTION}=${oracle}:head — ${[winner, ...duplicates].map((p) => p.paneId).join(", ")}; using ${winner.paneId} (lowest pane id = oldest). Clear the stale one with \`tmux set-option -pu -t <pane> ${ORACLE_PANE_OPTION}\`.`;
 }
 
 function parseCompanyArg(args: string[]): string | undefined {
@@ -311,6 +364,17 @@ async function stampCellPane(paneId: string, oracle: string, role: PaneRole, emi
   emit(`⚠ pane identity not set on ${paneId} (${role}) — oracle name unresolved or tmux refused; this pane will read as unknown`);
 }
 
+/** kobo-775 — see PREV_WINDOW_OPTION. Best-effort: a name we fail to park costs
+ *  the restore its exact answer, not its existence (down falls back to the oracle
+ *  name), so this must never abort a spawn. */
+async function rememberWindowName(paneId: string): Promise<void> {
+  try {
+    const current = (await hostExec(`tmux display-message -p -t ${shellArg(paneId)} '#{window_name}'`)).trim();
+    if (!current || current === CELL_HEAD_WINDOW) return;
+    await hostExec(`tmux set-option -p -t ${shellArg(paneId)} ${PREV_WINDOW_OPTION} ${shellArg(current)}`);
+  } catch { /* nothing to restore later — down falls back to the oracle name */ }
+}
+
 async function showPaneLabels(target: string): Promise<void> {
   await hostExec(`tmux set-window-option -t ${shellArg(target)} pane-border-status top`);
   await hostExec(`tmux set-window-option -t ${shellArg(target)} pane-border-format ${shellArg("#{pane_title}")}`);
@@ -357,11 +421,14 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
 
     const sessionName = sessionNameOf(resolved);
     const panes = await listSessionPanes(sessionName);
-    const isReady = hasRole(panes, "👤") && hasRole(panes, "⚒") && hasRole(panes, "🔎");
+    const roles = cellRolesOf(panes, member.oracle);
+    const isReady = roles.has("head") && roles.has("worker") && roles.has("reviewer");
     if (isReady) { log(`${member.oracle}: cell ready — skip`); ready++; continue; }
 
-    const injectTarget = findRolePane(panes, "👤") ?? resolved;
-    log(`${member.oracle}: cell incomplete/asleep — repairing (maw company cell self-spawn)`);
+    const head = findHeadPane(panes, member.oracle);
+    if (head.pane && head.duplicates.length > 0) emit(dualHeadWarning(member.oracle, head.pane, head.duplicates));
+    const injectTarget = head.pane?.paneId ?? soleLegacyHeadPane(panes) ?? resolved;
+    log(`${member.oracle}: cell incomplete/asleep (has: ${[...roles].join("+") || "no identified pane"}) — repairing ${injectTarget} (maw company cell self-spawn)`);
     try {
       const injected = await injectCommand(injectTarget, `maw company cell self-spawn ${company} && ${headLaunchCommand(company)}`);
       if (!injected.ok) {
@@ -405,7 +472,8 @@ export async function companyCellDown(company: string | undefined, opts: { force
     if (!resolved) { log(`${member.oracle}: no session found — nothing to tear down`); skipped++; continue; }
     const sessionName = sessionNameOf(resolved);
     const panes = await listSessionPanes(sessionName);
-    const headPane = findHeadPane(panes, member.oracle);
+    const { pane: headPane, duplicates } = findHeadPane(panes, member.oracle);
+    if (headPane && duplicates.length > 0) emit(dualHeadWarning(member.oracle, headPane, duplicates));
 
     if (!headPane) {
       log(`⚠ ${member.oracle}: no pane carrying ${ORACLE_PANE_OPTION}=${member.oracle}:head in session ${sessionName} — skipping teardown fail-closed`);
@@ -468,19 +536,46 @@ export async function companyCellDown(company: string | undefined, opts: { force
 }
 
 /**
+ * kobo-775 — put the head window's name back. Down used to leave it reading
+ * `cell-head` forever: a name that says "a cell lives here" on a pane where none
+ * does. Nothing in src ever branched on it (grep: only the rename itself), which
+ * is precisely why it survived — but findWindow resolves bare oracle names by
+ * window NAME, so the residue steered later verbs at a window whose cell was gone.
+ *
+ * The original name comes from the option self-spawn stored. Missing option (a
+ * cell spawned before this fix) → the oracle's own name, which is the convention
+ * the rest of the fleet's windows follow and what findWindow looks for. Renamed
+ * only while the name is still ours: a window someone has since renamed is theirs.
+ */
+async function restoreHeadWindowName(head: PaneRow, oracle: string): Promise<void> {
+  if (head.windowName !== CELL_HEAD_WINDOW) return;
+  let prev = "";
+  try { prev = (await hostExec(`tmux display-message -p -t ${shellArg(head.paneId)} '#{${PREV_WINDOW_OPTION}}'`)).trim(); } catch { /* pane may be gone */ }
+  const name = prev || oracle;
+  if (!name) return;
+  try {
+    await hostExec(`tmux rename-window -t ${shellArg(head.paneId)} ${shellArg(name)}`);
+    await hostExec(`tmux set-option -pu -t ${shellArg(head.paneId)} ${PREV_WINDOW_OPTION}`);
+  } catch { /* pane may be gone */ }
+}
+
+/**
  * The head pane outlives the cell — it is the oracle's own pane, adopted at
  * self-spawn. Down puts it back to a plain oracle pane instead: drop the cell
- * `@role`, drop the cell state files, keep `@oracle_pane={oracle}:head` (that is
- * exactly what a solo `maw wake` pane carries — the oracle is still there).
+ * `@role`, drop the cell window name, drop the cell state files, keep
+ * `@oracle_pane={oracle}:head` (that is exactly what a solo `maw wake` pane
+ * carries — the oracle is still there). What is left after this is what
+ * readiness reads: identity, and identity alone (cellRolesOf).
  */
 async function standDownHead(head: PaneRow, oracle: string, report: (line: string) => void): Promise<void> {
   try { await hostExec(`tmux set-option -pu -t ${shellArg(head.paneId)} @role`); } catch { /* pane may be gone */ }
+  await restoreHeadWindowName(head, oracle);
   // The head pane's own cwd — down runs from the invoker's process, so the state
   // dir is never relative to us. ponytail: pane_current_path is what tmux knows;
   // a head whose shell wandered elsewhere keeps its state, which is the safe miss.
   const stateDir = head.path ? join(head.path, DEFAULT_STATE_DIR) : "";
   if (stateDir) for (const f of STATE_FILES) { try { rmSync(join(stateDir, f)); } catch { /* absent */ } }
-  report(`${oracle}: head ${head.paneId} kept (the oracle's own pane — never killed by down), @role cleared, cell state removed`);
+  report(`${oracle}: head ${head.paneId} kept (the oracle's own pane — never killed by down), @role cleared, window name restored, cell state removed`);
 }
 
 export function parseCellCompanyArg(args: string[]): string | undefined { return parseCompanyArg(args); }
@@ -512,7 +607,11 @@ export async function cellSelfSpawn(company: string | undefined, emit: (line: st
   // now so a previous occupant's identity cannot linger.
   await stampCellPane(head, self, "head", emit);
   await hostExec(`tmux select-pane -t ${shellArg(head)} -T ${shellArg("👤 head")}`);
-  await hostExec(`tmux rename-window -t ${shellArg(head)} ${shellArg("cell-head")}`);
+  // kobo-775: park the name we are about to overwrite so `down` can put it back.
+  // Skipped when the window already reads `cell-head` — that is our own leftover,
+  // and storing it would make the restore a no-op forever.
+  await rememberWindowName(head);
+  await hostExec(`tmux rename-window -t ${shellArg(head)} ${shellArg(CELL_HEAD_WINDOW)}`);
   await showPaneLabels(head);
   writeFileSync(join(stateDir, "head-contract.md"), renderContract("head", { company, dept, board }));
   writeFileSync(join(stateDir, "worker-contract.md"), renderContract("worker", { company, dept, board }));

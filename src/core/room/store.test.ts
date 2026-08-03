@@ -1,23 +1,34 @@
-// kobo-472 known-red note (scripts/test-src-known-red.json): "findRoomCompany
-// resolves the owning company" is RED in a fresh environment (no ambient company
-// registry) — pre-existing on origin/alpha, not introduced by kobo-472 (this file
-// is the first time src/ tests run in CI at all). Root cause: this suite only
-// isolates MAW_DATA_DIR, but findRoomCompany() iterates the REAL listCompanies()
-// registry (gated on MAW_HOME/config, a different resolver — same class of gap
-// pr-watch-resilience.test.ts's own doc calls out for kobo-546/kobo-608: an env
-// var isolates only what it gates). On a machine with "kobo" already registered
-// ambiently it passes; on a clean runner it can't find "kobo" anywhere and
-// returns null. Needs a real fix (seed a fake company registry inside the
-// isolated dir, or inject listCompanies for the test) as its own follow-up card.
+// kobo-734: findRoomCompany() resolves via listCompanies(), which reads
+// COMPANIES_DIR (gated on MAW_HOME/config — a different resolver than the
+// MAW_DATA_DIR this suite isolates, same class of gap pr-watch-resilience.test.ts's
+// own doc calls out for kobo-546/kobo-608: an env var isolates only what it
+// gates). Fixed by pointing COMPANIES_DIR at an isolated dir via the
+// `_setCompaniesDir` seam sibling suites already use (company-scope.test.ts et
+// al) and seeding a "kobo" registry entry there, instead of relying on the
+// real machine's ambient ~/.maw/companies/kobo.json.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { openRoom, closeRoom, reopenRoom, appendRoomMessage, readRoom, listRooms, findRoomCompany, roomFilePath, mergeRooms, addRoomParticipant, paginateRoomMessages, ROOM_DEFAULT_LAST, _test, type RoomMessage } from "./store";
+import { _setCompaniesDir, saveCompany, COMPANIES_DIR } from "../../vendor/mpr-plugins/company/company-helpers";
 
 let dir: string; const prev = process.env.MAW_DATA_DIR;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "maw-room-")); process.env.MAW_DATA_DIR = dir; });
-afterEach(() => { if (prev === undefined) delete process.env.MAW_DATA_DIR; else process.env.MAW_DATA_DIR = prev; rmSync(dir, { recursive: true, force: true }); });
+const ORIGINAL_COMPANIES_DIR = COMPANIES_DIR;
+let companiesDir: string;
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "maw-room-"));
+  process.env.MAW_DATA_DIR = dir;
+  companiesDir = mkdtempSync(join(tmpdir(), "maw-room-companies-"));
+  _setCompaniesDir(companiesDir);
+  saveCompany({ name: "kobo", teams: {} });
+});
+afterEach(() => {
+  if (prev === undefined) delete process.env.MAW_DATA_DIR; else process.env.MAW_DATA_DIR = prev;
+  rmSync(dir, { recursive: true, force: true });
+  _setCompaniesDir(ORIGINAL_COMPANIES_DIR);
+  rmSync(companiesDir, { recursive: true, force: true });
+});
 
 describe("room artifact store (kobo-241 — off-card, file-per-room)", () => {
   test("openRoom creates an artifact under the company's own rooms/ dir", () => {

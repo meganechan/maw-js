@@ -946,7 +946,7 @@ export declare function resolveTarget(target: string, opts?: Record<string, unkn
 export declare function resolveFleetWindowSessionTarget<T extends { name: string }>(target: string, items: readonly T[]): ResolveResult<T>;
 export declare function isInfrastructureChannelSessionName(name: string): boolean;
 export declare function findWindow(sessions: Session[], query: string, currentSession?: string): string | null;
-export declare function checkBusyGuard(target: string): Promise<unknown>;
+export declare function checkBusyGuard(target: string, opts?: { failClosed?: boolean }): Promise<unknown>;
 export declare function defaultEngineNameForConfig(config?: Partial<MawConfig>): string;
 export declare function resolveEngine(name: string, config?: Partial<MawConfig>): unknown;
 export declare function matchesEngineIdlePrompt(text: string, engine?: string): boolean;

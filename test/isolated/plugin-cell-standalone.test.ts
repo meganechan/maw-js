@@ -90,7 +90,12 @@ describe("cell command plugin standalone boundary", () => {
     expect(spawnSrc).toContain('emit(`✓ cell spawned — head=${head} worker=${worker.paneId} (${worker.model}) reviewer=${reviewer}`)');
     expect(spawnSrc).toContain("export async function companyCellDown");
     expect(spawnSrc).toContain("usage: maw company cell down <company> [--force] [--verbose|--full]");
-    expect(spawnSrc).toContain("BUSY — refusing cell teardown");
+    // kobo-778 — the busy guard fails CLOSED here and the refusal carries the
+    // reason it could not see (behaviour proven in cell-down-busy-guard.test.ts,
+    // this is the boundary pin). `--force` skips the guard and says so.
+    expect(spawnSrc).toContain("checkBusyGuard(member.oracle, { failClosed: true })");
+    expect(spawnSrc).toContain("refusing cell teardown");
+    expect(spawnSrc).toContain("busy guard SKIPPED");
     expect(spawnSrc).toContain("tmux kill-pane -t ${shellArg(pane.paneId)}");
     expect(spawnSrc).toContain("✓ cell down");
     // kobo-764 — teardown selects on the @oracle_pane identity ONLY: no emoji

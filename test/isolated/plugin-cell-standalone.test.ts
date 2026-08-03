@@ -65,7 +65,12 @@ describe("cell command plugin standalone boundary", () => {
     expect(spawnSrc).toContain("${bootFailed} head-boot-failed");
     expect(spawnSrc).toContain('tmux set-option -p -t ${shellArg(head)} @role ${shellArg("👤 head")}');
     expect(spawnSrc).toContain('tmux select-pane -t ${shellArg(head)} -T ${shellArg("👤 head")}');
-    expect(spawnSrc).toContain('tmux rename-window -t ${shellArg(head)} ${shellArg("cell-head")}');
+    expect(spawnSrc).toContain('CELL_HEAD_WINDOW = "cell-head"');
+    expect(spawnSrc).toContain("tmux rename-window -t ${shellArg(head)} ${shellArg(CELL_HEAD_WINDOW)}");
+    // kobo-775 — down leaves no trap: the head window's name is parked before the
+    // rename and restored on stand-down (behaviour in cell-down-residue.test.ts).
+    expect(spawnSrc).toContain("await rememberWindowName(head);");
+    expect(spawnSrc).toContain("await restoreHeadWindowName(head, oracle);");
     expect(spawnSrc).toContain("pane-border-status top");
     expect(spawnSrc).toContain("pane-border-format");
     expect(spawnSrc).toContain("let model = BRAIN_MODEL");

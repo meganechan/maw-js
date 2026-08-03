@@ -134,6 +134,54 @@ describe("findWindow", () => {
 
       expect(findWindow(odin, "odin-oracle")).toBe("61-odin-oracle:1");
     });
+
+    describe("the matched session's window is picked by name, not position (kobo-775)", () => {
+      // `cell down` used to leave the head window named `cell-head`. That window
+      // sorts first, so a bare oracle name resolved to leftover scaffolding while
+      // the oracle sat in the window next door — and the cell repair injection
+      // typed its line into whatever was in there.
+      const residue: Session[] = [
+        { name: "42-patchwork", windows: [
+          { index: 0, name: "cell-head", active: false },
+          { index: 1, name: "patchwork", active: true },
+        ]},
+      ];
+
+      test("stale first window vs a window named after the oracle → the named one wins", () => {
+        expect(findWindow(residue, "patchwork")).toBe("42-patchwork:1");
+      });
+
+      test("...and by substring when the live window carries the -oracle suffix", () => {
+        const suffixed: Session[] = [
+          { name: "42-patchwork", windows: [
+            { index: 0, name: "cell-head", active: false },
+            { index: 3, name: "patchwork-oracle", active: true },
+          ]},
+        ];
+        expect(findWindow(suffixed, "patchwork")).toBe("42-patchwork:3");
+      });
+
+      test("no window names the oracle → unchanged: the session's first window", () => {
+        const unnamed: Session[] = [
+          { name: "42-patchwork", windows: [
+            { index: 0, name: "cell-head", active: false },
+            { index: 1, name: "dev", active: true },
+          ]},
+        ];
+        expect(findWindow(unnamed, "patchwork")).toBe("42-patchwork:0");
+      });
+
+      test("two windows claim the name → not evidence, first window stands (no throw)", () => {
+        const twins: Session[] = [
+          { name: "42-patchwork", windows: [
+            { index: 0, name: "cell-head", active: false },
+            { index: 1, name: "patchwork", active: true },
+            { index: 2, name: "patchwork", active: false },
+          ]},
+        ];
+        expect(findWindow(twins, "patchwork")).toBe("42-patchwork:0");
+      });
+    });
   });
 
   describe("session:window syntax (#186)", () => {

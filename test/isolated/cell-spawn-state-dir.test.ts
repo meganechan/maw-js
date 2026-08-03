@@ -258,6 +258,20 @@ describe("head boot is its own outcome, with a working fallback (kobo-765 B7)", 
   });
 });
 
+describe("self-spawn parks the head window's name before overwriting it (kobo-775)", () => {
+  test("the old name is stored on the pane, and stored BEFORE the rename that destroys it", async () => {
+    await cellSelfSpawn("testco", () => {});
+
+    const parkAt = commands.findIndex((c) => c.includes("@cell_prev_window") && c.includes("set-option -p "));
+    const renameAt = commands.findIndex((c) => c.includes("rename-window") && c.includes("cell-head"));
+    expect(parkAt).toBeGreaterThan(-1);
+    expect(renameAt).toBeGreaterThan(parkAt);
+    // the value is whatever the window was called ("sess", per this mock) — read
+    // from tmux, not invented
+    expect(commands[parkAt]).toContain("@cell_prev_window 'sess'");
+  });
+});
+
 describe("REGRESSION: a normal self-spawn is unchanged (kobo-765 AC3)", () => {
   test("3 panes, every role still set: head adopted, worker new-window, reviewer split", async () => {
     const result = await cellSelfSpawn("testco", () => {});

@@ -38,6 +38,31 @@ export class AmbiguousMatchError extends Error {
 }
 
 /**
+ * Which window of an exactly-matched session IS that oracle (kobo-775).
+ *
+ * It used to be `windows[0]` unconditionally — a POSITION, not evidence. A
+ * session whose first window is leftover scaffolding (a `cell-head` window a
+ * torn-down cell renamed and never renamed back) resolved to that dead window
+ * while the oracle sat in a later one, so every verb that routes through
+ * findWindow — `maw hey`, the cell repair injection — aimed at the wrong pane.
+ *
+ * The evidence available to a pure resolver is the window NAME: a window named
+ * after the oracle names it, scaffolding does not. Ordered exact → `NN-` stripped
+ * → substring, and only a UNIQUE hit wins; two windows both claiming the name is
+ * not evidence, so the historical first-window answer stands. That keeps every
+ * session that has no oracle-named window (the common case, #1752 included)
+ * answering exactly as before.
+ */
+function oracleWindowOf(s: Session, q: string): Window {
+  const named = s.windows.filter((w) => {
+    const n = w.name.toLowerCase();
+    return n === q || n.replace(/^\d+-/, "") === q;
+  });
+  const hits = named.length > 0 ? named : s.windows.filter((w) => w.name.toLowerCase().includes(q));
+  return hits.length === 1 ? hits[0]! : s.windows[0]!;
+}
+
+/**
  * Match a session by name part. Tries (in order):
  *   1. Exact match
  *   2. Oracle-name match (strip leading `\d+-` from session name)
@@ -107,7 +132,7 @@ export function findWindow(sessions: Session[], query: string, currentSession?: 
     if (s.windows.length > 0) {
       const sn = s.name.toLowerCase();
       if (sn === q || sn.replace(/^\d+-/, "") === q) {
-        exactSessions.add(`${s.name}:${s.windows[0].index}`);
+        exactSessions.add(`${s.name}:${oracleWindowOf(s, q).index}`);
       }
     }
   }

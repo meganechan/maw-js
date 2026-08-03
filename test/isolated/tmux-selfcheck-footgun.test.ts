@@ -2,29 +2,33 @@
  * Class guard: no bare target-sensitive tmux queries in src/ (tmux-selfcheck-footgun).
  *
  * THE TRAP: `tmux display-message -p '#{pane_id}'` does not answer "which pane am
- * I". With no `-t`, tmux resolves the target from the ATTACHED CLIENT — the pane
- * the human is currently looking at. A process running in a background pane asks
- * "who am I?" and is confidently told someone else's identity. There is no error,
- * no empty string, nothing to notice: the wrong answer has exactly the shape of
- * the right one.
+ * I". With no `-t`, tmux resolves the target by walking $TMUX → that SESSION →
+ * the session's CURRENT WINDOW → that window's ACTIVE PANE. Every step after the
+ * first is about the session's state, not the caller's. A process asks "who am
+ * I?" and is confidently told its neighbour's identity. There is no error, no
+ * empty string, nothing to notice: the wrong answer has the shape of the right one.
  *
- * It only bites when the caller is NOT the active pane, which is precisely the
- * case that never happens while a human is testing by hand, and always happens in
- * a fleet of background agents.
+ * No human and no attached client is required — that framing was wrong in the
+ * first version of this file. A detached session answers just the same. What
+ * decides it is whether the caller IS the active pane of its session's current
+ * window; every other pane gets someone else's answer. A cell v2 head and worker
+ * sharing one window is exactly this shape, and so is any agent running in a
+ * window that is not the session's current one.
  *
  * SCOPE — this guard flags a call when BOTH hold:
  *   1. the format string names a PANE- or WINDOW-scoped field (`#{pane_*}`,
  *      `#{window_*}`, `#W`, `#D`, `#P`), and
  *   2. the call passes no `-t`.
  * Session-scoped reads (`#S`, `#{session_name}`, `#{client_*}`) are deliberately
- * NOT flagged: there is one session per client, so those do not silently name a
- * different pane. They are still worth `-t` when a pane id is at hand, but making
- * them fail here would drown the signal — a guard nobody can keep green gets
- * deleted, and this one has to outlive the sweep that created it.
+ * NOT flagged, and the reason is the FIRST step of that walk, not anything about
+ * clients: the session comes from the caller's own $TMUX, so a bare `#S` names the
+ * caller's own session. The lie enters only at the window/pane steps. Flagging
+ * these too would drown the signal — a guard nobody can keep green gets deleted,
+ * and this one has to outlive the sweep that created it.
  *
  * `list-panes` with neither `-t` nor `-a` is flagged for the same reason: it
- * enumerates the attached client's current WINDOW. Two `close` verbs were killing
- * (and hiding) the panes of whatever window the human had open.
+ * enumerates the session's CURRENT WINDOW. Two `close` verbs were killing (and
+ * hiding) the panes of a window their caller need not have been in.
  *
  * WHY A SOURCE GREP: this failure cannot be caught by a unit test of the call
  * site — a mocked tmux answers whatever the mock says, so a bare call passes its
@@ -43,7 +47,7 @@ const SRC = join(import.meta.dir, "../../src");
  *
  * Empty on purpose: after the tmux-selfcheck-footgun sweep, no bare pane- or
  * window-scoped query survives in src/. An entry here is a claim that a call
- * genuinely wants "whatever pane the human is looking at" — real for interactive
+ * genuinely wants "whichever pane the session has active" — real for interactive
  * verbs, so the list exists; it is just not needed yet.
  */
 const ALLOWLIST: { file: string; fragment: string; why: string }[] = [
@@ -73,7 +77,15 @@ function tsFiles(dir: string, out: string[] = []): string[] {
  * own explanation teaches people to delete the explanation.
  */
 function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  // A `/*` only opens a comment when nothing but whitespace precedes it ON ITS
+  // LINE. Without that anchor, shell globs inside string literals opened ghost
+  // comments that ran to the next `*/` — `-path '*/agents/*'` in done.ts:159 ends
+  // in `/*` and blinded the guard to 45% of that file, including a line THIS PR
+  // fixed (done.ts:283). A blind guard is worse than no guard: it reports green.
+  // ponytail: no tokenizer. The anchor costs one regex and the residual (a block
+  // comment opened mid-line after code) can only cause a false POSITIVE, which is
+  // noisy, not silent.
+  return src.replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
 const PANE_SCOPED = /#\{(pane_|window_)|#[WDP](?![a-zA-Z])/;
@@ -136,8 +148,9 @@ function scan(): { displayMessage: Offence[]; listPanes: Offence[] } {
 }
 
 const POINTER =
-  "card tmux-selfcheck-footgun: a bare tmux query answers for the ATTACHED CLIENT's active pane, " +
-  "not the caller. Pass -t $TMUX_PANE (or the pane id already in scope). If TMUX_PANE is unset in " +
+  "card tmux-selfcheck-footgun: a bare tmux query resolves $TMUX -> session -> its CURRENT WINDOW -> " +
+  "that window's ACTIVE PANE. That is the caller only when the caller happens to be the active pane; " +
+  "otherwise it is a neighbour, attached client or not. Pass -t $TMUX_PANE (or the pane id already in scope). If TMUX_PANE is unset in " +
   "that path, refuse or return null — never fall through to a bare call. If the call genuinely wants " +
   "the active pane, add it to ALLOWLIST in this file with the reason.";
 

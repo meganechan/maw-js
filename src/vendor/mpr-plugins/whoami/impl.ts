@@ -14,8 +14,8 @@ export async function cmdWhoami(argv: string[] = []): Promise<void> {
     throw new UserError("maw whoami requires an active tmux session — run 'maw wake <oracle>' or attach to tmux first");
   }
   // tmux-selfcheck-footgun: -t $TMUX_PANE. This verb's whole job is "which pane
-  // am I", and bare it answered for the ATTACHED CLIENT's active pane — the one
-  // the human is looking at. Every field below (pane id, pane title, window) was
+  // am I", and bare it answered for the ACTIVE PANE of this session's current
+  // window — a neighbour, whenever this pane is not the active one. Every field below (pane id, pane title, window) was
   // then copied into other verbs as a target.
   const self = process.env.TMUX_PANE;
   if (!self) {

@@ -203,7 +203,7 @@ describe("wake maybeSplit", () => {
 
     // The split itself still goes ahead untargeted (unchanged behaviour). What is
     // gone is the layout restore: it used to run `list-panes`/`select-layout` with
-    // no target, counting and re-arranging the ATTACHED CLIENT's window —
+    // no target, counting and re-arranging the session's CURRENT window —
     // tmux-selfcheck-footgun.
     expect(hostExecCalls).toHaveLength(2);
     expect(hostExecCalls[0]).not.toContain("-t '%");

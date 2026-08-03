@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { loadManifestFromDir } from "../../src/plugin/manifest-load";
@@ -90,6 +91,9 @@ describe("assign plugin standalone boundary (#2251)", () => {
   test("CLI can detect oracle from tmux window through SDK hostExec", async () => {
     process.env.TMUX = "/tmp/tmux.sock";
     const plugin = loadAssignPlugin();
+    // tmux-selfcheck-footgun: pinned so the assertion below names a fixed pane
+    // rather than inheriting whatever pane happens to run the suite.
+    process.env.TMUX_PANE = "%assign";
 
     const result = await invokePlugin(plugin, {
       source: "cli",
@@ -97,7 +101,26 @@ describe("assign plugin standalone boundary (#2251)", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(hostExecCalls).toEqual(["tmux display-message -p '#{window_name}'"]);
+    expect(hostExecCalls).toEqual(["tmux display-message -p -t '%assign' '#{window_name}'"]);
     expect(wakeCalls[0]?.oracle).toBe("neo");
+  });
+});
+
+/**
+ * tmux-selfcheck-footgun refresh: this plugin's pane self-check now names its
+ * target. A bare tmux query resolves $TMUX -> session -> the session's CURRENT
+ * WINDOW -> that window's ACTIVE PANE, so a caller that is not the active pane
+ * was answered with a neighbour's identity. Pinned here because the boundary
+ * test is what the #2316 gate points a future editor at.
+ */
+describe("assign plugin: pane self-check names its target (tmux-selfcheck-footgun)", () => {
+  test("the oracle an issue is ASSIGNED to comes from the caller's own pane", () => {
+    const src = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/assign/impl.ts"), "utf8");
+    expect(src).toContain('const self = process.env.TMUX_PANE ?? "";');
+    expect(src).toContain("display-message -p -t '${self}' '#{window_name}'");
+    expect(src).not.toContain("display-message -p '#{window_name}'");
+    // No pane id -> null, and the caller prompts. A guessed oracle name here is
+    // a wrong assignee on a real GitHub issue.
+    expect(src).toContain("if (!self) return null;");
   });
 });

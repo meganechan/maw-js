@@ -92,9 +92,9 @@ export async function cmdReunion(windowName?: string): Promise<ReunionResult | n
   } else {
     // Use current pane's cwd
     try {
-      // tmux-selfcheck-footgun: without -t this reads the ATTACHED CLIENT's
-      // active pane, so a reunion launched from a background pane took whatever
-      // directory the human happened to be looking at.
+      // tmux-selfcheck-footgun: without -t this reads the ACTIVE PANE of the
+      // session's current window, so a reunion launched from any other pane took
+      // its neighbour's directory.
       const self = process.env.TMUX_PANE ?? "";
       if (!self) throw new Error("TMUX_PANE unset");
       cwd = (await hostExec(`tmux display-message -p -t '${self}' '#{pane_current_path}'`)).trim();

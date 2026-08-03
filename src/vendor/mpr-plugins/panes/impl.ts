@@ -78,8 +78,7 @@ export async function cmdPanes(target?: string, opts: PanesOpts = {}) {
   const baseFmt = "#{session_name}:#{window_index}.#{pane_index}|||#{pane_width}x#{pane_height}|||#{pane_current_command}|||#{pane_title}";
   const fmt = opts.pid ? `${baseFmt}|||#{pane_pid}` : baseFmt;
   // tmux-selfcheck-footgun: the no-filter default was an empty flag — a bare
-  // list-panes, i.e. the ATTACHED CLIENT's current window rather than the
-  // caller's. "My window" now means $TMUX_PANE's window; outside tmux there is no
+  // list-panes, i.e. the session's CURRENT window rather than the caller's. "My window" now means $TMUX_PANE's window; outside tmux there is no
   // such thing, so say so instead of listing a stranger's panes.
   const selfPane = process.env.TMUX_PANE;
   if (!opts.all && !filter && !selfPane) {

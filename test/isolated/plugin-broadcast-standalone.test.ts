@@ -45,7 +45,7 @@ function stripAnsi(value: string | undefined) {
 
 beforeEach(() => {
   // tmux-selfcheck-footgun: these paths identify themselves by $TMUX_PANE now —
-  // bare tmux queries answered for the ATTACHED CLIENT's active pane.
+  // bare tmux queries answered for the session's current window's ACTIVE pane.
   process.env.TMUX_PANE = "%bcast";
 
   paneCommands = new Map();

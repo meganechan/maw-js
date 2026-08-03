@@ -27,8 +27,8 @@ export async function cmdPr(window?: string): Promise<void> {
     const session = (await t.run("display-message", "-p", "#{session_name}")).trim();
     cwd = (await t.run("display-message", "-t", `${session}:${window}`, "-p", "#{pane_current_path}")).trim();
   } else {
-    // tmux-selfcheck-footgun: -t $TMUX_PANE. Bare, this reads the ATTACHED
-    // CLIENT's active pane, so `maw pr` could open a PR from a different repo
+    // tmux-selfcheck-footgun: -t $TMUX_PANE. Bare, this reads the ACTIVE PANE of the
+    // session's current window, so `maw pr` could open a PR from a different repo
     // than the one it was invoked in. No pane id → the !cwd throw below.
     const self = process.env.TMUX_PANE ?? "";
     cwd = self ? (await t.run("display-message", "-p", "-t", self, "#{pane_current_path}")).trim() : "";

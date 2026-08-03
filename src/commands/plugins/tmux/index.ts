@@ -326,10 +326,10 @@ export function createTmuxHandler(overrides: Partial<TmuxHandlerDeps> = {}) {
           return { ok: false, error: e?.message ?? String(e) };
         }
       } else {
-        // tmux-selfcheck-footgun: an unscoped list-panes enumerates the ATTACHED
-        // CLIENT's current window, not the caller's — so with no explicit target
-        // this hid the panes of whatever window the human was looking at, and
-        // `myPane` was not among them to be skipped.
+        // tmux-selfcheck-footgun: an unscoped list-panes enumerates the
+        // session's CURRENT WINDOW, not the caller's — so with no explicit target
+        // this hid the panes of a window the caller may not be in, and `myPane`
+        // was not among them to be skipped.
         if (!myPane) {
           console.log("\x1b[33m⚠\x1b[0m close: TMUX_PANE unset — refusing to guess which window to close");
           return { ok: false, error: "TMUX_PANE unset" };
@@ -357,9 +357,8 @@ export function createTmuxHandler(overrides: Partial<TmuxHandlerDeps> = {}) {
       const target = args[1];
       if (!target) {
         // No target: bring back hidden panes from other windows in this session
-        // tmux-selfcheck-footgun: -t $TMUX_PANE — bare, this is the attached
-        // client's active window, so the "not my window" filter below could
-        // exclude the wrong one and pull panes back into a stranger's window.
+        // tmux-selfcheck-footgun: -t $TMUX_PANE — bare, this is the session's CURRENT
+        // window, so the "not my window" filter below could exclude the wrong one and pull panes back into a stranger's window.
         const selfPane = process.env.TMUX_PANE;
         if (!selfPane) {
           console.log("\x1b[33m⚠\x1b[0m open: TMUX_PANE unset — refusing to guess which window is mine");

@@ -146,3 +146,19 @@ describe("archive plugin standalone boundary", () => {
     expect(resolveProjectSlug(join(ghqRoot, "github.com", "Soul-Brews-Studio", "maw-js", "agents", "1-codex"), ghqRoot)).toBe("Soul-Brews-Studio/maw-js");
   });
 });
+
+/**
+ * tmux-selfcheck-footgun refresh: archive vendors its own copy of soul-sync, and
+ * that copy detects the oracle to sync FROM the pane's cwd. A bare tmux query
+ * resolves $TMUX -> session -> the session's CURRENT WINDOW -> that window's
+ * ACTIVE PANE, so a non-active pane read a neighbour's repo as its own source.
+ */
+describe("archive plugin: vendored soul-sync names its pane (tmux-selfcheck-footgun)", () => {
+  test("both cwd detections target $TMUX_PANE, with no bare fallback", () => {
+    const src = readFileSync(join(root, "src/vendor/mpr-plugins/archive/internal/soul-sync-impl.ts"), "utf8");
+    const targeted = src.match(/display-message -p -t '\$\{self\}' '#\{pane_current_path\}'/g) ?? [];
+    expect(targeted).toHaveLength(2);
+    expect(src).not.toContain("display-message -p '#{pane_current_path}'");
+    expect(src).toContain('throw new Error("TMUX_PANE unset")');
+  });
+});

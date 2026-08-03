@@ -330,8 +330,8 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
         return { ok: false, error: "not in tmux" };
       }
       const myPane = process.env.TMUX_PANE;
-      // tmux-selfcheck-footgun: an unscoped list-panes enumerates the ATTACHED
-      // CLIENT's current window, not the caller's. When those differ this killed
+      // tmux-selfcheck-footgun: an unscoped list-panes enumerates the
+      // session's CURRENT WINDOW, not the caller's. When those differ this killed
       // every pane of whatever window the human was looking at — and `myPane` is
       // not in that list, so the skip below never fired to protect anything.
       if (!myPane) {

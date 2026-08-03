@@ -179,3 +179,21 @@ describe("bud plugin standalone boundary (#2314)", () => {
     expect(logs.join("\n")).toContain("Acme/api-bud-oracle");
   });
 });
+
+/**
+ * tmux-selfcheck-footgun refresh: this plugin's pane self-check now names its
+ * target. A bare tmux query resolves $TMUX -> session -> the session's CURRENT
+ * WINDOW -> that window's ACTIVE PANE, so a caller that is not the active pane
+ * was answered with a neighbour's identity. Pinned here because the boundary
+ * test is what the #2316 gate points a future editor at.
+ */
+describe("bud plugin: pane self-check names its target (tmux-selfcheck-footgun)", () => {
+  test("the PARENT oracle is derived from the caller's own pane", () => {
+    const src = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/bud/impl.ts"), "utf8");
+    expect(src).toContain('const self = process.env.TMUX_PANE ?? "";');
+    expect(src).toContain("display-message -p -t '${self}' '#{pane_current_path}'");
+    expect(src).not.toContain("display-message -p '#{pane_current_path}'");
+    // This value is written into the new oracle's fleet config as `budded_from`.
+    expect(src).toContain('throw new Error("TMUX_PANE unset")');
+  });
+});

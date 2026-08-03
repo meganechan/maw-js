@@ -197,8 +197,8 @@ async function workspacePaneId(session: string, windowName: string): Promise<str
 
 async function currentTmuxSessionWindow(): Promise<{ session: string; window: string }> {
   let raw: string;
-  // tmux-selfcheck-footgun: -t $TMUX_PANE. Bare, "current window" means the
-  // attached client's, so --split could split a window the caller is not in.
+  // tmux-selfcheck-footgun: -t $TMUX_PANE. Bare, "current window" means the session's,
+  // so --split could split a window the caller is not in.
   const self = process.env.TMUX_PANE;
   if (!self) throw new UserError("new: --split requires a current tmux client (TMUX_PANE unset)");
   try {

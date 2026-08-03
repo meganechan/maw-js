@@ -43,8 +43,8 @@ async function resolveLiveAnchorPane(
   }
 
   // tmux-selfcheck-footgun: the bare `display-message -p '#{pane_id}'` that used
-  // to sit here did not resolve "this process's pane" — it resolved the ATTACHED
-  // CLIENT's active pane, so a stale $TMUX_PANE was replaced by a confidently
+  // to sit here did not resolve "this process's pane" — it resolved the ACTIVE
+  // PANE of the session's current window, so a stale $TMUX_PANE was replaced by a confidently
   // wrong one and the swarm split someone else's pane. Returning "" leaves the
   // caller to split without an explicit target, which is the same outcome the old
   // fallback was reaching for, minus the wrong answer that looked right.

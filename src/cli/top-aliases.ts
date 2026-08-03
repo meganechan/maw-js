@@ -403,8 +403,8 @@ export async function invokeDirectHandler(
       try {
         const { execSync } = await import("child_process");
         // tmux-selfcheck-footgun: -t $TMUX_PANE — bare, "the caller's CURRENT
-        // window" is actually the attached client's, so layout re-tiled a window
-        // the caller was not in.
+        // window" is actually the session's, so layout re-tiled a window the
+        // caller was not in.
         const self = process.env.TMUX_PANE;
         if (!self) throw new Error("TMUX_PANE unset");
         const raw = execSync(`tmux display-message -p -t '${self}' '#{session_name}:#{window_name}'`, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();

@@ -24,7 +24,7 @@ beforeEach(() => {
   logs = [];
   process.env.TMUX = "/tmp/tmux-1000/default,1,0";
   // tmux-selfcheck-footgun: whoami now identifies ITSELF by $TMUX_PANE instead of
-  // asking tmux which pane is active (that answered for the attached client).
+  // asking tmux which pane is active (that answers for a neighbour pane).
   process.env.TMUX_PANE = "%77";
   console.log = (...args: unknown[]) => logs.push(args.map(String).join(" "));
 });

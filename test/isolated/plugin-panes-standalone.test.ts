@@ -112,7 +112,7 @@ describe("panes plugin standalone boundary", () => {
 
   test("default command lists the CALLER's panes without resolving sessions", async () => {
     // tmux-selfcheck-footgun: the default used to emit a bare `list-panes` (empty
-    // target flag) — the ATTACHED CLIENT's current window, not the caller's.
+    // target flag) — the session's CURRENT window, not the caller's.
     process.env.TMUX_PANE = "%me";
     const { result, output } = await invokeCli([]);
 

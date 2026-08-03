@@ -370,7 +370,7 @@ describe("team index extra isolated coverage", () => {
     let result = await teamHandler({ source: "cli", args: ["close"] });
     expect(result.ok).toBe(true);
     // tmux-selfcheck-footgun: scoped to the caller's own pane. Unscoped, this
-    // enumerated the ATTACHED CLIENT's window and killed panes there.
+    // enumerated the session's CURRENT window and killed panes there.
     expect(calls.hostExec).toEqual([["tmux list-panes -t '%1' -F '#{pane_id}'"]]);
 
     resetCalls();

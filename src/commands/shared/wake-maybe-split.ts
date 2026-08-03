@@ -47,7 +47,7 @@ async function restoreSplitLayout(anchor?: string): Promise<void> {
   try {
     const windowTarget = anchor || process.env.TMUX_PANE;
     // tmux-selfcheck-footgun: no target → no guess. The empty flag made this a
-    // bare list-panes, counting the panes of the ATTACHED CLIENT's window and
+    // bare list-panes, counting the panes of the session's CURRENT window and
     // then restoring a layout based on that count.
     if (!windowTarget) return;
     const raw = await hostExec(`tmux list-panes -t ${shellArg(windowTarget)} | wc -l`);

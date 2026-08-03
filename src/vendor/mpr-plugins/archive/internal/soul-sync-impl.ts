@@ -28,8 +28,8 @@ export async function cmdSoulSync(target?: string, opts?: { from?: boolean; cwd?
   if (!cwd) {
     try {
       // tmux-selfcheck-footgun: -t $TMUX_PANE. A bare display-message answers for
-      // the ATTACHED CLIENT's active pane — whatever the human is looking at —
-      // not this process's pane. No pane id → take the cwd fallback below rather
+      // the ACTIVE PANE of this session's current
+      // window, which is this process's pane only by luck. No pane id → take the cwd fallback below rather
       // than another pane's path.
       const self = process.env.TMUX_PANE ?? "";
       if (!self) throw new Error("TMUX_PANE unset");
@@ -109,8 +109,8 @@ export async function cmdSoulSyncProject(opts?: { cwd?: string }): Promise<Proje
   if (!cwd) {
     try {
       // tmux-selfcheck-footgun: -t $TMUX_PANE. A bare display-message answers for
-      // the ATTACHED CLIENT's active pane — whatever the human is looking at —
-      // not this process's pane. No pane id → take the cwd fallback below rather
+      // the ACTIVE PANE of this session's current
+      // window, which is this process's pane only by luck. No pane id → take the cwd fallback below rather
       // than another pane's path.
       const self = process.env.TMUX_PANE ?? "";
       if (!self) throw new Error("TMUX_PANE unset");

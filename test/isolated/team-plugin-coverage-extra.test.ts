@@ -425,7 +425,7 @@ describe("src/commands/plugins/team/index extra branch coverage", () => {
     const single = await teamHandler({ source: "cli", args: ["close"] });
     expect(single.ok).toBe(true);
     // tmux-selfcheck-footgun: scoped to the caller's own pane (was unscoped —
-    // the attached client's window).
+    // the session's current window).
     expect(commandCalls.hostExec).toEqual([["tmux list-panes -t '%0' -F '#{pane_id}'"]]);
 
     resetCallRecord(commandCalls);

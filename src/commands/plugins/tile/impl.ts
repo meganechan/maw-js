@@ -104,9 +104,8 @@ async function countExistingTilePanes(window: string): Promise<number> {
 
 async function getWindow(): Promise<string> {
   const pane = process.env.TMUX_PANE;
-  // tmux-selfcheck-footgun: no bare fallback. Without -t tmux answers for the
-  // ATTACHED CLIENT's active window, so tile would re-arrange a window the caller
-  // is not in — worse than doing nothing.
+  // tmux-selfcheck-footgun: no bare fallback. Without -t tmux answers for the session's
+  // CURRENT window, so tile would re-arrange a window the caller is not in — worse than doing nothing.
   if (!pane) throw new Error("tile: TMUX_PANE is unset — refusing to tile whichever window happens to be active");
   return (await hostExec(`tmux display-message -t '${pane}' -p '#{window_id}'`)).trim();
 }

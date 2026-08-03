@@ -177,7 +177,7 @@ beforeEach(() => {
   lockEntries = 0;
   originalTmuxPane = process.env.TMUX_PANE;
   // tmux-selfcheck-footgun: getWindowTarget() identifies the caller's window by
-  // $TMUX_PANE now — bare, it returned the attached client's active window.
+  // $TMUX_PANE now — bare, it returned the session's current window.
   process.env.TMUX_PANE = "%leader";
   loaderGlobals().__mawLoaderEvents = [];
   loaderGlobals().__mawLoaderTeardowns = [];

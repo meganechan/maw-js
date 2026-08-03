@@ -221,6 +221,24 @@ describe("pollPrsOnce — snapshot lifecycle", () => {
     expect(readSnapshot()["x/y#3"].state).toBe("MERGED"); // and the file is valid JSON again
   });
 
+  it("kobo-738 — a first run whose gh call fails writes NO snapshot, so the next poll is still a first run and seeds silently", async () => {
+    const { pollPrsOnce, __setGhForTest } = await load("firstrun-failure", ["x/y"]);
+    __setGhForTest(async () => { throw new Error("simulated gh failure"); });
+
+    const failedRun = await pollPrsOnce();
+
+    expect(failedRun).toEqual([]);
+    expect(existsSync(snapshotFile())).toBe(false); // no empty/partial snapshot persisted
+
+    __setGhForTest(ghStub({ "x/y": [pr(1, "OPEN"), pr(2, "MERGED")] }));
+    const seededRun = await pollPrsOnce();
+
+    expect(seededRun).toEqual([]); // still a first run — seeds quietly, no pr-opened replay
+    expect(readSnapshot()["x/y#1"].state).toBe("OPEN");
+    expect(readSnapshot()["x/y#2"].state).toBe("MERGED");
+    expect(readWorklog("_unscoped").filter((l) => l.kind === "pr-opened")).toEqual([]);
+  });
+
   it("a transition is scoped to the AUTHOR's company (the card-assignee link it replaced is gone)", async () => {
     company("kobo", "eq3", ["meganechan"]);
     const { pollPrsOnce, __setGhForTest } = await load("author-company", ["x/y"]);

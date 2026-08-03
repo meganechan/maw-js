@@ -311,7 +311,15 @@ async function pollRepoOnce(
     ], signal);
     prs = JSON.parse(out || "[]") as GhPr[];
   } catch (e) {
-    return { entries, recorded, failed: e instanceof Error ? e.message : String(e), changed: firstRun || sawTransition };
+    // kobo-738 — on a first run, `firstRun` alone used to make `changed` true
+    // even here, persisting this repo's EMPTY `entries` (the gh call failed
+    // before a single PR was read) as if it had been seeded. The file's mere
+    // existence is the ONLY first-run signal `loadSnapshot()` has — writing it
+    // now would make the NEXT poll believe this repo is already seeded, so its
+    // still-unseen, still-open PRs would replay as `pr-opened`. A failed first
+    // run must stay unseeded and unpersisted so the next poll is still a first
+    // run and seeds silently once `gh` works.
+    return { entries, recorded, failed: e instanceof Error ? e.message : String(e), changed: firstRun ? false : sawTransition };
   }
 
   try {
@@ -385,7 +393,8 @@ async function pollRepoOnce(
       entries[key] = { state: cur, repo, number: pr.number, title: pr.title, author };
     }
   } catch (e) {
-    return { entries, recorded, failed: e instanceof Error ? e.message : String(e), changed: firstRun || sawTransition };
+    // kobo-738 — same guard as the `gh pr list` catch above.
+    return { entries, recorded, failed: e instanceof Error ? e.message : String(e), changed: firstRun ? false : sawTransition };
   }
   return { entries, recorded, changed: firstRun || sawTransition };
 }

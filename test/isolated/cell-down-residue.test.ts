@@ -82,6 +82,7 @@ mock.module("maw-js/sdk", () => ({
       return "";
     }
     if (cmd.includes("display-message")) {
+      if (cmd.includes("session_path")) return `${headCwd}\n`; // kobo-780 anchor
       const p = paneOf(arg(cmd, /display-message -p -t '([^']+)'/));
       if (cmd.includes("@cell_prev_window")) return `${p?.prevWindow ?? ""}\n`;
       if (cmd.includes("window_name")) return `${p?.window ?? ""}\n`;

@@ -42,6 +42,7 @@ mock.module("maw-js/sdk", () => ({
     if (cmd.includes("capture-pane")) return "bypass permissions\n";
     if (cmd.includes("tmux list-panes")) return "%head|||👤 head|||cell-head\n";
     if (cmd.includes("session_name")) return "42-patchwork:0.1\n"; // kobo-776 hey address
+    if (cmd.includes("session_path")) return "/repos/patchwork-oracle\n"; // kobo-780 anchor
     return "";
   },
   listSessions: async () => [],

@@ -413,10 +413,18 @@ export async function companyCellDown(company: string | undefined, opts: { force
       continue;
     }
 
-    if (!opts.force) {
-      const guard = await checkBusyGuard(member.oracle);
+    // kobo-778 — the busy guard used to fail OPEN: an oracle the status source
+    // knows nothing about read as `busy:false`, so teardown was approved for
+    // panes it could not see. It says NO now (failClosed) and `guard.reason`
+    // names the blind spot. Loud on purpose (emit, not log): under --verbose
+    // only, a summary of "0 torn, 3 refused" would carry no reason at all.
+    if (opts.force) {
+      emit(`⚠ ${member.oracle}: --force — busy guard SKIPPED, tearing down without checking whether this oracle is working`);
+    } else {
+      const guard = await checkBusyGuard(member.oracle, { failClosed: true });
       if (guard.busy) {
-        log(`⚠ ${member.oracle}: BUSY — refusing cell teardown (pass --force to override)`);
+        const why = guard.reason ?? `oracle reports status '${guard.status}'`;
+        emit(`⚠ ${member.oracle}: refusing cell teardown — ${why}; pass --force to tear down anyway`);
         refused++;
         continue;
       }

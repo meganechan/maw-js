@@ -15,27 +15,54 @@ export interface BusyGuardResult {
   busy: boolean;
   status: AgentStatus | "unknown";
   oracle: string;
+  /**
+   * Why the status is `unknown` — set only when the status source could not
+   * answer, and it names WHICH way it failed (404 / unreachable / unreadable).
+   * "unknown" alone cannot tell a sleeping oracle from a dead status server.
+   */
+  reason?: string;
 }
 
 const MAW_PORT = process.env.MAW_PORT || "3456";
+/** A hung status server must become a verdict, not a hang: teardown waits on this. */
+const STATUS_TIMEOUT_MS = 2000;
 
-async function fetchRemoteStatus(oracle: string): Promise<{ status: AgentStatus } | null> {
+async function fetchRemoteStatus(oracle: string): Promise<{ status: AgentStatus } | { error: string }> {
+  const url = `http://localhost:${MAW_PORT}/api/status/${oracle}`;
+  let res: Response;
   try {
-    const res = await fetch(`http://localhost:${MAW_PORT}/api/status/${oracle}`);
-    if (!res.ok) return null;
-    const data = await res.json() as { status?: AgentStatus };
-    return data?.status ? { status: data.status } : null;
-  } catch {
-    return null;
+    res = await fetch(url, { signal: AbortSignal.timeout(STATUS_TIMEOUT_MS) });
+  } catch (e: any) {
+    return { error: `status source unreachable at localhost:${MAW_PORT} (${e?.message || e})` };
   }
+  if (!res.ok) return { error: `status source returned ${res.status} for '${oracle}'` };
+  let data: { status?: AgentStatus } | null;
+  try {
+    data = await res.json() as { status?: AgentStatus };
+  } catch (e: any) {
+    return { error: `status source returned unreadable JSON for '${oracle}' (${e?.message || e})` };
+  }
+  if (!data?.status) return { error: `status source answered for '${oracle}' with no status field` };
+  return { status: data.status };
 }
 
 /**
  * Check if a target oracle is busy.
  * In server context: reads local in-memory store.
  * In CLI context: queries the server API for live status.
+ *
+ * kobo-778 — `failClosed` for callers that do something IRREVERSIBLE to the pane
+ * (teardown, injection): when the status source cannot answer, a guard that
+ * cannot see must say NO, and `reason` says what it could not see.
+ *
+ * It is opt-in, not the default, because `maw hey` reads this same guard and the
+ * status source answers for nobody today — flipping unknown→busy there would
+ * queue every message fleet-wide instead of delivering it.
  */
-export async function checkBusyGuard(target: string): Promise<BusyGuardResult> {
+export async function checkBusyGuard(
+  target: string,
+  opts: { failClosed?: boolean } = {},
+): Promise<BusyGuardResult> {
   const oracle = extractOracleName(target);
 
   const entry = agentStatusStore.get(oracle);
@@ -44,11 +71,11 @@ export async function checkBusyGuard(target: string): Promise<BusyGuardResult> {
   }
 
   const remote = await fetchRemoteStatus(oracle);
-  if (remote) {
+  if ("status" in remote) {
     return { busy: remote.status === "busy", status: remote.status, oracle };
   }
 
-  return { busy: false, status: "unknown", oracle };
+  return { busy: opts.failClosed === true, status: "unknown", oracle, reason: remote.error };
 }
 
 /**

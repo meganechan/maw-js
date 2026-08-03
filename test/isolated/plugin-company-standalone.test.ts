@@ -220,8 +220,9 @@ describe("company command plugin standalone boundary", () => {
     });
   });
 
-  // kobo-363: departments → teams rename, dual-read backward-compat, kbTag drop.
-  describe("departments → teams dual-read backward-compat (kobo-363)", () => {
+  // kobo-363 renamed departments → teams; kobo-737 dropped the dual-read so a
+  // legacy-keyed config fails loudly instead of silently loading.
+  describe("`teams` is the only schema key — legacy `departments` fails loud (kobo-737)", () => {
     const ORIGINAL_DIR = COMPANIES_DIR;
     let tmp: string;
 
@@ -234,12 +235,21 @@ describe("company command plugin standalone boundary", () => {
       try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
     });
 
-    test("a legacy config with the OLD `departments` key still loads correctly", () => {
+    test("a legacy `departments`-only config throws, naming the file and the rename fix", () => {
       writeFileSync(companyPath("legacy"), JSON.stringify({
         name: "legacy",
         departments: { core: { lead: "nai", members: [{ oracle: "nai", role: "lead" }] } },
       }));
-      const c = loadCompany("legacy")!;
+      expect(() => loadCompany("legacy")).toThrow(/legacy\.json/);
+      expect(() => loadCompany("legacy")).toThrow(/rename "departments" to "teams"/);
+    });
+
+    test("a `teams`-keyed config still loads exactly as before", () => {
+      writeFileSync(companyPath("modern"), JSON.stringify({
+        name: "modern",
+        teams: { core: { lead: "nai", members: [{ oracle: "nai", role: "lead" }] } },
+      }));
+      const c = loadCompany("modern")!;
       expect(c.teams.core.lead).toBe("nai");
       expect(c.teams.core.members).toEqual([{ oracle: "nai", role: "lead" }]);
     });
@@ -252,14 +262,15 @@ describe("company command plugin standalone boundary", () => {
       expect(raw.departments).toBeUndefined();
     });
 
-    test("a config with BOTH `teams` and `departments` prefers `teams`, doesn't throw", () => {
+    // kobo-737 tightened this: it used to warn and prefer `teams`. Two keys in
+    // one file IS the drift this card removes, so it throws now too.
+    test("a config with BOTH `teams` and `departments` throws (was: warn + prefer teams)", () => {
       writeFileSync(companyPath("ambiguous"), JSON.stringify({
         name: "ambiguous",
         teams: { core: { lead: "new-lead", members: [] } },
         departments: { core: { lead: "old-lead", members: [] } },
       }));
-      const c = loadCompany("ambiguous")!;
-      expect(c.teams.core.lead).toBe("new-lead"); // teams wins over legacy departments
+      expect(() => loadCompany("ambiguous")).toThrow(/legacy "departments" key/);
     });
 
     test("addTeam/removeTeam are aliases of addDepartment/removeDepartment (same logic)", () => {

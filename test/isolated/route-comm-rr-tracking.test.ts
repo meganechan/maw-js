@@ -20,7 +20,7 @@ beforeAll(() => {
   mkdirSync(join(dir, "companies"), { recursive: true });
   writeFileSync(
     join(dir, "companies", "kobo.json"),
-    JSON.stringify({ name: "kobo", departments: { core: { members: [{ oracle: "lek" }, { oracle: "kang" }], lead: "lek" } } }),
+    JSON.stringify({ name: "kobo", teams: { core: { members: [{ oracle: "lek" }, { oracle: "kang" }], lead: "lek" } } }),
   );
   const app = new Elysia({ prefix: "/api" }).use(requestReplyApi);
   server = Bun.serve({ port: 0, fetch: app.fetch });

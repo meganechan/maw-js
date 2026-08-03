@@ -42,9 +42,9 @@ export interface Company {
    * member). Scoped to the company for worklog/policy without joining a roster. */
   manager?: string;
   /** kobo-363: was `departments`. Renamed to match how the org actually talks
-   * (teams, not departments). `loadCompany` dual-reads legacy `departments`
-   * configs on the way in — every in-memory `Company` past that point only
-   * ever has `.teams`. */
+   * (teams, not departments). kobo-737: the legacy dual-read is gone — `teams`
+   * is the ONLY schema key, and a config still carrying `departments` fails
+   * loudly in `loadCompany` instead of silently drifting back. */
   teams: Record<string, Department>;
 }
 
@@ -79,17 +79,17 @@ export function loadCompany(name: string): Company | null {
   const path = companyPath(name);
   if (!existsSync(path)) return null;
   const raw = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown> & Partial<Company>;
-  // kobo-363 dual-read: `teams` preferred, `departments` = legacy fallback so
-  // pre-rename `~/.maw/companies/*.json` configs keep working with no manual
-  // migration step. Both present at once shouldn't happen mid-migrate, but if
-  // it does: prefer teams, never silently drop the ambiguity on the floor.
-  const legacyDepartments = raw.departments as Record<string, Department> | undefined;
-  if (raw.teams && legacyDepartments) {
-    console.error(
-      `[company] '${name}.json' has BOTH "teams" and legacy "departments" keys — using teams, ignoring departments (ambiguous config, clean up when convenient)`,
+  // kobo-737: the kobo-363 `departments` fallback is gone — `teams` is the only
+  // schema key. A silent fallback hides drift forever (a hand-edit or an old
+  // tool re-writing the legacy key would keep loading, splitting what different
+  // consumers see); erroring surfaces it on the first read.
+  if (raw.departments !== undefined) {
+    throw new Error(
+      `[company] '${path}' uses the legacy "departments" key — it was renamed to "teams" (kobo-363). ` +
+        `Fix: rename "departments" to "teams" in that file (or delete it if "teams" is already there).`,
     );
   }
-  const teams = (raw.teams as Record<string, Department> | undefined) ?? legacyDepartments ?? {};
+  const teams = (raw.teams as Record<string, Department> | undefined) ?? {};
   // Normalize older/partial shapes — ensure members[] always present.
   for (const team of Object.values(teams)) {
     if (!Array.isArray(team.members)) team.members = [];

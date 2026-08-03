@@ -48,10 +48,11 @@ export function companyOfOracleLight(oracle: string): string | null {
     try {
       const c = JSON.parse(readFileSync(join(dir, f), "utf8"));
       if (c?.manager === oracle) return c.name ?? f.replace(/\.json$/, "");
-      // kobo-363 dual-read: `teams` preferred, `departments` = legacy fallback
-      // (this reader bypasses loadCompany's normalization on purpose — barrel-free
-      // twin — so it needs its own dual-read, same as loadCompany's).
-      for (const dept of Object.values(c?.teams ?? c?.departments ?? {})) {
+      // kobo-737: `teams` is the only schema key (the legacy `departments`
+      // fallback is gone). This reader bypasses loadCompany's normalization on
+      // purpose — barrel-free twin — so a legacy file just resolves to no
+      // company here; loadCompany is the one that fails loudly about it.
+      for (const dept of Object.values(c?.teams ?? {})) {
         const members = (dept as { members?: Array<{ oracle?: string }> })?.members ?? [];
         if (members.some((m) => m?.oracle === oracle)) return c.name ?? f.replace(/\.json$/, "");
       }

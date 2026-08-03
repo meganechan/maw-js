@@ -179,6 +179,34 @@ export function __resetGhForTest(): void {
   ghFetcher = realGh;
 }
 
+/** Repos to poll = the distinct main repos of this machine's local worktrees. */
+async function realRepos(): Promise<string[]> {
+  const wts = await scanWorktrees();
+  return [...new Set(wts.map(w => w.mainRepo).filter(Boolean))];
+}
+
+// kobo-733 — injectable seam, same shape/contract as `__setGhForTest` above.
+// `scanWorktrees()` shells out to `find` + `git` + tmux against the REAL
+// machine, so a test that leaves it live polls whatever worktrees this box
+// happens to have: slow, machine-dependent, and — on a scrubbed HOME with no
+// worktrees at all — it returns ZERO repos, which makes `pollPrsOnce` early-out
+// and every assertion after it pass vacuously. That is not a hypothetical: the
+// pre-rewrite version of pr-watch-resilience.test.ts tuned its own timeouts
+// around the real scan's ~286ms and was excluded from CI partly for it.
+let repoFetcher: () => Promise<string[]> = realRepos;
+
+/** TEST-ONLY seam — state the repo list instead of scanning the real machine.
+ *  Caller MUST call `__resetReposForTest()` unless it imported this module
+ *  under its own `?query` suffix (fresh, unshared instance). */
+export function __setReposForTest(fn: () => Promise<string[]>): void {
+  repoFetcher = fn;
+}
+
+/** Companion to `__setReposForTest` — restores the real worktree scan. */
+export function __resetReposForTest(): void {
+  repoFetcher = realRepos;
+}
+
 /** Company names on this machine — the fleet-wide fan-out target for a loud
  *  failure. Was the task store's own company enumeration before the board left. */
 function companyNames(): string[] {
@@ -546,8 +574,7 @@ async function runPollPrsOnce(generation: number, signal: AbortSignal): Promise<
   // local worktree on this host is no longer polled.
   let repos: string[];
   try {
-    const wts = await scanWorktrees();
-    repos = [...new Set(wts.map(w => w.mainRepo).filter(Boolean))];
+    repos = await repoFetcher();
   } catch {
     return [];
   }

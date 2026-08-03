@@ -160,6 +160,16 @@ describe("wake maybe split/window coverage", () => {
     expect(hostExecCalls).toEqual([]);
   });
 
+  test("kobo-759: a split/bring pane is NOT a maw pane birth — it gets no @oracle_pane identity", async () => {
+    // These panes run `tmux attach-session`, not an agent. Stamping one would tell
+    // the observe layer an oracle lives there; absent is the honest answer, and it
+    // is the same answer a human's own `tmux split-window` produces.
+    process.env.TMUX_PANE = "%42";
+    await maybeSplit("20-homekeeper:homekeeper-oracle", { split: true });
+    await maybeOpenWindow("20-homekeeper:homekeeper-oracle", { bring: true });
+    expect(hostExecCalls.filter((c) => c.includes("@oracle_pane"))).toEqual([]);
+  });
+
   test("attached split restores layout, refreshes client, and shell-quotes targets", async () => {
     process.env.TMUX_PANE = "%4'2";
     await maybeSplit("20-homekeeper:homekeeper-oracle", { split: true });

@@ -106,6 +106,26 @@ describe("significant filter (filter b)", () => {
     expect(e?.paneId).toBe("%40"); // join → matches the presence file per-pane
   });
 
+  it("carries pane identity from the @oracle_pane option when the hook read one (kobo-759)", () => {
+    const e = eventToWorklog(feed({ event: "Stop", oracle: "eq3", data: { paneId: "%40", identity: "eq3:worker" } }));
+    expect(e?.kind).toBe("idle");
+    expect(e?.identity).toBe("eq3:worker"); // says WHICH pane of eq3 went idle
+    expect(e?.paneId).toBe("%40");
+  });
+
+  it("identity rides on activity rows too, not only Stop", () => {
+    const e = eventToWorklog(feed({ oracle: "eq3", data: { tool_name: "Bash", tool_input: { command: "git status" }, paneId: "%40", identity: "eq3:head" } }));
+    expect(e?.identity).toBe("eq3:head");
+  });
+
+  it("a pane maw did not birth carries NO identity — the field stays absent, never guessed", () => {
+    // human `tmux split-window` → no @oracle_pane option → hook sends no identity
+    const e = eventToWorklog(feed({ event: "Stop", oracle: "eq3", data: { paneId: "%99" } }));
+    expect(e?.paneId).toBe("%99");
+    expect(e?.identity).toBeUndefined();
+    expect("identity" in (e as object)).toBe(false); // absent, not empty-string
+  });
+
   it("SessionStart stays dropped (orientation, not a state transition)", () => {
     expect(eventToWorklog(feed({ event: "SessionStart" }))).toBeNull();
   });

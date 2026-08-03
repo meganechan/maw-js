@@ -48,12 +48,18 @@ export function eventToWorklog(event: FeedEvent): WorklogEntry | null {
   // Both kept OUT of `oracle` — that string feeds company/scope lookups.
   const pane = data?.pane != null ? String(data.pane).trim() : "";
   const paneId = data?.paneId != null ? String(data.paneId).trim() : "";
+  // `identity` = the pane's `@oracle_pane` option ("{name}:{role}", kobo-759), read by
+  // the Stop/status-reporter hook. Only present for panes maw itself birthed; a
+  // human-split pane sends nothing and the field stays OFF the row (absent = unknown,
+  // which is a fact — a defaulted value would be a guess).
+  const identity = data?.identity != null ? String(data.identity).trim() : "";
   const base = {
     ts: event.ts || Date.now(),
     iso: event.timestamp || new Date().toISOString(),
     oracle: event.oracle || "unknown",
     ...(pane ? { pane } : {}),
     ...(paneId ? { paneId } : {}),
+    ...(identity ? { identity } : {}),
     company: companyOfOracle(event.oracle) ?? undefined,
   };
 

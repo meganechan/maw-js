@@ -32,6 +32,18 @@ PROJECT=$(basename "${PWD}" 2>/dev/null)
 # displayed feed line. Empty outside tmux → omit data (paneless Stop = no per-pane signal).
 PANEID="${TMUX_PANE:-}"
 
+# Pane identity (kobo-759): the `@oracle_pane` user option — "{name}:{role}" — set at
+# every pane birth path maw owns (cell head/worker/reviewer, maw wake). Carried as
+# data.identity so the worklog row says WHICH pane of which oracle produced it.
+# ALWAYS -t "$TMUX_PANE": a bare `tmux` target is the ACTIVE pane, not this one.
+# A pane maw did not birth (human split) has no option → empty → field omitted.
+# NEVER guessed: no identity is a fact, an invented one is a lie.
+IDENTITY=""
+if [ -n "$PANEID" ]; then
+  # tr strips quote/backslash so a hand-set option value can't break the JSON body.
+  IDENTITY=$(tmux show-options -p -t "$PANEID" -qv @oracle_pane 2>/dev/null | tr -d '"\\')
+fi
+
 # Turn-ending API error (kobo-111): on Stop, if the LAST assistant message in the
 # transcript is an isApiErrorMessage (CC records API/rate-limit/overload turns this
 # way, model:"<synthetic>"), flag the pane as error. Only the LAST assistant message
@@ -51,11 +63,10 @@ fi
 
 DATA=""
 if [ -n "$PANEID" ]; then
-  if [ -n "$ERROR" ]; then
-    DATA=",\"data\":{\"paneId\":\"${PANEID}\",\"error\":true}"
-  else
-    DATA=",\"data\":{\"paneId\":\"${PANEID}\"}"
-  fi
+  FIELDS="\"paneId\":\"${PANEID}\""
+  [ -n "$ERROR" ] && FIELDS="${FIELDS},\"error\":true"
+  [ -n "$IDENTITY" ] && FIELDS="${FIELDS},\"identity\":\"${IDENTITY}\""
+  DATA=",\"data\":{${FIELDS}}"
 fi
 
 curl -s -X POST "$MAW_URL" \

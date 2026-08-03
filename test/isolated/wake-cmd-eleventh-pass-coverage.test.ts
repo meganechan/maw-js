@@ -356,7 +356,11 @@ describe("wake-cmd eleventh-pass isolated coverage", () => {
     );
 
     expect(result).toBe("54-neo:neo-stable");
-    expect(hostExecCalls).toEqual(["git -C '/tmp/neo.wt-o'\\''hai' branch --show-current 2>/dev/null || true"]);
+    expect(hostExecCalls).toEqual([
+      "git -C '/tmp/neo.wt-o'\\''hai' branch --show-current 2>/dev/null || true",
+      // kobo-759: the new task window is a pane birth → it carries pane identity
+      "tmux set-option -p -t '54-neo:neo-stable' @oracle_pane 'neo:head'",
+    ]);
     expect(capacityChecks).toEqual(["neo"]);
     expect(newWindows).toEqual([{ session: "54-neo", window: "neo-stable", opts: { cwd: "/tmp/neo.wt-o'hai" } }]);
     expect(sentText).toEqual([

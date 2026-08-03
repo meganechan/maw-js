@@ -2221,3 +2221,101 @@ describe("cmdWake main-suite coverage", () => {
     expect(lineage).toContain('branch: "feature/fix-a"');
   });
 });
+
+/**
+ * kobo-759 — pane identity at every wake birth path.
+ *
+ * Wake births panes in more places than the obvious one: the fresh session's main
+ * window, snapshot-restored windows, agents/ rehydrated worktree windows, a
+ * net-new task window, and a REUSED window whose agent died. Each is a pane that
+ * the observe layer must be able to attribute, so each carries
+ * `@oracle_pane = "{oracle}:head"` — wake never spawns a cell role.
+ *
+ * The stamp targets the same `session:window` tmux.sendText types into, so the
+ * option and the agent cannot land on different panes.
+ */
+const identityWrites = () => hostExecCalls.filter((c) => c.includes("@oracle_pane"));
+const stampFor = (target: string, oracle = "mawjs") =>
+  `tmux set-option -p -t '${target}' @oracle_pane '${oracle}:head'`;
+
+describe("wake stamps @oracle_pane at every pane birth (kobo-759)", () => {
+  test("BIRTH: fresh session main window", async () => {
+    sessions = [];
+    hasSessions = new Set();
+    detectSessionReturn = null;
+    shouldWakeDecision = { wake: true, reason: "missing" };
+
+    await captureLogs(() => cmdWake("mawjs", { noRehydrate: true, noFleet: true }));
+
+    expect(identityWrites()).toEqual([stampFor("01-mawjs:mawjs-oracle")]);
+  });
+
+  test("BIRTH: snapshot-restored windows, agents/ rehydrated worktree windows, and a REUSED window whose agent died", async () => {
+    snapshotReturn = makeSnapshot("54-mawjs");
+    worktrees = [
+      { name: "1-feature", path: join(parentDir, `${repoName}.wt-1-feature`) },
+      { name: "2-extra", path: join(parentDir, `${repoName}.wt-2-extra`) },
+    ];
+    windowsBySession = {
+      "54-mawjs": [{ index: 0, name: "mawjs-oracle", active: true, cwd: repoPath }],
+    };
+    paneCommandDefault = "zsh"; // bare shell → existing agent reads as dead → relaunch
+
+    await captureLogs(() => cmdWake("mawjs", { fromSnapshot: true, snapshotId: "snap-1" }));
+
+    // every window that got a launch line also got an identity, and vice versa
+    const launched = sendTextCalls.map((c) => c.target);
+    expect(identityWrites()).toEqual(launched.map((t) => stampFor(t)));
+    expect(launched).toContain("54-mawjs:mawjs-feature"); // snapshot restore
+    expect(launched).toContain("54-mawjs:mawjs-extra");   // agents/ rehydrate
+    expect(launched).toContain("54-mawjs:mawjs-oracle");  // reused pane, dead agent
+  });
+
+  test("BIRTH: net-new task window", async () => {
+    branchName = "feature/fix-a";
+
+    await captureLogs(() => cmdWake("mawjs", { task: "Fix A", engine: "codex" }));
+
+    expect(identityWrites()).toContain(stampFor("54-mawjs:mawjs-fix-a"));
+  });
+
+  test("REUSE: an existing window relaunched with a prompt is re-stamped BEFORE the launch — no stale name", async () => {
+    addWindow("54-mawjs", "mawjs-fix-2366");
+    paneCommandDefault = "claude";
+
+    await captureLogs(() => cmdWake("mawjs", { task: "fix-2366", prompt: "carry on" }));
+
+    expect(identityWrites()).toEqual([stampFor("54-mawjs:mawjs-fix-2366")]);
+    const stampAt = hostExecCalls.findIndex((c) => c.includes("@oracle_pane"));
+    expect(stampAt).toBeGreaterThan(-1);
+    expect(sendTextCalls.map((c) => c.target)).toContain("54-mawjs:mawjs-fix-2366");
+  });
+
+  test("role is always head — wake never claims a cell worker/reviewer", async () => {
+    sessions = [];
+    hasSessions = new Set();
+    detectSessionReturn = null;
+    shouldWakeDecision = { wake: true, reason: "missing" };
+
+    await captureLogs(() => cmdWake("mawjs", { noRehydrate: true, noFleet: true }));
+
+    for (const write of identityWrites()) {
+      expect(write).toContain("'mawjs:head'");
+      expect(write).not.toContain("worker");
+      expect(write).not.toContain("reviewer");
+    }
+  });
+
+  test("NO BIRTH, NO STAMP: a bare wake on a live agent no-ops and writes no identity", async () => {
+    await captureLogs(() => cmdWake("mawjs", {}));
+
+    expect(sendTextCalls).toEqual([]);
+    expect(identityWrites()).toEqual([]);
+  });
+
+  test("NO BIRTH, NO STAMP: --dry-run touches no pane", async () => {
+    await captureLogs(() => cmdWake("mawjs", { dryRun: true }));
+
+    expect(identityWrites()).toEqual([]);
+  });
+});

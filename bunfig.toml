@@ -7,4 +7,9 @@ testPathIgnorePatterns = ["**/agents/**", "agents/**"]
 # that directory is the one already excluded from test-default-safe.sh's
 # git-ls-files glob (mirrors mock-tmux.ts/mock-ssh.ts/mock-config.ts there),
 # so it can never be handed to `bun test` as a mismatched filename filter.
-preload = ["./test/helpers/hey-spawn-fail-closed.ts"]
+# maw-test-store-guard: same fail-closed-by-preload idiom, for writes into the
+# REAL ~/.maw — see test/helpers/real-home-write-fail-closed.ts.
+preload = [
+  "./test/helpers/hey-spawn-fail-closed.ts",
+  "./test/helpers/real-home-write-fail-closed.ts",
+]

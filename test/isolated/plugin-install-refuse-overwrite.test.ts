@@ -14,6 +14,7 @@ import { installFromDir } from "../../src/commands/plugins/plugin/install-handle
 let testRoot: string;
 let pluginsRoot: string;
 let originalEnv: string | undefined;
+let originalLock: string | undefined;
 
 beforeEach(() => {
   testRoot = mkdtempSync(join(tmpdir(), "maw-bug403-"));
@@ -21,11 +22,19 @@ beforeEach(() => {
   mkdirSync(pluginsRoot, { recursive: true });
   originalEnv = process.env.MAW_PLUGINS_DIR;
   process.env.MAW_PLUGINS_DIR = pluginsRoot;
+  // MAW_PLUGINS_DIR only redirects where the symlink lands. installFromDir also
+  // records the install in the lockfile, which defaults to mawDataPath() — so
+  // every run of this file was rewriting the operator's real ~/.maw/plugins.lock
+  // (caught by test/helpers/real-home-write-fail-closed.ts).
+  originalLock = process.env.MAW_PLUGINS_LOCK;
+  process.env.MAW_PLUGINS_LOCK = join(testRoot, "plugins.lock");
 });
 
 afterEach(() => {
   if (originalEnv === undefined) delete process.env.MAW_PLUGINS_DIR;
   else process.env.MAW_PLUGINS_DIR = originalEnv;
+  if (originalLock === undefined) delete process.env.MAW_PLUGINS_LOCK;
+  else process.env.MAW_PLUGINS_LOCK = originalLock;
   try { rmSync(testRoot, { recursive: true, force: true }); } catch { /* ok */ }
 });
 

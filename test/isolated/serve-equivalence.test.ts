@@ -1,5 +1,18 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Elysia } from "elysia";
+
+// /api/identity publishes getPeerKey(), which GENERATES and persists a real
+// 0600 peer key when no file exists — so on any machine that has never run maw
+// (every CI runner) this test wrote a cryptographic identity into the operator's
+// maw home. Invisible on a developer box: the file is already there, so the
+// reader returns before it can write. MAW_PEER_KEY is the documented override
+// that skips the file entirely. Same shape as auth-timing-safe.test.ts.
+const prevPeerKey = process.env.MAW_PEER_KEY;
+beforeAll(() => { process.env.MAW_PEER_KEY = "f".repeat(64); });
+afterAll(() => {
+  if (prevPeerKey === undefined) delete process.env.MAW_PEER_KEY;
+  else process.env.MAW_PEER_KEY = prevPeerKey;
+});
 
 import { ServeRouteRegistry } from "../../src/core/serve-route-registry";
 import { createIdentityApi } from "../../src/vendor/mpr-plugins/serve-identity/impl";

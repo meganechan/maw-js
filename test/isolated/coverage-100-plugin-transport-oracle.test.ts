@@ -414,6 +414,12 @@ describe("oracle/fleet small-gap pure helper coverage", () => {
 
   test("snapshot lists corrupt files, loads partial timestamp matches, and returns null for missing/bad snapshots", async () => {
     const snapDir = tempDir("maw-snapshots-");
+    // snapshot.ts resolves its dir through core/xdg (mawStatePath), NOT through
+    // core/paths — so the mock below never redirected anything and takeSnapshot
+    // was writing real snapshot files into the operator's ~/.maw/snapshots.
+    // Caught by test/helpers/real-home-write-fail-closed.ts.
+    const prevStateDir = process.env.MAW_STATE_DIR;
+    process.env.MAW_STATE_DIR = snapDir;
     mock.module(import.meta.resolve("../../src/core/paths"), () => ({ CONFIG_DIR: snapDir }));
     mock.module(import.meta.resolve("../../src/core/transport/ssh"), () => ({
       listSessions: async () => [{ name: "main", windows: [{ name: "neo-oracle" }, { name: "pulse-oracle" }] }],
@@ -430,6 +436,10 @@ describe("oracle/fleet small-gap pure helper coverage", () => {
     expect(mod.loadSnapshot(file.split("/").pop()!.replace(/\.json$/, ""))).toMatchObject({ trigger: "manual", node: "node-a" });
     expect(mod.loadSnapshot("missing")).toBeNull();
     expect(mod.latestSnapshot()).toBeNull();
+    expect(mod.SNAPSHOT_DIR.startsWith(snapDir)).toBe(true);
+
+    if (prevStateDir === undefined) delete process.env.MAW_STATE_DIR;
+    else process.env.MAW_STATE_DIR = prevStateDir;
   });
 });
 

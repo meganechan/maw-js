@@ -37,7 +37,7 @@ mock.module(import.meta.resolve("../../src/sdk/index.ts"), () => ({ ...realSdk, 
 
 const { default: archiveHandler, command } = await import("../../src/vendor/mpr-plugins/archive/index.ts?plugin-archive-standalone");
 const { cmdArchive } = await import("../../src/vendor/mpr-plugins/archive/impl.ts?plugin-archive-standalone");
-const { resolveOraclePath, resolveProjectSlug } = await import("../../src/vendor/mpr-plugins/archive/internal/soul-sync-impl.ts?plugin-archive-standalone");
+const { resolveOraclePath, resolveProjectSlug, cmdSoulSync, cmdSoulSyncProject } = await import("../../src/vendor/mpr-plugins/archive/internal/soul-sync-impl.ts?plugin-archive-standalone");
 
 function walkSources(dir: string): string[] {
   const out: string[] = [];
@@ -160,5 +160,30 @@ describe("archive plugin: vendored soul-sync names its pane (tmux-selfcheck-foot
     expect(targeted).toHaveLength(2);
     expect(src).not.toContain("display-message -p '#{pane_current_path}'");
     expect(src).toContain('throw new Error("TMUX_PANE unset")');
+  });
+});
+
+describe("archive plugin: vendored soul-sync self-check hits the caller's pane at runtime", () => {
+  const originalTmuxPane = process.env.TMUX_PANE;
+
+  afterEach(() => {
+    if (originalTmuxPane === undefined) delete process.env.TMUX_PANE;
+    else process.env.TMUX_PANE = originalTmuxPane;
+  });
+
+  test("cmdSoulSync's tmux self-check hostExec call carries -t '<pane>'", async () => {
+    process.env.TMUX_PANE = "%701";
+    await cmdSoulSync();
+    const selfCheck = hostExecCalls.find((cmd) => cmd.includes("display-message"));
+    expect(selfCheck).toBeDefined();
+    expect(selfCheck).toContain("-t '%701'");
+  });
+
+  test("cmdSoulSyncProject's tmux self-check hostExec call carries -t '<pane>'", async () => {
+    process.env.TMUX_PANE = "%702";
+    await cmdSoulSyncProject();
+    const selfCheck = hostExecCalls.find((cmd) => cmd.includes("display-message"));
+    expect(selfCheck).toBeDefined();
+    expect(selfCheck).toContain("-t '%702'");
   });
 });

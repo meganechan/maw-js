@@ -11,6 +11,7 @@ let sessions: Array<{ name: string; windows: Array<{ index: number; name: string
 let teamMembers: string[];
 let fleetEntries: Array<{ groupName: string; file: string; session: { name: string } }>;
 let sendCalls: Array<{ target: string; text: string }>;
+let tmuxRunCalls: Array<{ subcommand: string; args: string[] }>;
 
 mock.module("maw-js/sdk", () => ({
   ...realSdk,
@@ -24,6 +25,7 @@ mock.module("maw-js/sdk", () => ({
   loadFleetEntries: () => fleetEntries,
   tmux: {
     run: async (subcommand: string, ...args: string[]) => {
+      tmuxRunCalls.push({ subcommand, args });
       if (subcommand !== "display-message") return "";
       // tmux-selfcheck-footgun: the sender probe now passes -t $TMUX_PANE
       if (args.includes("#{window_name}")) return "sender\n";
@@ -53,6 +55,7 @@ beforeEach(() => {
   teamMembers = [];
   fleetEntries = [];
   sendCalls = [];
+  tmuxRunCalls = [];
 });
 
 describe("broadcast plugin standalone boundary (#2113)", () => {
@@ -82,6 +85,15 @@ describe("broadcast plugin standalone boundary (#2113)", () => {
     expect(result.ok).toBe(true);
     expect(sendCalls).toEqual([{ target: "77-mawjs:0", text: "[broadcast from sender] hello team" }]);
     expect(stripAnsi(result.output)).toContain("Broadcast to 1 windows (1 skipped) [scope: session=77-mawjs]");
+
+    // tmux-selfcheck-footgun: sender-detection self-check must be scoped to
+    // this pane ($TMUX_PANE), not a bare display-message that answers for
+    // whatever pane is active in the caller's current window.
+    const selfCheck = tmuxRunCalls.find(
+      call => call.subcommand === "display-message" && call.args.includes("#{window_name}"),
+    );
+    expect(selfCheck?.args).toContain("-t");
+    expect(selfCheck?.args).toContain("%bcast");
   });
 
   test("fleet scope resolves through SDK fleet entries", () => {

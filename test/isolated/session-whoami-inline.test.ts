@@ -69,6 +69,11 @@ describe("session/ inlined whoami (fix #953)", () => {
     // running the inlined impl, not a stub.
     expect(lastCmd).toContain("tmux display-message");
     expect(lastCmd).toContain("#S");
+    // tmux-selfcheck-footgun: pinning TMUX_PANE above is not enough on its own —
+    // a bare display-message (no -t) would still return SOME session name here
+    // and this test would stay green even if the caller's pane target regressed.
+    // The guard's whole point is -t $TMUX_PANE, so assert it is actually there.
+    expect(lastCmd).toContain("-t '%42'");
   });
 
   test("handler fails cleanly when TMUX is unset (UserError path)", async () => {

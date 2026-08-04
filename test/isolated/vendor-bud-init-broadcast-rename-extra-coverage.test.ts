@@ -417,6 +417,9 @@ describe("broadcast impl extra isolated coverage", () => {
   });
 
   test("prefixes sender, skips overview scratch and -view sessions, skips non-claude panes, and counts tmux failures", async () => {
+    // tmux-selfcheck-footgun: distinct from the "%bud" pane used by the bud
+    // tests above, so a wrong-pane leak between suites can't hide as a pass.
+    process.env.TMUX_PANE = "%bcast2";
     tmuxSessions = [
       { name: "99-overview", windows: [{ index: 1, name: "ignored" }] },
       { name: "scratch", windows: [{ index: 1, name: "ignored" }] },
@@ -426,11 +429,16 @@ describe("broadcast impl extra isolated coverage", () => {
     tmuxCommandByTarget = { "01-neo:1": "claude", "01-neo:2": "zsh" };
     tmuxCommandErrorTargets = new Set(["01-neo:3"]);
 
-    await cmdBroadcast("hello fleet", {}, true); // verbose=true — regression-pin (kobo-368)
+    try {
+      await cmdBroadcast("hello fleet", {}, true); // verbose=true — regression-pin (kobo-368)
 
-    expect(tmuxSendCalls).toEqual([{ target: "01-neo:1", message: "[broadcast from current-oracle] hello fleet" }]);
-    expect(output()).toContain("→ 01-neo:chat");
-    expect(output()).toContain("Broadcast to 1 windows (2 skipped)");
+      expect(tmuxSendCalls).toEqual([{ target: "01-neo:1", message: "[broadcast from current-oracle] hello fleet" }]);
+      expect(output()).toContain("→ 01-neo:chat");
+      expect(output()).toContain("Broadcast to 1 windows (2 skipped)");
+      expect(tmuxRunCalls).toContainEqual(["display-message", "-p", "-t", "%bcast2", "#{window_name}"]);
+    } finally {
+      process.env.TMUX_PANE = "%bud";
+    }
   });
 
   test("falls back to unknown sender when current window cannot be detected", async () => {

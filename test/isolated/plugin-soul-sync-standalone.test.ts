@@ -11,12 +11,40 @@
  * `internal/soul-sync-impl.ts`. The `-t` fix had to land in all four copies; the
  * assertion below is repeated in their boundary tests for the same reason.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expectStandalonePluginBoundary } from "./helpers/plugin-standalone-boundary";
 
 const implSrc = () => readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/soul-sync/impl.ts"), "utf8");
+
+let hostExecCalls: string[] = [];
+
+mock.module("maw-js/sdk", () => ({
+  hostExec: async (cmd: string) => {
+    hostExecCalls.push(cmd);
+    return "";
+  },
+}));
+mock.module("maw-js/config/ghq-root", () => ({
+  getGhqRoot: () => "/tmp/maw-soul-sync-standalone-ghq",
+}));
+mock.module("maw-js/commands/shared/fleet-load", () => ({
+  loadFleet: () => [],
+}));
+
+const { cmdSoulSync, cmdSoulSyncProject } = await import("../../src/vendor/mpr-plugins/soul-sync/impl.ts?plugin-soul-sync-standalone");
+
+const originalTmuxPane = process.env.TMUX_PANE;
+
+beforeEach(() => {
+  hostExecCalls = [];
+});
+
+afterEach(() => {
+  if (originalTmuxPane === undefined) delete process.env.TMUX_PANE;
+  else process.env.TMUX_PANE = originalTmuxPane;
+});
 
 describe("soul-sync plugin standalone boundary", () => {
   test("imports runtime helpers only through the SDK boundary", () => {
@@ -40,5 +68,23 @@ describe("soul-sync plugin standalone boundary", () => {
     // Unknown pane falls to process.cwd(), which is the pre-existing fallback —
     // never another pane's path.
     expect(src).toContain('throw new Error("TMUX_PANE unset")');
+  });
+});
+
+describe("soul-sync plugin: self-check hits the caller's own pane at runtime", () => {
+  test("cmdSoulSync's tmux self-check hostExec call carries -t '<pane>'", async () => {
+    process.env.TMUX_PANE = "%703";
+    await cmdSoulSync();
+    const selfCheck = hostExecCalls.find((cmd) => cmd.includes("display-message"));
+    expect(selfCheck).toBeDefined();
+    expect(selfCheck).toContain("-t '%703'");
+  });
+
+  test("cmdSoulSyncProject's tmux self-check hostExec call carries -t '<pane>'", async () => {
+    process.env.TMUX_PANE = "%704";
+    await cmdSoulSyncProject();
+    const selfCheck = hostExecCalls.find((cmd) => cmd.includes("display-message"));
+    expect(selfCheck).toBeDefined();
+    expect(selfCheck).toContain("-t '%704'");
   });
 });

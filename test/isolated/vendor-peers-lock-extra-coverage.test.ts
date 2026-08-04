@@ -37,7 +37,7 @@ describe("vendor peers lock extra coverage", () => {
     expect(existsSync(`${peers}.lock`)).toBe(false);
   });
 
-  test("steals stale, empty, invalid, and ESRCH-held lock files", () => {
+  test("steals an ESRCH-held lock file — a readable pid that is genuinely dead", () => {
     const peers = join(dir, "peers.json");
     process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
       void signal;
@@ -46,10 +46,25 @@ describe("vendor peers lock extra coverage", () => {
       throw err;
     }) as typeof process.kill;
 
-    for (const contents of ["", "not-a-pid", "424242"]) {
+    writeFileSync(`${peers}.lock`, "424242", "utf-8");
+    expect(withPeersLock(peers, () => "stole")).toBe("stole");
+    expect(existsSync(`${peers}.lock`)).toBe(false);
+  });
+
+  // kobo-783: these two USED to be stolen. They are the defect — under the old
+  // open(O_EXCL)-then-write acquisition an empty lock file was a live holder caught between
+  // two syscalls, and stealing it put two writers in one critical section (measured: 3 of 80
+  // room appends silently lost). Unreadable contents prove nothing about the holder, so the
+  // only safe answer is to wait and then fail loudly.
+  test("never steals a lock whose contents yield no pid — empty or garbage", () => {
+    const peers = join(dir, "peers.json");
+    let now = 1_000;
+    Date.now = () => { now += 10_000; return now; };
+
+    for (const contents of ["", "not-a-pid"]) {
       writeFileSync(`${peers}.lock`, contents, "utf-8");
-      expect(withPeersLock(peers, () => `stole:${contents || "empty"}`)).toBe(`stole:${contents || "empty"}`);
-      expect(existsSync(`${peers}.lock`)).toBe(false);
+      expect(() => withPeersLock(peers, () => "never")).toThrow(/peers lock timeout: pid unreadable still holds/);
+      expect(readFileSync(`${peers}.lock`, "utf-8")).toBe(contents); // holder's file untouched
     }
   });
 

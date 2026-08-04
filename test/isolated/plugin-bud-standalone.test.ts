@@ -102,6 +102,15 @@ beforeEach(() => {
 });
 
 describe("bud plugin standalone boundary (#2314)", () => {
+  // kobo-783: this plugin vendors its own copy of the peers file lock. Three defects that let
+  // two processes into one critical section (silent lost writes) were fixed in all five copies
+  // at once — a copy that drifts from the canonical one keeps the bug, silently.
+  test("the vendored file lock has not drifted from the canonical copy (kobo-783)", () => {
+    expect(readFileSync(join(budDir, "internal/lock.ts"), "utf8")).toBe(
+      readFileSync(join(root, "src/lib/peers/lock.ts"), "utf8"),
+    );
+  });
+
   test("all bud sources use SDK or local/platform imports only", () => {
     const imports = walkSources(budDir).flatMap((file) => importSpecs(readFileSync(file, "utf8")));
     const manifest = JSON.parse(readFileSync(join(budDir, "plugin.json"), "utf8"));

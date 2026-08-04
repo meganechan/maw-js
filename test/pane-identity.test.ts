@@ -13,6 +13,7 @@ import {
   paneIdentity,
   parsePaneIdentity,
   pickIdentifiedPane,
+  readTargetPanes,
   scanIdentifiedPanes,
   stampPaneIdentity,
 } from "../src/core/pane-identity";
@@ -182,5 +183,39 @@ describe("duplicateIdentityWarning (kobo-782)", () => {
   test("guidance only — it never proposes killing a live pane", () => {
     const w = duplicateIdentityWarning("mawjs", "head", winner, [loser]);
     expect(w).not.toContain("kill");
+  });
+});
+
+/**
+ * kobo-777 — reading ONE target's panes, unstamped ones included. That is the
+ * opposite filter from scanIdentifiedPanes, and deliberately so: an in-place
+ * stamp exists precisely for the panes that carry no identity yet.
+ */
+describe("readTargetPanes (kobo-777)", () => {
+  test("keeps unstamped panes — they are the ones a stamp is for", async () => {
+    const out = ["%12|||", "%13|||mawjs:worker"].join("\n");
+    expect(await readTargetPanes(async () => out, "54-mawjs:mawjs-oracle")).toEqual([
+      { paneId: "%12", identity: "" },
+      { paneId: "%13", identity: "mawjs:worker" },
+    ]);
+  });
+
+  test("scopes with -t, so it never reports the whole server", async () => {
+    const args: string[][] = [];
+    await readTargetPanes(async (...a) => { args.push(a); return ""; }, "54-mawjs:mawjs-oracle");
+    expect(args[0]).toEqual([
+      "list-panes", "-t", "54-mawjs:mawjs-oracle", "-F", `#{pane_id}${"|||"}#{${ORACLE_PANE_OPTION}}`,
+    ]);
+    expect(args[0]).not.toContain("-a");
+  });
+
+  test("a blank target is never sent to tmux — an empty -t is the caller's own active pane", async () => {
+    let called = false;
+    expect(await readTargetPanes(async () => { called = true; return "%9|||"; }, "  ")).toEqual([]);
+    expect(called).toBe(false);
+  });
+
+  test("a tmux error reads as no pane, not as a pane with no identity", async () => {
+    expect(await readTargetPanes(async () => { throw new Error("no server"); }, "s:w")).toEqual([]);
   });
 });

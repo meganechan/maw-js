@@ -127,6 +127,34 @@ export async function scanIdentifiedPanes(
   return panes;
 }
 
+/**
+ * The panes behind ONE tmux target (`-t` scoped), INCLUDING unstamped ones —
+ * which `scanIdentifiedPanes` deliberately drops (kobo-777).
+ *
+ * The unstamped panes are the whole point here: this answers "what is sitting at
+ * this target, and does it already have a name?", which is the question an
+ * in-place stamp has to ask before it writes. Empty on a tmux error or a target
+ * that resolves to nothing — absence, not a conflict.
+ */
+export async function readTargetPanes(
+  run: (...args: string[]) => Promise<string>,
+  target: string,
+): Promise<{ paneId: string; identity: string }[]> {
+  if (!(target ?? "").trim()) return [];
+  let raw = "";
+  try {
+    raw = await run("list-panes", "-t", target, "-F", `#{pane_id}${SCAN_SEP}#{${ORACLE_PANE_OPTION}}`);
+  } catch {
+    return [];
+  }
+  const panes: { paneId: string; identity: string }[] = [];
+  for (const line of raw.split("\n")) {
+    const [paneId = "", identity = ""] = line.trim().split(SCAN_SEP);
+    if (paneId) panes.push({ paneId, identity: identity.trim() });
+  }
+  return panes;
+}
+
 /** `%42` → 42, for ordering. Unparseable ids sort last rather than first. */
 function paneIdNum(paneId: string): number {
   const n = Number(paneId.replace(/^%/, ""));

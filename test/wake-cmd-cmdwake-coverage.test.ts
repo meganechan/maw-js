@@ -196,6 +196,10 @@ let identifiedPanes: Array<{
   windowName: string;
   identity: string;
 }>;
+// kobo-777 — what `tmux list-panes -t <target>` reports, per target. Empty by
+// default: no pane resolves, so the in-place stamp writes nothing and every
+// pre-existing test in this file is untouched.
+let panesByTarget: Record<string, Array<{ paneId: string; identity: string }>>;
 let paneCommandDefault: string;
 let paneCommands: Record<string, string>;
 let liveTileRoles: string[];
@@ -392,6 +396,12 @@ mock.module(join(import.meta.dir, "../src/sdk"), () => ({
       if (subcommand === "list-panes" && args.includes("-a")) {
         return identifiedPanes
           .map((p) => [p.paneId, p.session, p.windowIndex, p.windowName, p.identity].join("|||"))
+          .join("\n");
+      }
+      // kobo-777 — the `-t <target>` read the in-place stamp does before writing.
+      if (subcommand === "list-panes" && args[0] === "-t") {
+        return (panesByTarget[String(args[1])] ?? [])
+          .map((p) => [p.paneId, p.identity].join("|||"))
           .join("\n");
       }
       return "";
@@ -814,6 +824,7 @@ beforeEach(() => {
     ],
   };
   identifiedPanes = [];
+  panesByTarget = {};
   paneCommandDefault = "codex";
   paneCommands = {};
   liveTileRoles = [];
@@ -2447,5 +2458,125 @@ describe("wake ensures a pane by identity, not by window name (kobo-782)", () =>
     await captureLogs(() => cmdWake("mawjs", { task: "fix-b" }));
 
     expect(newWindowCalls.map((c) => c.name)).toEqual(["mawjs-fix-b"]);
+  });
+});
+
+/**
+ * kobo-777 — a solo pane's only path to `@oracle_pane`.
+ *
+ * Wake stamped at pane BIRTH and nowhere else, so an oracle that was already
+ * awake had no way to acquire an identity short of being restarted, and an
+ * oracle that should stay solo could not get one from `cell self-spawn` without
+ * also growing a worker and a reviewer. Attaching to a live pane is the moment
+ * wake knows both the oracle and the pane.
+ */
+describe("wake stamps an already-live solo pane in place (kobo-777)", () => {
+  const stampOf = (paneId: string, oracle = "mawjs") =>
+    `tmux set-option -p -t '${paneId}' @oracle_pane '${oracle}:head'`;
+
+  function livePane(identity = "", paneId = "%12"): void {
+    windowsBySession = {
+      "54-mawjs": [{ index: 0, name: "mawjs-oracle", active: true, cwd: repoPath }],
+    };
+    panesByTarget = { "54-mawjs:mawjs-oracle": [{ paneId, identity }] };
+    paneCommandDefault = "claude";
+  }
+
+  test("an unstamped live pane gets {oracle}:head — one write, -t targeted at the resolved pane id", async () => {
+    livePane();
+
+    await captureLogs(() => cmdWake("mawjs", {}));
+
+    expect(identityWrites()).toEqual([stampOf("%12")]);
+  });
+
+  test("idempotent: attaching again re-reads the same identity and writes nothing", async () => {
+    livePane();
+
+    await captureLogs(() => cmdWake("mawjs", {}));
+    // positive control: without this the zero-assertion below is trivially true
+    expect(identityWrites()).toEqual([stampOf("%12")]);
+    // the stamp landed; a second attach sees it and must not write again
+    panesByTarget["54-mawjs:mawjs-oracle"] = [{ paneId: "%12", identity: "mawjs:head" }];
+    hostExecCalls = [];
+
+    await captureLogs(() => cmdWake("mawjs", {}));
+    await captureLogs(() => cmdWake("mawjs", {}));
+
+    expect(identityWrites()).toEqual([]);
+  });
+
+  test("a pane already claiming ANOTHER oracle is never overwritten — warn, zero writes", async () => {
+    livePane("thawanban:head");
+
+    const { logs } = await captureLogs(() => cmdWake("mawjs", {}));
+
+    expect(identityWrites()).toEqual([]);
+    const warning = logs.find((l) => l.includes("already claims"));
+    expect(warning).toContain("thawanban:head already claims");
+    expect(warning).toContain("tmux set-option -pu -t %12 @oracle_pane");
+  });
+
+  test("a pane carrying a different ROLE is someone else's too — worker is not adopted as head", async () => {
+    livePane("mawjs:worker");
+
+    const { logs } = await captureLogs(() => cmdWake("mawjs", {}));
+
+    expect(identityWrites()).toEqual([]);
+    expect(logs.find((l) => l.includes("already claims"))).toContain("mawjs:worker already claims");
+  });
+
+  test("ambiguous — two panes behind the target means we cannot say which is the oracle", async () => {
+    livePane();
+    panesByTarget["54-mawjs:mawjs-oracle"] = [
+      { paneId: "%12", identity: "" },
+      { paneId: "%13", identity: "" },
+    ];
+
+    const { logs } = await captureLogs(() => cmdWake("mawjs", {}));
+
+    expect(identityWrites()).toEqual([]);
+    expect(logs.find((l) => l.includes("resolves to 2 panes"))).toContain("%12, %13");
+  });
+
+  test("the oracle already has a head elsewhere → stamping here would mint a second one (kobo-782)", async () => {
+    livePane();
+    identifiedPanes = [{
+      paneId: "%7", session: "54-mawjs", windowIndex: 3, windowName: "cell-head", identity: "mawjs:head",
+    }];
+
+    const { logs } = await captureLogs(() => cmdWake("mawjs", {}));
+
+    expect(identityWrites()).toEqual([]);
+    expect(logs.find((l) => l.includes("already has a head pane"))).toContain("%7 (54-mawjs:cell-head)");
+  });
+
+  test("a target that resolves to no pane is an absence, not a conflict — silent, no write", async () => {
+    livePane();
+    panesByTarget = {};
+
+    const { logs } = await captureLogs(() => cmdWake("mawjs", {}));
+
+    expect(identityWrites()).toEqual([]);
+    expect(logs.filter((l) => l.includes("⚠"))).toEqual([]);
+  });
+
+  test("--attach on a live unstamped pane stamps it too", async () => {
+    livePane();
+
+    await captureLogs(() => cmdWake("mawjs", { attach: true }));
+
+    expect(identityWrites()).toEqual([stampOf("%12")]);
+  });
+
+  test("BIRTH path unchanged: a fresh session still stamps its own new window, not via the live path", async () => {
+    sessions = [];
+    hasSessions = new Set();
+    detectSessionReturn = null;
+    shouldWakeDecision = { wake: true, reason: "missing" };
+
+    await captureLogs(() => cmdWake("mawjs", { noRehydrate: true, noFleet: true }));
+
+    expect(identityWrites()).toEqual([stampFor("01-mawjs:mawjs-oracle")]);
   });
 });

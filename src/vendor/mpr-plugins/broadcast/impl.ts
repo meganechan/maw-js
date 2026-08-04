@@ -160,12 +160,19 @@ export async function cmdBroadcast(message: string, scope: BroadcastScopeOptions
     throw new Error(usage());
   }
 
-  // Detect sender from current tmux window
+  // Detect sender from current tmux window.
+  // tmux-selfcheck-footgun: -t $TMUX_PANE. This name is stamped into the message
+  // every recipient reads, so bare it broadcast under the name of whatever window
+  // the human was looking at — a wrong attribution nobody downstream can check.
+  // No pane id → "unknown", which is honest; a guessed name is not.
   let sender = "unknown";
-  try {
-    sender = await tmux.run("display-message", "-p", "#{window_name}");
-    sender = sender.trim() || "unknown";
-  } catch { /* expected: may not be in tmux */ }
+  const self = process.env.TMUX_PANE;
+  if (self) {
+    try {
+      sender = await tmux.run("display-message", "-p", "-t", self, "#{window_name}");
+      sender = sender.trim() || "unknown";
+    } catch { /* expected: may not be in tmux */ }
+  }
 
   // Prefix message with sender
   message = `[broadcast from ${sender}] ${message}`;

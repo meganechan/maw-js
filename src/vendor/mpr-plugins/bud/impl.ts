@@ -134,7 +134,12 @@ export async function cmdBud(name: string, opts: BudOpts = {}) {
   }
   if (!parentName && !opts.root) {
     try {
-      const cwd = (await hostExec("tmux display-message -p '#{pane_current_path}'")).trim();
+      // tmux-selfcheck-footgun: -t $TMUX_PANE. This path decides the new oracle's
+      // PARENT, which is then written into its fleet config as `budded_from` — a
+      // bare read here budded from whatever pane the human was looking at.
+      const self = process.env.TMUX_PANE ?? "";
+      if (!self) throw new Error("TMUX_PANE unset");
+      const cwd = (await hostExec(`tmux display-message -p -t '${self}' '#{pane_current_path}'`)).trim();
       parentName = oracleStemFromMaybeWorktreePath(cwd);
     } catch {
       throw new Error("could not detect parent oracle. Use --from <oracle> or --root");

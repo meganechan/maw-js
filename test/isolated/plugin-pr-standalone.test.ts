@@ -116,6 +116,8 @@ describe("pr plugin standalone boundary (#2285)", () => {
   });
 
   test("plugin loads and creates an issue-linked PR via SDK tmux and Bun.spawn", async () => {
+    // tmux-selfcheck-footgun: the no-window path reads the CALLER's pane now.
+    process.env.TMUX_PANE = "%pr";
     const out: string[] = [];
     const result = await invokePlugin(loadPrPlugin(), {
       source: "cli",
@@ -124,7 +126,7 @@ describe("pr plugin standalone boundary (#2285)", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(tmuxCalls).toEqual([["display-message", "-p", "#{pane_current_path}"]]);
+    expect(tmuxCalls).toEqual([["display-message", "-p", "-t", "%pr", "#{pane_current_path}"]]);
     expect(spawnCalls).toEqual([
       { argv: ["git", "-C", "/tmp/maw-js", "branch", "--show-current"], opts: expect.objectContaining({ stdout: "pipe", stderr: "pipe" }) },
       { argv: ["gh", "pr", "create", "--title", "Issue 2285 Pr Standalone", "--body", "Closes #2285"], opts: expect.objectContaining({ cwd: "/tmp/maw-js" }) },
@@ -160,5 +162,21 @@ describe("pr plugin standalone boundary (#2285)", () => {
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("gh pr create failed (exit 7)");
+  });
+});
+
+/**
+ * tmux-selfcheck-footgun refresh: this plugin's pane self-check now names its
+ * target. A bare tmux query resolves $TMUX -> session -> the session's CURRENT
+ * WINDOW -> that window's ACTIVE PANE, so a caller that is not the active pane
+ * was answered with a neighbour's identity. Pinned here because the boundary
+ * test is what the #2316 gate points a future editor at.
+ */
+describe("pr plugin: pane self-check names its target (tmux-selfcheck-footgun)", () => {
+  test("the repo a PR is opened from is the caller's own pane's cwd", () => {
+    const src = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/pr/impl.ts"), "utf8");
+    expect(src).toContain('const self = process.env.TMUX_PANE ?? "";');
+    expect(src).toContain('"display-message", "-p", "-t", self, "#{pane_current_path}"');
+    expect(src).not.toContain('"display-message", "-p", "#{pane_current_path}"');
   });
 });

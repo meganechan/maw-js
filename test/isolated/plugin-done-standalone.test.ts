@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectStandalonePluginBoundary } from "./helpers/plugin-standalone-boundary";
@@ -99,5 +99,23 @@ describe("done command plugin standalone boundary", () => {
     hostExecCalls = [];
     await expect(removeWorktreeViaConfig("codex-1", reposRoot, { force: true })).resolves.toBe(true);
     expect(hostExecCalls.some(command => command.includes("worktree remove") && command.includes("--force"))).toBe(true);
+  });
+});
+
+/**
+ * tmux-selfcheck-footgun refresh: this plugin's pane self-check now names its
+ * target. A bare tmux query resolves $TMUX -> session -> the session's CURRENT
+ * WINDOW -> that window's ACTIVE PANE, so a caller that is not the active pane
+ * was answered with a neighbour's identity. Pinned here because the boundary
+ * test is what the #2316 gate points a future editor at.
+ */
+describe("done plugin: pane self-check names its target (tmux-selfcheck-footgun)", () => {
+  test("the lead-window GUARD reads the caller's own pane", () => {
+    const src = readFileSync(join(import.meta.dir, "../../src/vendor/mpr-plugins/done/impl.ts"), "utf8");
+    expect(src).toContain("const self = process.env.TMUX_PANE;");
+    expect(src).toContain('"display-message", "-p", "-t", self, "#{session_name}\\t#{window_index}"');
+    expect(src).not.toContain('"display-message", "-p", "#{session_name}\\t#{window_index}"');
+    // Unknown pane -> null -> treated as non-lead, the safe side of a guard.
+    expect(src).toContain("if (!self) return null;");
   });
 });

@@ -408,3 +408,19 @@ describe("kobo-81 pane binding (spawn → roster tmuxPaneId)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+/**
+ * tmux-selfcheck-footgun refresh: `maw team close` KILLS panes. It listed them
+ * with an unscoped `list-panes`, which enumerates the session's CURRENT WINDOW —
+ * not the caller's. When those differed it killed a whole window the caller was
+ * not in, and `myPane` was not in that list to be skipped, so the guard below it
+ * protected nothing.
+ */
+describe("team plugin: close scopes its kill list to the caller (tmux-selfcheck-footgun)", () => {
+  test("list-panes is targeted, and close refuses without a pane of its own", () => {
+    const src = readFileSync(join(import.meta.dir, "../../src/commands/plugins/team/index.ts"), "utf8");
+    expect(src).toContain("tmux list-panes -t '${myPane}' -F '#{pane_id}'");
+    expect(src).not.toContain(`tmux list-panes -F '#{pane_id}'`);
+    expect(src).toContain("refusing to guess which window to close");
+  });
+});

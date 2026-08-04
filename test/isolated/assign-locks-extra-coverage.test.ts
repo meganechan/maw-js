@@ -278,6 +278,10 @@ describe("assign plugin extra coverage", () => {
 
   test("cmdAssign detects oracle from tmux window name and tolerates hostExec failure as undetected", async () => {
     process.env.TMUX = "/tmp/tmux-1000/default,123,0";
+    // tmux-selfcheck-footgun: detectCurrentOracle asks for ITS OWN pane now — a
+    // bare read named whichever window the human had active, and that name
+    // decides who an issue is assigned to.
+    process.env.TMUX_PANE = "%77";
     hostExecImpl = async () => "lyra-coverage\n";
 
     const originalLog = console.log;
@@ -288,7 +292,7 @@ describe("assign plugin extra coverage", () => {
       console.log = originalLog;
     }
 
-    expect(hostExecCalls).toEqual(["tmux display-message -p '#{window_name}'"]);
+    expect(hostExecCalls).toEqual(["tmux display-message -p -t '%77' '#{window_name}'"]);
     expect(fetchIssueCalls).toEqual([[7, "org/repo"]]);
     expect(wakeCalls[0][0]).toBe("lyra");
 
@@ -302,7 +306,7 @@ describe("assign plugin extra coverage", () => {
     await expect(assignImpl.cmdAssign("https://github.com/org/repo/issues/8", {})).rejects.toThrow(
       "could not detect oracle",
     );
-    expect(hostExecCalls).toEqual(["tmux display-message -p '#{window_name}'"]);
+    expect(hostExecCalls).toEqual(["tmux display-message -p -t '%77' '#{window_name}'"]);
     expect(fetchIssueCalls).toEqual([]);
     expect(wakeCalls).toEqual([]);
   });

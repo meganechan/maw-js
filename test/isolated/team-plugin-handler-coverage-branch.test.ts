@@ -277,19 +277,23 @@ describe("team handler coverage slice: remaining branches", () => {
     const noTmux = await teamHandler({ source: "cli", args: ["close"] });
     expect(noTmux.error).toBe("not in tmux");
 
+    // tmux-selfcheck-footgun: inside tmux but with no pane id of its own, close
+    // cannot know which window is the caller's — and this verb KILLS panes, so it
+    // refuses instead of enumerating whatever window the human had active.
     process.env.TMUX = "1";
-    hostExecMap["tmux list-panes -F '#{pane_id}'"] = "Y";
+    delete process.env.TMUX_PANE;
     let close = await teamHandler({ source: "cli", args: ["close"] });
-    expect(close.ok).toBe(true);
+    expect(close.error).toBe("TMUX_PANE unset");
+    expect(calls.hostExec.some((c) => c.includes("list-panes"))).toBe(false);
 
-    hostExecMap["tmux list-panes -F '#{pane_id}'"] = "X\nY\nZ";
+    hostExecMap["tmux list-panes -t 'Y' -F '#{pane_id}'"] = "X\nY\nZ";
     hostExecMap["tmux kill-pane -t 'X'"] = "";
     hostExecMap["tmux kill-pane -t 'Z'"] = "";
     process.env.TMUX_PANE = "Y";
     close = await teamHandler({ source: "cli", args: ["close"] });
     expect(close.ok).toBe(true);
     expect(calls.hostExec.slice(-3)).toEqual([
-      "tmux list-panes -F '#{pane_id}'",
+      "tmux list-panes -t 'Y' -F '#{pane_id}'",
       "tmux kill-pane -t 'X'",
       "tmux kill-pane -t 'Z'",
     ]);

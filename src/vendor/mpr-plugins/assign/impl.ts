@@ -8,8 +8,14 @@ function parseIssueUrl(url: string): { org: string; repo: string; issueNum: numb
 
 async function detectCurrentOracle(): Promise<string | null> {
   if (!process.env.TMUX) return null;
+  // tmux-selfcheck-footgun: -t $TMUX_PANE. This answer names the oracle an issue
+  // gets ASSIGNED to on GitHub — a durable write. Bare, it read the attached
+  // client's active window, so a background pane assigned work to whoever the
+  // human was looking at. Unknown pane → null (the caller already prompts).
+  const self = process.env.TMUX_PANE ?? "";
+  if (!self) return null;
   try {
-    const windowName = (await hostExec("tmux display-message -p '#{window_name}'")).trim();
+    const windowName = (await hostExec(`tmux display-message -p -t '${self}' '#{window_name}'`)).trim();
     // Window name pattern: <oracle>-oracle or <oracle>-<task>
     const m = windowName.match(/^([^-]+)-/);
     return m ? m[1] : null;

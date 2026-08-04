@@ -294,7 +294,7 @@ describe("swarm index handler isolated coverage", () => {
     ]);
   });
 
-  test("falls back from stale TMUX_PANE to the live current pane before splitting", async () => {
+  test("stale TMUX_PANE yields NO anchor — it does not ask tmux which pane is active (tmux-selfcheck-footgun)", async () => {
     process.env.TMUX_PANE = "%stale";
     currentPaneId = "%live";
     stalePaneTargets.add("%stale");
@@ -302,15 +302,18 @@ describe("swarm index handler isolated coverage", () => {
     const result = await run(["claude", "codex"]);
 
     expect(result.ok).toBe(true);
+    // the -t probe still runs: that is how a stale pane id is detected
     expect(calls.hostExec).toContain("tmux display-message -p -t '%stale' '#{pane_id}'");
-    expect(calls.hostExec).toContain("tmux display-message -p '#{pane_id}'");
+    // ...but the bare follow-up is gone. It used to answer "%live" — the ATTACHED
+    // CLIENT's active pane, which is not this caller's pane and never was. The old
+    // assertion below encoded that wrong answer as the expected outcome.
+    expect(calls.hostExec).not.toContain("tmux display-message -p '#{pane_id}'");
     expect(calls.hostExec.some((cmd) => cmd.includes("tmux split-window -t '%stale'"))).toBe(false);
-    expect(calls.hostExec.filter((cmd) => cmd.includes("tmux split-window"))).toEqual([
-      "tmux split-window -t '%live' -h -P -F '#{pane_id}' 'exec zsh -li'",
-      "tmux split-window -t '%live' -h -P -F '#{pane_id}' 'exec zsh -li'",
-    ]);
-    expect(calls.applyTeamLayout).toEqual([["window-1", "%live"]]);
-    expect(calls.saveLayoutSnapshot).toEqual([["swarm", "%live"]]);
+    expect(calls.hostExec.some((cmd) => cmd.includes("tmux split-window -t '%live'"))).toBe(false);
+    // no anchor → no anchored layout, and nothing is recorded under a pane the
+    // caller does not own
+    expect(calls.applyTeamLayout).toEqual([]);
+    expect(calls.saveLayoutSnapshot).toEqual([["swarm", ""]]);
   });
 
   test("ignores non-cli args and skips layout selection when there is no anchor and --tiled is absent", async () => {

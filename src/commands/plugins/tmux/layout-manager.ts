@@ -172,11 +172,18 @@ export async function spawnTeammatePane(
 // ─── Helpers ─────────────────────────────────────────────
 
 export async function getWindowTarget(): Promise<string> {
-  return (await hostExec("tmux display-message -p '#{window_id}'")).trim();
+  // tmux-selfcheck-footgun: -t $TMUX_PANE. The returned window id is what the
+  // layout verbs then resize and re-arrange; bare, that was the session's current
+  // window, not the caller's.
+  const self = process.env.TMUX_PANE;
+  if (!self) throw new Error("layout: TMUX_PANE is unset — refusing to lay out whichever window happens to be active");
+  return (await hostExec(`tmux display-message -p -t '${self}' '#{window_id}'`)).trim();
 }
 
-export async function listPaneIds(windowTarget?: string): Promise<string[]> {
-  const flag = windowTarget ? `-t '${windowTarget}'` : "";
-  const raw = await hostExec(`tmux list-panes ${flag} -F '#{pane_id}'`);
+// tmux-selfcheck-footgun: windowTarget is required. It was optional, and the
+// no-arg branch emitted a bare `list-panes` — the session's CURRENT window,
+// not the caller's. Every call site already passes a target.
+export async function listPaneIds(windowTarget: string): Promise<string[]> {
+  const raw = await hostExec(`tmux list-panes -t '${windowTarget}' -F '#{pane_id}'`);
   return raw.split("\n").filter(Boolean);
 }

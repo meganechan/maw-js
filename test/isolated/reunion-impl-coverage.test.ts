@@ -10,13 +10,22 @@ let cwdByTarget = new Map<string, string>();
 let gitRootByCwd = new Map<string, string | Error>();
 let hostExecThrowsForTmux = false;
 
+// tmux-selfcheck-footgun: cmdReunion's self-check (no windowName arg) now
+// requires TMUX_PANE and passes it as -t. Pin a fake pane and key
+// cwdByTarget off THAT value only (no generic "current" fallback) so a
+// regression that drops -t breaks these tests instead of silently resolving
+// to the worktree by luck — which is exactly how this file passed locally
+// (dev shell exports TMUX_PANE) while dying in CI (unset there).
+const SELF_PANE = "%reunion-707";
+let savedTmuxPane: string | undefined;
+
 mock.module("maw-js/sdk", () => ({
   listSessions: async () => sessions,
   hostExec: async (cmd: string) => {
     if (cmd.startsWith("tmux display-message")) {
       if (hostExecThrowsForTmux) throw new Error("tmux failed");
-      const target = cmd.match(/-t '([^']+)'/)?.[1] ?? "__current__";
-      return cwdByTarget.get(target) ?? cwdByTarget.get("__current__") ?? "";
+      const target = cmd.match(/-t '([^']+)'/)?.[1];
+      return (target && cwdByTarget.get(target)) ?? "";
     }
     const cwd = cmd.match(/git -C '([^']+)'/)?.[1];
     const result = cwd ? gitRootByCwd.get(cwd) : undefined;
@@ -57,13 +66,17 @@ describe.each(modules)("%s implementation coverage", (_label, cmdReunion) => {
     mkdirSync(mainRoot, { recursive: true });
     mkdirSync(worktree, { recursive: true });
     sessions = [];
-    cwdByTarget = new Map([["__current__", worktree]]);
+    cwdByTarget = new Map([[SELF_PANE, worktree]]);
     gitRootByCwd = new Map([[worktree, join(mainRoot, ".git")]]);
     hostExecThrowsForTmux = false;
+    savedTmuxPane = process.env.TMUX_PANE;
+    process.env.TMUX_PANE = SELF_PANE;
   });
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+    if (savedTmuxPane === undefined) delete process.env.TMUX_PANE;
+    else process.env.TMUX_PANE = savedTmuxPane;
   });
 
   test("syncs new ψ memory files from current worktree to main without overwriting", async () => {

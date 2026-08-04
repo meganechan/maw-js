@@ -42,14 +42,12 @@ async function resolveLiveAnchorPane(
     // context rather than handing the stale %N to split-window.
   }
 
-  try {
-    const resolved = (await hostExec("tmux display-message -p '#{pane_id}'")).trim();
-    if (resolved.startsWith("%")) return resolved;
-  } catch {
-    // Splitting without an explicit target is safer than crashing on a known
-    // stale pane id; tmux can still use its current command context.
-  }
-
+  // tmux-selfcheck-footgun: the bare `display-message -p '#{pane_id}'` that used
+  // to sit here did not resolve "this process's pane" — it resolved the ACTIVE
+  // PANE of the session's current window, so a stale $TMUX_PANE was replaced by a confidently
+  // wrong one and the swarm split someone else's pane. Returning "" leaves the
+  // caller to split without an explicit target, which is the same outcome the old
+  // fallback was reaching for, minus the wrong answer that looked right.
   return "";
 }
 

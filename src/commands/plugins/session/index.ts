@@ -30,17 +30,24 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
         "maw session requires an active tmux session — run 'maw wake <oracle>' or attach to tmux first",
       );
     }
+    // tmux-selfcheck-footgun: -t $TMUX_PANE. Bare, this reported the ATTACHED
+    // CLIENT's active pane rather than the caller's — and these fields get copied
+    // into other verbs as a target.
+    const self = process.env.TMUX_PANE;
+    if (!self) {
+      throw new UserError("maw session: TMUX_PANE is unset, so this process cannot identify its own pane — refusing to report another pane's address");
+    }
     const argv = (ctx.source === "cli" ? (ctx.args as string[]) : []) ?? [];
     const short = argv.includes("--short") || argv.includes("-s");
     const json = argv.includes("--json");
 
     if (short) {
-      const raw = await hostExec(`tmux display-message -p '#S'`);
+      const raw = await hostExec(`tmux display-message -p -t '${self}' '#S'`);
       console.log(raw.trim());
       return { ok: true, output: logs.join("\n") || undefined };
     }
 
-    const raw = await hostExec(`tmux display-message -p '#S\t#W\t#{window_id}\t#{pane_title}\t#{pane_id}'`);
+    const raw = await hostExec(`tmux display-message -p -t '${self}' '#S\t#W\t#{window_id}\t#{pane_title}\t#{pane_id}'`);
     const [session, window, windowId, paneTitle, paneId] = raw.trim().split("\t");
 
     if (json) {

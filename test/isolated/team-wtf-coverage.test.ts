@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   detectTeamNameFromSession,
   inspectTeamWtf,
@@ -190,5 +190,68 @@ describe("maw wtf read-only diagnose (#2805)", () => {
     const check = byName(result, "team:orphan:web-v2-extra");
     expect(check.ok).toBe(false);
     expect(check.fix).toEqual(["maw kill 167-web-v2:web-v2-extra"]);
+  });
+});
+
+// tmux-selfcheck-footgun: every other test in this file overrides
+// `currentWindowRefFn` (see `deps()` above), so none of them exercise the REAL
+// default `currentWindowRef()` in team-wtf.ts — the function that identifies
+// the LEAD window and decides `isLeadPane` above. A bare `display-message`
+// there would crown the session's active pane's window as lead regardless of
+// who asked. This block deliberately leaves `currentWindowRefFn` unset and
+// injects a `tmux` mock instead, so the real guard runs.
+describe("inspectTeamWtf: currentWindowRef targets $TMUX_PANE (tmux-selfcheck-footgun)", () => {
+  let savedPane: string | undefined;
+
+  function depsWithRealCurrentWindowRef(tmuxRunCalls: unknown[][]) {
+    return {
+      currentTmuxSessionFn: async () => "167-web-v2",
+      // currentWindowRefFn intentionally omitted — falls through to the real
+      // `currentWindowRef` in team-wtf.ts, which reads process.env.TMUX_PANE.
+      resolveCharterPathFn: (team: string) => (team === "web-v2" ? "/repo/.maw/teams/web-v2.yaml" : null),
+      readTeamCharterFn: () => charter(),
+      listPaneSnapshotsFn: async () => [pane()],
+      loadConfigFn: () => config,
+      ps: () => [{ pid: 101, ppid: 100, pgid: 100, args: "codex --yolo" }],
+      tmux: {
+        run: async (...args: string[]) => {
+          tmuxRunCalls.push(args);
+          return "$167:@1";
+        },
+      },
+    };
+  }
+
+  beforeEach(() => {
+    savedPane = process.env.TMUX_PANE;
+  });
+
+  afterEach(() => {
+    if (savedPane === undefined) delete process.env.TMUX_PANE;
+    else process.env.TMUX_PANE = savedPane;
+  });
+
+  test("pinned TMUX_PANE is passed as -t to the lead-window display-message call", async () => {
+    process.env.TMUX_PANE = "%wtf707";
+    const tmuxRunCalls: unknown[][] = [];
+
+    await inspectTeamWtf("web-v2", { cwd: "/repo" }, depsWithRealCurrentWindowRef(tmuxRunCalls));
+
+    const leadCall = tmuxRunCalls.find((call) => call[0] === "display-message" && call.includes("#{session_id}:#{window_id}"));
+    expect(leadCall).toBeDefined();
+    expect(leadCall).toContain("-t");
+    expect(leadCall).toContain("%wtf707");
+  });
+
+  test("unset TMUX_PANE never calls tmux for the lead window (fails closed, not bare)", async () => {
+    delete process.env.TMUX_PANE;
+    const tmuxRunCalls: unknown[][] = [];
+
+    const result = await inspectTeamWtf("web-v2", { cwd: "/repo" }, depsWithRealCurrentWindowRef(tmuxRunCalls));
+
+    expect(tmuxRunCalls.some((call) => call[0] === "display-message" && call.includes("#{session_id}:#{window_id}"))).toBe(false);
+    // dead-frame fix stays UNSUPPRESSED — with no known lead window, isLeadPane
+    // can never be true, so the "lead protected" branch cannot fire.
+    expect(result.ok).toBe(true);
   });
 });

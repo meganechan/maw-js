@@ -47,8 +47,13 @@ export interface ParkedState {
 }
 
 function currentWindowInfo(): { session: string; window: string } {
-  const session = tmuxRun("display-message", "-p", "#S");
-  const window = tmuxRun("display-message", "-p", "#W");
+  // tmux-selfcheck-footgun: -t $TMUX_PANE. These two values become the KEY of the
+  // parked-state file on disk, so a bare read parked the caller's work under
+  // whatever window the human was looking at — and unpark then restored it there.
+  const self = process.env.TMUX_PANE;
+  if (!self) throw new Error("park: TMUX_PANE is unset — refusing to park under another window's name");
+  const session = tmuxRun("display-message", "-p", "-t", self, "#S");
+  const window = tmuxRun("display-message", "-p", "-t", self, "#W");
   return { session, window };
 }
 

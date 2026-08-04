@@ -188,15 +188,21 @@ describe("tile impl next coverage", () => {
     rmSync(wtPath, { recursive: true, force: true });
   });
 
-  test("validates counts and retile uses the active window without TMUX_PANE", async () => {
+  test("validates counts, and retile REFUSES without TMUX_PANE (tmux-selfcheck-footgun)", async () => {
     await expect(cmdTile(-1)).rejects.toThrow("tile: count must be a non-negative integer");
     await expect(cmdTile(Number.POSITIVE_INFINITY)).rejects.toThrow("tile: count must be a non-negative integer");
     await expect(cmdTile(11)).rejects.toThrow("tile: max 10 panes (got 11)");
 
+    // Was: "retile uses the active window without TMUX_PANE" — i.e. it re-tiled
+    // whatever window the human was looking at. With no way to know which window
+    // is the caller's, doing nothing is the only honest option.
     delete process.env.TMUX_PANE;
-    await cmdTile(0);
+    await expect(cmdTile(0)).rejects.toThrow("TMUX_PANE is unset");
+    expect(commands).not.toContain("tmux display-message -p '#{window_id}'");
 
-    expect(commands).toContain("tmux display-message -p '#{window_id}'");
+    process.env.TMUX_PANE = "%lead";
+    await cmdTile(0);
+    expect(commands).toContain("tmux display-message -t '%lead' -p '#{window_id}'");
     expect(layoutCalls).toContain("tile:@win");
     expect(logSpy).toHaveBeenCalledWith("\x1b[32m✓\x1b[0m tiled");
   });

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -13,10 +13,12 @@ let firstPaneIds = new Map<string, string>();
 let sessionOptions = new Map<string, string>();
 let commandForClaude = "claude --model sonnet";
 let currentSessionWindow = "work\tmain\n";
+let tmuxRunCalls: Array<{ subcommand: string; args: string[] }> = [];
 
 mock.module(join(import.meta.dir, "../../src/sdk"), () => ({
   tmux: {
     run: async (subcommand: string, ...args: string[]) => {
+      tmuxRunCalls.push({ subcommand, args });
       if (subcommand === "display-message" && args.includes("#{session_name}\t#{window_name}")) {
         return currentSessionWindow;
       }
@@ -66,6 +68,8 @@ mock.module(join(import.meta.dir, "../../src/config"), () => ({
 
 const { cmdNew, decideNewWorkspaceAttach, isTruthyEnv, validateWorkspaceSessionName, validateWorkspaceWindowName } = await import("../../src/cli/cmd-new");
 
+const originalTmuxPane = process.env.TMUX_PANE;
+
 beforeEach(() => {
   sessions = new Set<string>();
   newSessionCalls = [];
@@ -77,6 +81,13 @@ beforeEach(() => {
   sessionOptions = new Map<string, string>();
   commandForClaude = "claude --model sonnet";
   currentSessionWindow = "work\tmain\n";
+  tmuxRunCalls = [];
+  process.env.TMUX_PANE = "%42";
+});
+
+afterEach(() => {
+  if (originalTmuxPane === undefined) delete process.env.TMUX_PANE;
+  else process.env.TMUX_PANE = originalTmuxPane;
 });
 
 describe("cmdNew workspace session factory", () => {
@@ -425,6 +436,10 @@ describe("cmdNew workspace session factory", () => {
     });
     try {
       await cmdNew(["agent-a", "-p", dir, "-c", "bun dev", "--split", "--print", "--no-attach"]);
+
+      const selfCheck = tmuxRunCalls.find(call => call.subcommand === "display-message");
+      expect(selfCheck?.args).toContain("-t");
+      expect(selfCheck?.args).toContain("%42");
 
       expect(newSessionCalls).toEqual([]);
       expect(splitWindowCalls).toEqual([

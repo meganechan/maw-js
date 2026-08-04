@@ -476,8 +476,15 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
       continue;
     }
 
-    const self = selfOracleId();
-    const dept = resolveSelfDept();
+    // kobo-822: `self`/`dept` used to be "who am I" (selfOracleId/resolveSelfDept)
+    // because self-spawn ran INSIDE each target oracle's own pane — its own
+    // identity WAS the member being spawned. companyCellSpawn runs ONCE from an
+    // external orchestrator, looping over every roster member in turn: reading
+    // the invoker's own env here would stamp every member's worker/reviewer with
+    // the SAME (wrong, invoker's) identity instead of each member's own. The
+    // member being processed IS the answer, not an ambient lookup.
+    const self = member.oracle;
+    const dept = scopeOfOracle(member.oracle)?.dept || "(none)";
     const stateDir = stateDirOf(anchor);
     mkdirSync(stateDir, { recursive: true });
     for (const f of STATE_FILES) { try { rmSync(join(stateDir, f)); } catch { /* absent */ } }

@@ -26,7 +26,6 @@ const home = join(dir, "home");
 const repo = join(dir, "repo");
 const prevDataDir = process.env.MAW_DATA_DIR;
 const prevHome = process.env.HOME;
-const prevAgent = process.env.CLAUDE_AGENT_NAME;
 const prevPoll = process.env.CELL_SPAWN_POLL_MS;
 
 process.env.MAW_DATA_DIR = dir;
@@ -46,8 +45,6 @@ interface FakePane { id: string; role: string; window: string; identity: string;
 let panes: FakePane[] = [];
 let commands: string[] = [];
 let nextId = 100;
-/** unset to prove an unresolvable oracle name writes no option, ever */
-let agentName: string | undefined = "patchwork";
 
 const paneOf = (id: string) => panes.find((p) => p.id === id);
 const arg = (cmd: string, re: RegExp) => re.exec(cmd)?.[1] ?? "";
@@ -98,7 +95,6 @@ afterAll(() => {
   _setCompaniesDir(prevCompaniesDir);
   if (prevDataDir === undefined) delete process.env.MAW_DATA_DIR; else process.env.MAW_DATA_DIR = prevDataDir;
   if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
-  if (prevAgent === undefined) delete process.env.CLAUDE_AGENT_NAME; else process.env.CLAUDE_AGENT_NAME = prevAgent;
   if (prevPoll === undefined) delete process.env.CELL_SPAWN_POLL_MS; else process.env.CELL_SPAWN_POLL_MS = prevPoll;
   rmSync(dir, { recursive: true, force: true });
 });
@@ -106,9 +102,6 @@ afterAll(() => {
 beforeEach(() => {
   commands = [];
   nextId = 100;
-  agentName = "patchwork";
-  if (agentName) process.env.CLAUDE_AGENT_NAME = agentName; else delete process.env.CLAUDE_AGENT_NAME;
-  process.env.TMUX = ""; // no fallback via a live tmux session name
   process.env.CELL_SPAWN_POLL_MS = "1";
   // head already adopted+identified, exactly what wake leaves behind
   panes = [{ id: "%head", role: "👤 head", window: "cell-head", identity: "patchwork:head", path: repo }];
@@ -149,12 +142,18 @@ describe("cell spawn stamps @oracle_pane on every pane it births (kobo-759, kobo
     for (const cmd of identityCmds()) expect(cmd).toContain("set-option -p -t");
   });
 
-  test("unresolvable oracle name → NO option is written for the new panes, and the gap is announced (never guessed)", async () => {
-    delete process.env.CLAUDE_AGENT_NAME;
-    const out = await spawn();
-    expect(identityCmds()).toEqual([]);
-    expect(out.filter((l) => l.includes("pane identity not set"))).toHaveLength(2);
-  });
+  // kobo-822: this suite used to have an "unresolvable oracle name" case here
+  // (delete CLAUDE_AGENT_NAME → identity gap). That premise is gone: identity
+  // used to come from `selfOracleId()` (the CURRENT process's own env/tmux)
+  // because self-spawn ran INSIDE the target oracle's own pane. spawn asks a
+  // different question now — "which roster member is this", answered from the
+  // company config — so this process's own environment can no longer make an
+  // oracle's identity unresolvable. `stampCellPane`'s "not set" branch is
+  // still real (`paneIdentity()` refuses a name containing `:`), but exercising
+  // it needs `findHeadPane`'s OWN `{oracle}:{role}` parsing to already have
+  // failed on the same name first — that is core/pane-identity's contract, not
+  // this file's, and belongs in its own suite rather than a contrived fixture
+  // here.
 
   test("never a keystroke: identity, contracts and worker/reviewer are all built from outside", async () => {
     await spawn();

@@ -183,6 +183,20 @@ describe("two oracles, two state dirs (kobo-780)", () => {
     expect(readFileSync(join(stateDirOf(repoB), "head.md"), "utf8")).toContain(`state-dir=${stateDirOf(repoB)}`);
   });
 
+  // kobo-822 regression guard: companyCellSpawn loops over the WHOLE roster in
+  // one call from one process — worker/reviewer identity must come from the
+  // member being processed, not from an ambient "who am I" lookup (that would
+  // stamp every member's panes with the SAME identity: whoever's env the
+  // orchestrator process happened to be running under).
+  test("each oracle's worker+reviewer are stamped with ITS OWN identity, not the invoker's or each other's", async () => {
+    await spawn();
+    const workerReviewer = panes.filter((p) => p.window === "cell-workers");
+    expect(workerReviewer.filter((p) => p.identity.startsWith("patchwork:")).map((p) => p.identity).sort())
+      .toEqual(["patchwork:reviewer", "patchwork:worker"]);
+    expect(workerReviewer.filter((p) => p.identity.startsWith("stitch:")).map((p) => p.identity).sort())
+      .toEqual(["stitch:reviewer", "stitch:worker"]);
+  });
+
   test("worker and reviewer panes are opened in the ORACLE's repo, not this process's cwd", async () => {
     await spawn();
     expect(spawnCmds()).toHaveLength(4); // 2 oracles x (worker + reviewer)

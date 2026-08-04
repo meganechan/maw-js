@@ -191,9 +191,10 @@ describe("readiness reads identity, scoped to the oracle asked about (kobo-775)"
     expect(commands.some((c) => c.includes("new-window"))).toBe(true);
     expect(commands.some((c) => c.includes("split-window"))).toBe(true);
     expect(out.at(-1)).toContain("1 repaired");
-    expect(panes.filter((p) => p.identity.endsWith(":head"))).toHaveLength(1);
-    expect(panes.filter((p) => p.identity.endsWith(":worker"))).toHaveLength(1);
-    expect(panes.filter((p) => p.identity.endsWith(":reviewer"))).toHaveLength(1);
+    // exact identity — proves the member being processed, not an ambient env lookup
+    expect(panes.filter((p) => p.identity === "patchwork:head")).toHaveLength(1);
+    expect(panes.filter((p) => p.identity === "patchwork:worker")).toHaveLength(1);
+    expect(panes.filter((p) => p.identity === "patchwork:reviewer")).toHaveLength(1);
   });
 
   test("a complete cell is still skipped as ready — spawn does not repair twice", async () => {

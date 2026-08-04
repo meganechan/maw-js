@@ -155,8 +155,10 @@ describe("cell spawn completes a live, already-awake oracle's cell (kobo-822)", 
     // carry the launch command as their own argument, never a follow-up send-keys).
     expect(commands.some((c) => c.includes("tmux new-window") && c.includes("cell-workers"))).toBe(true);
     expect(commands.some((c) => c.includes("split-window"))).toBe(true);
-    expect(panes.filter((p) => p.identity.endsWith(":worker"))).toHaveLength(1);
-    expect(panes.filter((p) => p.identity.endsWith(":reviewer"))).toHaveLength(1);
+    // exact identity, not just "ends with :worker" — this is the member being
+    // spawned, not whatever process happened to invoke the command
+    expect(panes.filter((p) => p.identity === "patchwork:worker")).toHaveLength(1);
+    expect(panes.filter((p) => p.identity === "patchwork:reviewer")).toHaveLength(1);
 
     const summary = out.at(-1) ?? "";
     expect(summary).toContain("1 repaired");

@@ -54,8 +54,11 @@ describe("cell command plugin standalone boundary", () => {
     // kobo-822 — no `self-spawn`, no injection, no handoff: spawn builds the
     // missing panes itself, from outside
     expect(spawnFn).not.toContain("injectCommand(");
-    expect(spawnFn).not.toContain("self-spawn");
-    expect(spawnFn).not.toContain("handOffToAgent");
+    // the actual call sites are gone; the phrase may still appear in prose
+    // explaining why (as it does, right above this slice's own comments)
+    expect(spawnFn).not.toContain('maw company cell self-spawn');
+    expect(spawnFn).not.toContain("cellSelfSpawn(");
+    expect(spawnFn).not.toContain("handOffToAgent(");
     // worker's own `tmux new-window` lives in the shared spawnWorkerSelfHeal
     // helper (called from companyCellSpawn, defined after companyCellDown in
     // the file — outside this slice), reviewer's split-window is inline here.

@@ -2,12 +2,16 @@
  * maw company cell — company/oracle based Cell v2 spawn.
  *
  *   maw company cell spawn <company>
+ *   maw company cell down <company>
  *
- * Public spawn wakes every oracle in the company and repairs each oracle's tmux
- * shape to `head | reviewer/worker`. `self-spawn` is an internal injected verb
- * that runs inside a target oracle pane and owns only that local tmux layout.
+ * kobo-822 — spawn wakes every oracle in the company (primary path, not a
+ * fallback), then builds whatever role panes are missing from OUTSIDE that
+ * oracle's session — never by typing a command into a pane that already has a
+ * process in it. `self-spawn`, the old injected verb that ran inside a target
+ * oracle pane, is gone: nothing here needs to run from inside the pane it is
+ * building. Repair is `down` then `spawn`, not a third verb.
  */
-import { companyCellDown, companyCellSpawn, cellSelfSpawn, parseCellCompanyArg, type CellSpawnResult } from "./spawn";
+import { companyCellDown, companyCellSpawn, parseCellCompanyArg, type CellSpawnResult } from "./spawn";
 
 export async function runCell(
   args: string[],
@@ -22,10 +26,6 @@ export async function runCell(
 
   if (subcmd === "down" || subcmd === "teardown") {
     return await companyCellDown(parseCellCompanyArg(args), { force: args.includes("--force"), verbose }, emit);
-  }
-
-  if (subcmd === "self-spawn") {
-    return await cellSelfSpawn(parseCellCompanyArg(args), emit);
   }
 
   // `up` was the old verb and still lives in muscle memory and docs — name its

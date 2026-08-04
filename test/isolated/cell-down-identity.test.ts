@@ -1,81 +1,123 @@
 /**
- * `maw company cell down` selection + counters — ISOLATED SUITE (kobo-764).
+ * `cell down` + `cell spawn` read the fleet per-oracle by identity, and down
+ * now tears down the head too — ISOLATED SUITE (kobo-775, updated kobo-822).
  *
- * The bug (kobo-750): down picked its kill list by cell EMOJI in `@role` and by
- * WINDOW NAME (`cell-head`/`cell-workers`). Both are shared namespaces — one tmux
- * session can hold several oracles' cells plus human splits — so `down A` reached
- * panes that were not A's, and a human pane merely sitting in a cell-named window
- * was killed. Every kill attempt was also counted as a success (the catch block
- * did `killed++`), so a cell still standing reported as torn down.
+ * kobo-775's original bug: down cleared the head's `@role` but left the window
+ * named `cell-head`, and readiness asked a question about the whole SESSION
+ * ("is there a 👤 pane, a ⚒ pane and a 🔎 pane anywhere in here?") instead of
+ * the oracle. Readiness is still the `@oracle_pane` identity, scoped to the
+ * oracle asked about — that part is unchanged and still covered below.
  *
- * Selection is now the `@oracle_pane` identity and nothing else, and `killed`
- * comes from re-reading the pane list, not from what kill-pane returned.
+ * kobo-822 changed what down DOES with the head: it used to stand it down and
+ * keep it alive (the oracle's own pane, adopted at self-spawn, was never
+ * killed) with a window-name park/restore dance so a later self-spawn could
+ * find and re-adopt it. That adoption path is gone — down now kills head too,
+ * and spawn always builds from nothing via `cmdWake` (never a re-adopt). The
+ * window-name park/restore tests this file used to carry are retired along
+ * with the code they proved.
  *
- * Why isolated: spawn.ts shells through maw-js/sdk hostExec and Bun's mock.module
- * is process-global. No test here touches a real tmux server — every tmux call
- * below is the mock (the live socket runs the production fleet).
+ * Why isolated: spawn.ts shells through maw-js/sdk hostExec and Bun's
+ * mock.module is process-global. No test here touches a real tmux server —
+ * every tmux call below is the mock, and the fake server MUTATES on
+ * set-option/new-window/split-window/kill-pane so a down→spawn cycle is one
+ * continuous state, not two fixtures.
  */
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mock } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const dir = mkdtempSync(join(tmpdir(), "maw-celldown-"));
+const dir = mkdtempSync(join(tmpdir(), "maw-cellidentity2-"));
+const home = join(dir, "home");
 const prevDataDir = process.env.MAW_DATA_DIR;
+const prevHome = process.env.HOME;
 const prevPane = process.env.TMUX_PANE;
+const prevPoll = process.env.CELL_SPAWN_POLL_MS;
 
 process.env.MAW_DATA_DIR = dir;
+process.env.HOME = home;
 mkdirSync(join(dir, "companies"), { recursive: true });
 writeFileSync(join(dir, "companies", "testco.json"),
   JSON.stringify({ name: "testco", teams: { core: { members: [{ oracle: "patchwork" }] } } }));
+mkdirSync(join(home, ".claude", "skills", "cell", "contracts"), { recursive: true });
+for (const role of ["head", "worker", "reviewer"]) {
+  writeFileSync(join(home, ".claude", "skills", "cell", "contracts", `${role}.md`), `# ${role} {{COMPANY}}\n`);
+}
 
-/** where the head pane's shell is — down reads cell state relative to THAT, not to itself */
 const headCwd = join(dir, "headcwd");
-const stateDir = join(headCwd, "ψ", "active", "cell");
-const STATE_FILES = ["head.md", "worker.md", "reviewer.md", "head-contract.md", "worker-contract.md", "reviewer-contract.md"];
 
 interface FakePane { id: string; role: string; window: string; identity: string; path: string }
 
 let panes: FakePane[] = [];
 let commands: string[] = [];
-let killAttempts: string[] = [];
-/** kill-pane throws AND the pane stays (tmux refused) */
-let killThrows = new Set<string>();
-/** kill-pane returns cleanly but the pane is still there (the silent failure) */
-let killLies = new Set<string>();
-/** list-panes throws from this call index onward */
-let listFailsAfter = Number.POSITIVE_INFINITY;
-let listCalls = 0;
+let nextId = 100;
 
+const paneOf = (id: string) => panes.find((p) => p.id === id);
+const arg = (cmd: string, re: RegExp) => re.exec(cmd)?.[1] ?? "";
+
+/** A fake tmux server: it answers, and it CHANGES. */
 mock.module("maw-js/sdk", () => ({
   hostExec: async (cmd: string): Promise<string> => {
     commands.push(cmd);
+
     if (cmd.includes("tmux list-panes")) {
-      if (listCalls++ >= listFailsAfter) throw new Error("no server running on socket");
       return panes.map((p) => `${p.id}|||${p.role}|||${p.window}|||${p.identity}|||${p.path}`).join("\n") + "\n";
     }
-    // kobo-780 — down resolves the state dir from the head pane's SESSION path,
-    // the same field self-spawn writes against (it used to read the pane's own
-    // cwd, which self-spawn cannot see the same way).
-    if (cmd.includes("session_path")) return `${headCwd}\n`;
     if (cmd.includes("kill-pane")) {
-      const target = cmd.match(/kill-pane -t '([^']+)'/)?.[1] ?? "";
-      killAttempts.push(target);
-      if (killThrows.has(target)) throw new Error("can't find pane");
-      if (!killLies.has(target)) panes = panes.filter((p) => p.id !== target);
+      panes = panes.filter((p) => p.id !== arg(cmd, /kill-pane -t '([^']+)'/));
       return "";
     }
+    if (cmd.includes("has-session")) {
+      if (panes.length === 0) throw new Error("session not found");
+      return "";
+    }
+    if (cmd.includes("new-window")) {
+      const id = `%w${nextId++}`;
+      panes.push({ id, role: "", window: "cell-workers", identity: "", path: headCwd });
+      return `${id}\n`;
+    }
+    if (cmd.includes("split-window")) {
+      const id = `%r${nextId++}`;
+      panes.push({ id, role: "", window: "cell-workers", identity: "", path: headCwd });
+      return `${id}\n`;
+    }
+    if (cmd.includes("set-option")) {
+      const p = paneOf(arg(cmd, /set-option -p-?u? -t '([^']+)'/));
+      if (!p) return "";
+      const unset = cmd.includes("set-option -pu");
+      if (cmd.includes("@role")) p.role = unset ? "" : arg(cmd, /@role '([^']*)'/);
+      else if (cmd.includes("@oracle_pane")) p.identity = unset ? "" : arg(cmd, /@oracle_pane '([^']*)'/);
+      return "";
+    }
+    if (cmd.includes("display-message")) {
+      if (cmd.includes("session_path")) return `${headCwd}\n`;
+      if (cmd.includes("pane_current_command")) return "zsh\n";
+      return "sess\n";
+    }
+    if (cmd.includes("capture-pane")) return "bypass permissions\n";
     return "";
   },
   listSessions: async () => [],
-  findWindow: () => "sess:win",
-  cmdWake: async () => {},
+  // What findWindow answers for a bare oracle name: a session:window, never a
+  // pane id — the positional fallback this card is about.
+  findWindow: () => "42-patchwork:0",
+  // kobo-822 fixture: mirrors what wake actually does now — genuinely asleep
+  // (no panes at all) gets a fresh head pane; a SOLE unidentified live pane
+  // gets stamped in place (kobo-777); two or more unidentified panes name
+  // nobody, so nothing is touched (never guessed).
+  cmdWake: async (oracle: string) => {
+    if (panes.length === 0) {
+      panes.push({ id: `%wake${nextId++}`, role: "", window: oracle, identity: `${oracle}:head`, path: headCwd });
+      return;
+    }
+    const unidentified = panes.filter((p) => !p.identity);
+    if (unidentified.length === 1) unidentified[0]!.identity = `${oracle}:head`;
+  },
   checkBusyGuard: async () => ({ busy: false }),
 }));
 
-const { companyCellDown } = await import("../../src/vendor/mpr-plugins/cell/spawn");
-const { runCell } = await import("../../src/vendor/mpr-plugins/cell/index");
+const { companyCellDown, companyCellSpawn } = await import("../../src/vendor/mpr-plugins/cell/spawn");
 const { COMPANIES_DIR, _setCompaniesDir } = await import("../../src/vendor/mpr-plugins/company/company-helpers");
 const prevCompaniesDir = COMPANIES_DIR;
 _setCompaniesDir(join(dir, "companies"));
@@ -83,37 +125,27 @@ _setCompaniesDir(join(dir, "companies"));
 afterAll(() => {
   _setCompaniesDir(prevCompaniesDir);
   if (prevDataDir === undefined) delete process.env.MAW_DATA_DIR; else process.env.MAW_DATA_DIR = prevDataDir;
+  if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
   if (prevPane === undefined) delete process.env.TMUX_PANE; else process.env.TMUX_PANE = prevPane;
+  if (prevPoll === undefined) delete process.env.CELL_SPAWN_POLL_MS; else process.env.CELL_SPAWN_POLL_MS = prevPoll;
   rmSync(dir, { recursive: true, force: true });
 });
 
-/**
- * One tmux session, three tenants: oracle A's cell (patchwork), a human split,
- * and oracle B's cell (stitch). The human pane wears a cell emoji `@role` and
- * sits in the cell-workers window on purpose — the old selector matched both.
- */
-function mixedSession(): void {
-  panes = [
-    { id: "%a-head", role: "👤 head", window: "cell-head", identity: "patchwork:head", path: headCwd },
-    { id: "%a-worker", role: "⚒ worker", window: "cell-workers", identity: "patchwork:worker", path: headCwd },
-    { id: "%a-reviewer", role: "🔎 reviewer", window: "cell-workers", identity: "patchwork:reviewer", path: headCwd },
-    { id: "%human", role: "⚒ worker", window: "cell-workers", identity: "", path: headCwd },
-    { id: "%b-head", role: "👤 head", window: "cell-head", identity: "stitch:head", path: headCwd },
-    { id: "%b-worker", role: "⚒ worker", window: "cell-workers", identity: "stitch:worker", path: headCwd },
+/** a full cell for `patchwork` */
+function liveCell(): FakePane[] {
+  return [
+    { id: "%10", role: "👤 head", window: "cell-head", identity: "patchwork:head", path: headCwd },
+    { id: "%11", role: "⚒ worker", window: "cell-workers", identity: "patchwork:worker", path: headCwd },
+    { id: "%12", role: "🔎 reviewer", window: "cell-workers", identity: "patchwork:reviewer", path: headCwd },
   ];
 }
 
 beforeEach(() => {
   commands = [];
-  killAttempts = [];
-  killThrows = new Set();
-  killLies = new Set();
-  listFailsAfter = Number.POSITIVE_INFINITY;
-  listCalls = 0;
+  nextId = 100;
+  panes = liveCell();
   process.env.TMUX_PANE = "%invoker";
-  mixedSession();
-  mkdirSync(stateDir, { recursive: true });
-  for (const f of STATE_FILES) writeFileSync(join(stateDir, f), "state\n");
+  process.env.CELL_SPAWN_POLL_MS = "1";
 });
 
 async function down(verbose = true): Promise<string[]> {
@@ -122,101 +154,133 @@ async function down(verbose = true): Promise<string[]> {
   return out;
 }
 
-const alive = () => panes.map((p) => p.id).sort();
+async function spawn(verbose = true): Promise<string[]> {
+  const out: string[] = [];
+  await companyCellSpawn("testco", (line) => out.push(line), verbose);
+  return out;
+}
 
-describe("cell down selects panes by @oracle_pane identity (kobo-764)", () => {
-  test("mixed session — down A kills ONLY A's worker+reviewer; B's cell and the human pane survive", async () => {
+describe("down tears down head too (kobo-822)", () => {
+  test("head is killed along with worker+reviewer — nothing survives", async () => {
     const out = await down();
-
-    expect(killAttempts.sort()).toEqual(["%a-reviewer", "%a-worker"]);
-    expect(alive()).toEqual(["%a-head", "%b-head", "%b-worker", "%human"]);
+    expect(panes).toEqual([]);
     expect(out.at(-1)).toContain("1 torn, 0 partial, 0 skipped, 0 refused");
   });
 
-  test("a pane with NO identity inside the cell-workers window survives — emoji @role and window name are not selectors", async () => {
-    await down();
-    expect(killAttempts).not.toContain("%human");
-    expect(panes.some((p) => p.id === "%human")).toBe(true);
-    // and nothing was selected off a pane title
-    expect(commands.some((c) => c.includes("pane_title"))).toBe(false);
-  });
-
-  test("another oracle's worker is never killed even in the same session and window", async () => {
-    await down();
-    expect(killAttempts).not.toContain("%b-worker");
-    expect(killAttempts).not.toContain("%b-head");
-  });
-
-  test("head is the last pane standing → never killed, and said out loud without --verbose", async () => {
-    panes = panes.filter((p) => p.identity.startsWith("patchwork:"));
-    const out = await down(false);
-
-    expect(killAttempts.sort()).toEqual(["%a-reviewer", "%a-worker"]);
-    expect(alive()).toEqual(["%a-head"]);
-    expect(out.some((l) => l.includes("%a-head") && l.includes("kept"))).toBe(true);
-  });
-
-  test("no pane carries {oracle}:head → fail closed, nothing is killed", async () => {
-    panes = panes.map((p) => (p.id === "%a-head" ? { ...p, identity: "" } : p));
+  test("the invoker's OWN pane is never killed, even as head", async () => {
+    // a solo head, no worker/reviewer to kill first — isolates the "toKill is
+    // empty because head IS the invoker" branch from the ordinary partial case
+    panes = [{ id: "%10", role: "👤 head", window: "cell-head", identity: "patchwork:head", path: headCwd }];
+    process.env.TMUX_PANE = "%10"; // running `cell down` from its own head
     const out = await down();
-
-    expect(killAttempts).toEqual([]);
-    expect(out.at(-1)).toContain("1 skipped");
+    expect(panes.map((p) => p.id)).toEqual(["%10"]);
+    expect(out.some((l) => l.includes("%10") && l.includes("invoker's OWN pane"))).toBe(true);
   });
 });
 
-describe("cell down cleans up after itself (kobo-764)", () => {
-  test("cell state files under the HEAD pane's cwd are removed", async () => {
-    expect(existsSync(join(stateDir, "head.md"))).toBe(true);
+describe("readiness reads identity, scoped to the oracle asked about (kobo-775)", () => {
+  test("down then spawn: not reported ready, and a FRESH cell is built — nothing is typed into the old pane", async () => {
     await down();
-    for (const f of STATE_FILES) expect(existsSync(join(stateDir, f))).toBe(false);
+    expect(panes).toEqual([]);
+    commands = [];
+    const out = await spawn();
+
+    // wake builds a new head from nothing, spawn fills in the rest — no
+    // keystroke anywhere in the cycle
+    expect(commands.some((c) => c.includes("send-keys"))).toBe(false);
+    expect(commands.some((c) => c.includes("new-window"))).toBe(true);
+    expect(commands.some((c) => c.includes("split-window"))).toBe(true);
+    expect(out.at(-1)).toContain("1 repaired");
+    expect(panes.filter((p) => p.identity.endsWith(":head"))).toHaveLength(1);
+    expect(panes.filter((p) => p.identity.endsWith(":worker"))).toHaveLength(1);
+    expect(panes.filter((p) => p.identity.endsWith(":reviewer"))).toHaveLength(1);
   });
 
-  test("the head's cell @role is cleared but its {oracle}:head identity is kept — the oracle is still there", async () => {
-    await down();
-    expect(commands).toContain("tmux set-option -pu -t '%a-head' @role");
-    expect(commands.some((c) => c.includes("@oracle_pane") && c.includes("-u"))).toBe(false);
+  test("a complete cell is still skipped as ready — spawn does not repair twice", async () => {
+    const out = await spawn();
+    expect(commands.some((c) => c.includes("new-window") || c.includes("split-window"))).toBe(false);
+    expect(out.at(-1)).toContain("1 ready, 0 repaired");
+  });
+
+  test("ANOTHER oracle's live cell in the same session no longer answers for this one", async () => {
+    // patchwork is down to its head; stitch is fully up in the same session. The
+    // session has a 👤, a ⚒ and a 🔎 — the old predicate called patchwork ready.
+    panes = [
+      { id: "%10", role: "", window: "patchwork", identity: "patchwork:head", path: headCwd },
+      { id: "%20", role: "👤 head", window: "cell-head", identity: "stitch:head", path: headCwd },
+      { id: "%21", role: "⚒ worker", window: "cell-workers", identity: "stitch:worker", path: headCwd },
+      { id: "%22", role: "🔎 reviewer", window: "cell-workers", identity: "stitch:reviewer", path: headCwd },
+    ];
+    const out = await spawn();
+
+    expect(out.at(-1)).toContain("0 ready");
+    expect(out.at(-1)).toContain("1 repaired");
+    // patchwork's own worker+reviewer were built beside %10, stitch untouched
+    expect(panes.some((p) => p.id === "%20" && p.identity === "stitch:head")).toBe(true);
+    expect(panes.filter((p) => p.identity === "patchwork:worker")).toHaveLength(1);
+    expect(panes.filter((p) => p.identity === "patchwork:reviewer")).toHaveLength(1);
+  });
+
+  test("a SOLE unidentified head-shaped pane gets identified by wake and completed — no fallback guess needed", async () => {
+    panes = [{ id: "%30", role: "👤 head", window: "cell-head", identity: "", path: headCwd }];
+    const out = await spawn();
+
+    expect(commands.some((c) => c.includes("send-keys"))).toBe(false);
+    expect(paneOf("%30")!.identity).toBe("patchwork:head");
+    expect(out.at(-1)).toContain("1 repaired");
+  });
+
+  test("...but two unidentified 👤 panes name nobody → REFUSED, never guessed", async () => {
+    panes = [
+      { id: "%30", role: "👤 head", window: "cell-head", identity: "", path: headCwd },
+      { id: "%31", role: "👤 head", window: "cell-head", identity: "", path: headCwd },
+    ];
+    const out = await spawn();
+
+    expect(commands.some((c) => c.includes("send-keys"))).toBe(false);
+    expect(commands.some((c) => c.includes("new-window") || c.includes("split-window"))).toBe(false);
+    expect(out.at(-1)).toContain("1 refused/failed");
   });
 });
 
-describe("cell down counters report what actually happened (kobo-764)", () => {
-  test("kill that tmux refuses → NOT counted killed, summary says partial, state left in place", async () => {
-    killThrows.add("%a-reviewer");
-    const out = await down();
+describe("two panes claiming {oracle}:head resolve by rule, out loud — and only the winner is torn down (kobo-775, kobo-822)", () => {
+  const dualHead = (): FakePane[] => [
+    { id: "%40", role: "", window: "cell-head", identity: "patchwork:head", path: headCwd },
+    { id: "%9", role: "", window: "cell-head", identity: "patchwork:head", path: headCwd },
+  ];
 
-    expect(out.at(-1)).toContain("0 torn, 1 partial");
-    expect(out.some((l) => l.includes("PARTIAL") && l.includes("killed 1/2") && l.includes("%a-reviewer"))).toBe(true);
-    expect(existsSync(join(stateDir, "head.md"))).toBe(true);
+  test("spawn: the lowest pane id wins and BOTH claimants are named, but only the winner gets worker+reviewer", async () => {
+    panes = dualHead();
+    const out = await spawn();
+
+    const warn = out.find((l) => l.includes("claim @oracle_pane=patchwork:head")) ?? "";
+    expect(warn).toContain("%9");
+    expect(warn).toContain("%40");
+    expect(warn).toContain("using %9");
+    expect(out.at(-1)).toContain("1 repaired");
   });
 
-  test("kill returns cleanly but the pane is still there → still a failure (killed means gone)", async () => {
-    killLies.add("%a-worker");
+  test("down: only the WINNER (%9, lowest id) is killed — the duplicate is a live pane, left alone", async () => {
+    panes = dualHead();
     const out = await down();
 
-    expect(out.at(-1)).toContain("0 torn, 1 partial");
-    expect(out.some((l) => l.includes("PARTIAL") && l.includes("%a-worker"))).toBe(true);
+    expect(panes.map((p) => p.id)).toEqual(["%40"]); // %9 gone, %40 (the loser) survives
+    expect(out.some((l) => l.includes("using %9"))).toBe(true);
   });
 
-  test("the verifying pane list fails → nothing is claimed killed (unverifiable, not success)", async () => {
-    listFailsAfter = 1; // first list builds the kill set, the verifying one throws
+  test("ordering is the id NUMBER, not the string ('%9' < '%40' lexically is a coincidence)", async () => {
+    panes = [
+      { id: "%400", role: "", window: "cell-head", identity: "patchwork:head", path: headCwd },
+      { id: "%100", role: "", window: "cell-head", identity: "patchwork:head", path: headCwd },
+    ];
     const out = await down();
-
-    expect(out.some((l) => l.includes("unverifiable"))).toBe(true);
-    expect(out.at(-1)).toContain("0 torn, 1 partial");
-  });
-
-  test("nothing left to kill → idempotent: head stood down, counted torn, not partial", async () => {
-    panes = panes.filter((p) => !["%a-worker", "%a-reviewer"].includes(p.id));
-    const out = await down();
-
-    expect(killAttempts).toEqual([]);
-    expect(out.at(-1)).toContain("1 torn, 0 partial");
-    expect(existsSync(join(stateDir, "head.md"))).toBe(false);
+    expect(panes.map((p) => p.id)).toEqual(["%400"]);
   });
 });
 
-describe("cell usage names the verb that replaced 'up' (kobo-764)", () => {
+describe("cell usage names the verb that replaced 'up'", () => {
   test("unknown verb 'up' → usage points at spawn", async () => {
+    const { runCell } = await import("../../src/vendor/mpr-plugins/cell/index");
     const result = await runCell(["up", "testco"], () => {});
     expect(result.ok).toBe(false);
     expect(result.error).toContain("'up' was replaced by 'spawn'");

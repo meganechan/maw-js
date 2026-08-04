@@ -94,6 +94,11 @@ beforeEach(() => {
   writeFileSync(join(stateDir, "head.md"), "state\n");
 });
 
+// kobo-822: down now tears down head too (it used to stand it down and keep
+// it alive for a self-spawn re-adopt that no longer exists) — the guard
+// question this suite is about (does a blind status source block teardown at
+// all) is unaffected, but "teardown proceeds" now means BOTH panes gone.
+
 /** default false — a refusal that only shows under --verbose is a silent refusal */
 async function down(opts: { force?: boolean; verbose?: boolean } = {}): Promise<string[]> {
   const out: string[] = [];
@@ -167,7 +172,7 @@ describe("cell down fails CLOSED when the status source cannot answer (kobo-778)
     globalThis.fetch = (async () => Response.json({ status: "ready" })) as typeof fetch;
     const out = await down();
 
-    expect(killAttempts).toEqual(["%worker"]);
+    expect(killAttempts.sort()).toEqual(["%head", "%worker"]);
     expect(out.at(-1)).toContain("1 torn");
   });
 
@@ -186,7 +191,7 @@ describe("--force overrides the guard, loudly (kobo-778)", () => {
     globalThis.fetch = (async () => new Response("not found", { status: 404 })) as typeof fetch;
     const out = await down({ force: true });
 
-    expect(killAttempts).toEqual(["%worker"]);
+    expect(killAttempts.sort()).toEqual(["%head", "%worker"]);
     expect(out.at(-1)).toContain("1 torn");
     const override = out.find((l) => l.includes("busy guard SKIPPED"));
     expect(override).toBeDefined();
@@ -201,7 +206,7 @@ describe("--force overrides the guard, loudly (kobo-778)", () => {
     const out = await down({ force: true });
 
     expect(guardCalls).toEqual([]);
-    expect(killAttempts).toEqual(["%worker"]);
+    expect(killAttempts.sort()).toEqual(["%head", "%worker"]);
     expect(out.at(-1)).toContain("1 torn");
   });
 });

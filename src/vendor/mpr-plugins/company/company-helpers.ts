@@ -131,7 +131,10 @@ export function companyLead(name: string): string | null {
 
 /**
  * Every oracle that belongs to a company — the manager, each dept lead, and all dept
- * members. Returns the bare oracle names.
+ * members (kobo-260). Used as the Rule-6 verify set: a `/api/room/reply` may only claim a
+ * `from` that is a real oracle of the company (no impersonating a human/web or an outsider),
+ * and `/api/room/send` (the human side) may NOT claim one of these (no impersonating a
+ * teammate). Returns the bare oracle names.
  */
 export function companyOracles(name: string): Set<string> {
   const c = loadCompany(name);

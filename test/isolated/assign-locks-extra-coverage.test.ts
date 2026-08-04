@@ -9,7 +9,12 @@ type PlannedOpen = number | { code: string };
 let fsCalls: FsCall[] = [];
 let openPlan: PlannedOpen[] = [];
 let openCursor = 0;
-let readLockContents = "";
+// kobo-783: an array models a lock file whose OWNER CHANGES across reads (steal a dead
+// holder's lock, then read our own pid back at release) — a single string cannot.
+let readLockContents: string | string[] = "";
+let readCursor = 0;
+let linkPlan: (null | { code: string })[] = [];
+let linkCursor = 0;
 let lockExists = true;
 let realDateNow: typeof Date.now;
 let nowPlan: number[] = [];
@@ -22,6 +27,9 @@ function resetFsMockState(): void {
   openPlan = [];
   openCursor = 0;
   readLockContents = "";
+  readCursor = 0;
+  linkPlan = [];
+  linkCursor = 0;
   lockExists = true;
   nowPlan = [];
   nowCursor = 0;
@@ -63,9 +71,22 @@ await mock.module("fs", () => ({
     fsCalls.push({ fn: "writeSync", args: [fd, buf.toString("utf-8")] });
     return buf.length;
   },
+  linkSync: (existingPath: string, newPath: string) => {
+    fsCalls.push({ fn: "linkSync", args: [existingPath, newPath] });
+    const next = linkPlan[Math.min(linkCursor, linkPlan.length - 1)];
+    linkCursor += 1;
+    if (!next) return; // default: the atomic publish succeeds
+    const error: NodeJS.ErrnoException = new Error(`mock ${next.code}`);
+    error.code = next.code;
+    throw error;
+  },
   readSync: (fd: number, buf: Buffer, _offset: number, _length: number, _position: number) => {
     fsCalls.push({ fn: "readSync", args: [fd] });
-    const bytes = Buffer.from(readLockContents);
+    const contents = Array.isArray(readLockContents)
+      ? (readLockContents[Math.min(readCursor, readLockContents.length - 1)] ?? "")
+      : readLockContents;
+    readCursor += 1;
+    const bytes = Buffer.from(contents);
     const n = Math.min(buf.length, bytes.length);
     bytes.copy(buf, 0, 0, n);
     return n;
@@ -467,49 +488,79 @@ describe("src/lib/peers/tofu extra coverage", () => {
 });
 
 describe("peers lock helper extra coverage", () => {
-  test("all lock helpers acquire, write pid by fd, return fn result, and release", async () => {
+  // kobo-783: acquisition is now write-pid-to-tmp then link() it into place, so the lock
+  // file is never observable without its pid in it. The syscall shape below IS the fix —
+  // an open(O_EXCL)-then-write sequence here would mean the empty-lock window is back.
+  test("all lock helpers write the pid to a tmp file and link it into place, then release", async () => {
     for (const [idx, target] of lockTargets.entries()) {
       resetFsMockState();
       openPlan = [900 + idx];
+      readLockContents = String(process.pid); // release re-reads the lock to confirm it is still ours
+      const lock = `${lockPathFor(target.label)}.lock`;
+      const tmp = `${lock}.${process.pid}.tmp`;
       const { withPeersLock } = await target.load();
 
       const result = withPeersLock(lockPathFor(target.label), () => `${target.label}:ok`);
 
       expect(result).toBe(`${target.label}:ok`);
       expect(fsCalls).toEqual([
-        { fn: "openSync", args: [`${lockPathFor(target.label)}.lock`, "wx"] },
+        { fn: "openSync", args: [tmp, "wx"] },
         { fn: "writeSync", args: [900 + idx, String(process.pid)] },
         { fn: "closeSync", args: [900 + idx] },
-        { fn: "existsSync", args: [`${lockPathFor(target.label)}.lock`] },
-        { fn: "unlinkSync", args: [`${lockPathFor(target.label)}.lock`] },
+        { fn: "linkSync", args: [tmp, lock] },
+        { fn: "unlinkSync", args: [tmp] },
+        { fn: "openSync", args: [lock, "r"] },
+        { fn: "readSync", args: [READ_FD] },
+        { fn: "closeSync", args: [READ_FD] },
+        { fn: "unlinkSync", args: [lock] },
       ]);
     }
   });
 
-  test("all lock helpers steal stale or empty locks before retrying", async () => {
+  test("all lock helpers steal a lock whose recorded pid is readable AND dead", async () => {
     for (const [idx, target] of lockTargets.entries()) {
       resetFsMockState();
-      openPlan = [{ code: "EEXIST" }, 1_200 + idx];
-      readLockContents = idx % 2 === 0 ? "999999999" : "";
+      openPlan = [1_200 + idx];
+      linkPlan = [{ code: "EEXIST" }, null]; // held on the first pass, ours on the second
+      readLockContents = ["999999999", String(process.pid)]; // dead holder, then us at release
+      const lock = `${lockPathFor(target.label)}.lock`;
       const { withPeersLock } = await target.load();
 
       const result = withPeersLock(lockPathFor(target.label), () => "stolen");
 
       expect(result).toBe("stolen");
-      expect(fsCalls.filter((call) => call.fn === "openSync" && call.args[1] === "wx").length).toBe(2);
-      expect(fsCalls).toContainEqual({
-        fn: "openSync",
-        args: [`${lockPathFor(target.label)}.lock`, "r"],
-      });
+      expect(fsCalls.filter((call) => call.fn === "linkSync")).toHaveLength(2);
+      expect(fsCalls).toContainEqual({ fn: "openSync", args: [lock, "r"] });
       expect(fsCalls).toContainEqual({ fn: "readSync", args: [READ_FD] });
-      expect(fsCalls.filter((call) => call.fn === "unlinkSync").length).toBeGreaterThanOrEqual(2);
+      expect(fsCalls).toContainEqual({ fn: "unlinkSync", args: [lock] }); // the steal
+    }
+  });
+
+  // kobo-783 defect (b): an unreadable/empty lock file is a holder caught mid-acquire under
+  // the OLD code, never proof of a dead one. It must be waited out, not stolen.
+  test("all lock helpers refuse to steal a lock they cannot read a pid from", async () => {
+    for (const [idx, target] of lockTargets.entries()) {
+      resetFsMockState();
+      openPlan = [1_300 + idx];
+      linkPlan = [{ code: "EEXIST" }];
+      readLockContents = "";
+      setNowPlan([1_000, 6_001]);
+      const lock = `${lockPathFor(target.label)}.lock`;
+      const { withPeersLock } = await target.load();
+
+      expect(() => withPeersLock(lockPathFor(target.label), () => "never")).toThrow(
+        `peers lock timeout: pid unreadable still holds ${lock}`,
+      );
+      expect(fsCalls.filter((call) => call.fn === "unlinkSync" && call.args[0] === lock)).toHaveLength(0);
+      Date.now = realDateNow;
     }
   });
 
   test("all lock helpers wait once on a live holder before retrying acquisition", async () => {
     for (const [idx, target] of lockTargets.entries()) {
       resetFsMockState();
-      openPlan = [{ code: "EEXIST" }, 1_500 + idx];
+      openPlan = [1_500 + idx];
+      linkPlan = [{ code: "EEXIST" }, null];
       readLockContents = String(process.pid);
       setNowPlan([1_000, 1_001, 1_001, 1_100]);
       const { withPeersLock } = await target.load();
@@ -517,7 +568,7 @@ describe("peers lock helper extra coverage", () => {
       const result = withPeersLock(lockPathFor(target.label), () => "waited");
 
       expect(result).toBe("waited");
-      expect(fsCalls.filter((call) => call.fn === "openSync" && call.args[1] === "wx")).toHaveLength(2);
+      expect(fsCalls.filter((call) => call.fn === "linkSync")).toHaveLength(2);
       expect(fsCalls).toContainEqual({ fn: "readSync", args: [READ_FD] });
       expect(fsCalls).toContainEqual({ fn: "writeSync", args: [1_500 + idx, String(process.pid)] });
       Date.now = realDateNow;
@@ -547,6 +598,8 @@ describe("peers lock helper extra coverage", () => {
     for (const [idx, target] of lockTargets.entries()) {
       resetFsMockState();
       openPlan = [2_000 + idx];
+      readLockContents = String(process.pid);
+      const lock = `${lockPathFor(target.label)}.lock`;
       const { withPeersLock } = await target.load();
 
       expect(() =>
@@ -555,21 +608,20 @@ describe("peers lock helper extra coverage", () => {
         }),
       ).toThrow(`${target.label} boom`);
       expect(fsCalls).toContainEqual({ fn: "closeSync", args: [2_000 + idx] });
-      expect(fsCalls).toContainEqual({
-        fn: "unlinkSync",
-        args: [`${lockPathFor(target.label)}.lock`],
-      });
+      expect(fsCalls).toContainEqual({ fn: "unlinkSync", args: [lock] });
 
       resetFsMockState();
-      openPlan = [{ code: "EEXIST" }];
+      openPlan = [3_000 + idx];
+      linkPlan = [{ code: "EEXIST" }];
       readLockContents = String(process.pid);
       setNowPlan([1_000, 6_001]);
 
       expect(() => withPeersLock(lockPathFor(target.label), () => "never")).toThrow(
-        `peers lock timeout: pid ${process.pid} still holds ${lockPathFor(target.label)}.lock`,
+        `peers lock timeout: pid ${process.pid} still holds ${lock}`,
       );
       expect(fsCalls).toContainEqual({ fn: "closeSync", args: [READ_FD] });
-      expect(fsCalls.filter((call) => call.fn === "unlinkSync")).toHaveLength(0);
+      // the LOCK is untouched — only our own tmp file is cleaned up
+      expect(fsCalls.filter((call) => call.fn === "unlinkSync" && call.args[0] === lock)).toHaveLength(0);
       Date.now = realDateNow;
     }
   });

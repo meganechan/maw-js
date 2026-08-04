@@ -1053,7 +1053,13 @@ describe("wake-cmd thirteenth-pass isolated coverage", () => {
 
     expect(result).toBe("54-neo:neo-oracle");
     expect(sentText).toEqual([]);
-    expect(respawnCalls).toEqual([]);
+    // `respawnCalls` captures every tmux.run. kobo-777 reads the attached pane's
+    // `@oracle_pane` here to stamp it in place; a read is neither a relaunch nor
+    // a bring delivery, which is what this test guards. It stays a read — the
+    // stamp itself would be a hostExec `set-option`, and there is none.
+    expect(respawnCalls).toEqual([
+      ["list-panes", "-t", "54-neo:neo-oracle", "-F", "#{pane_id}|||#{@oracle_pane}"],
+    ]);
     expect(selectedWindows).toEqual([]);
     expect(attachCalls).toEqual(["54-neo"]);
     expect(splitCalls).toEqual([]);

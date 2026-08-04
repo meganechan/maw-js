@@ -31,6 +31,8 @@ export {
 export type { FleetEntryLike } from "./fleet-doctor-checks-repo";
 export { checkMissingRepos } from "./fleet-doctor-checks-repo";
 export { checkDoubledGhqPaths, canonicalGhqPath } from "./fleet-doctor-checks-ghq";
+export type { LiveSessionLike, LiveWindowLike, FleetSessionEntryLike } from "./fleet-doctor-checks-session-repo";
+export { checkSessionRepoDrift } from "./fleet-doctor-checks-session-repo";
 export { checkStalePeers } from "./fleet-doctor-stale-peers";
 export { autoFix } from "./fleet-doctor-fixer";
 export { checkRebootReadiness } from "./fleet-doctor-reboot";
@@ -38,7 +40,7 @@ export { checkRebootReadiness } from "./fleet-doctor-reboot";
 import { join } from "path";
 import { loadConfig } from "../../config";
 import { getGhqRoot } from "../../config/ghq-root";
-import { listSessions } from "../../sdk";
+import { listSessions, tmux } from "../../sdk";
 import { ghqList } from "../../core/ghq";
 import { loadFleetEntries } from "./fleet-load";
 import {
@@ -51,6 +53,7 @@ import {
 } from "./fleet-doctor-checks";
 import { checkMissingRepos } from "./fleet-doctor-checks-repo";
 import { checkDoubledGhqPaths } from "./fleet-doctor-checks-ghq";
+import { checkSessionRepoDrift } from "./fleet-doctor-checks-session-repo";
 import { checkStalePeers } from "./fleet-doctor-stale-peers";
 import { autoFix, C, colorFor, iconFor } from "./fleet-doctor-fixer";
 import type { DoctorFinding, Level } from "./fleet-doctor-checks";
@@ -123,6 +126,13 @@ export async function cmdFleetDoctor(opts: DoctorOptions = {}): Promise<void> {
   findings.push(...checkDuplicatePeers(peers));
   findings.push(...checkSelfPeer(peers, localNode, config.port));
   findings.push(...checkMissingRepos(entries, join(getGhqRoot(), "github.com")));
+
+  // kobo-799 — a live session's anchor cwd vs. what the fleet says it should be.
+  let liveSessions: Array<{ name: string; windows: Array<{ name: string; cwd?: string }> }> = [];
+  try {
+    liveSessions = await tmux.listAll();
+  } catch { /* no tmux server — nothing live to compare */ }
+  findings.push(...checkSessionRepoDrift(liveSessions, entries, getGhqRoot()));
 
   // #2578 — surface doubled `github.com/github.com/` ghq clones (report only).
   let repoPaths: string[] = [];

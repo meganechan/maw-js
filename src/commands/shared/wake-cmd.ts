@@ -12,8 +12,11 @@ import { normalizeTarget } from "../../core/matcher/normalize-target";
 import { assertValidOracleName } from "../../core/fleet/validate";
 import { canonicalSessionName } from "../../core/fleet/session-name";
 import {
+  ORACLE_PANE_OPTION,
   duplicateIdentityWarning,
+  paneIdentity,
   pickIdentifiedPane,
+  readTargetPanes,
   scanIdentifiedPanes,
   stampPaneIdentity,
   type IdentifiedPane,
@@ -562,6 +565,57 @@ function buildWakeCommand(windowName: string, cwd: string, opts: WakeCommandOpti
  */
 async function stampWakePane(target: string, oracle: string | undefined): Promise<void> {
   await stampPaneIdentity(target, oracle ?? "", "head", hostExec);
+}
+
+/**
+ * kobo-777 — give an ALREADY-LIVE solo pane its `@oracle_pane` identity.
+ *
+ * Wake only ever stamped at pane BIRTH, so every oracle that was already awake
+ * when kobo-759 shipped — and every oracle that should stay solo, which cannot
+ * get a stamp from `cell self-spawn` without also growing a worker and a
+ * reviewer — had no path to one at all. Attaching to a live pane is the moment
+ * wake knows both the oracle and the pane, so it is the moment to write it.
+ * Identity only: this says WHO the pane is, never that anything is ready
+ * (kobo-775 — a solo `maw wake` pane carries exactly `{oracle}:head`).
+ *
+ * Refuses in every case where it cannot be certain, because a wrong stamp
+ * silently reassigns a pane to another oracle and nothing downstream would
+ * question it:
+ *   - target resolves to no pane → nothing to name (silent: absence, not conflict)
+ *   - target resolves to MORE than one pane → we cannot say which is the oracle
+ *   - the pane already carries THIS identity → write nothing (idempotent)
+ *   - the pane carries ANY other identity → it is someone else's; warn, never overwrite
+ *   - the oracle already has a head pane elsewhere → stamping here mints the second
+ *     head kobo-782 exists to prevent
+ */
+async function stampLiveSoloPane(target: string, oracle: string | undefined): Promise<void> {
+  const wanted = paneIdentity(oracle ?? "", "head");
+  if (!wanted) return;
+  // A `%N` target reached us from kobo-782's identity lookup, so that pane is
+  // stamped by construction — and `list-panes -t %N` reports the pane's whole
+  // WINDOW, which would read as "ambiguous" and warn about nothing.
+  if (target.startsWith("%")) return;
+  const run = (...args: string[]) => tmux.run(...args);
+  const panes = await readTargetPanes(run, target);
+  if (panes.length === 0) return;
+  if (panes.length > 1) {
+    console.log(`\x1b[33m⚠ ${oracle}: ${target} resolves to ${panes.length} panes (${panes.map((p) => p.paneId).join(", ")}) — cannot say which one is the oracle, leaving them unstamped. Stamp it directly: tmux set-option -p -t <pane> ${ORACLE_PANE_OPTION} ${wanted}\x1b[0m`);
+    return;
+  }
+  const pane = panes[0]!;
+  if (pane.identity === wanted) return;
+  if (pane.identity) {
+    console.log(`\x1b[33m⚠ ${oracle}: ${pane.identity} already claims ${target} (${pane.paneId}) — refusing to overwrite it with ${wanted}. Clear it first if that stamp is wrong: tmux set-option -pu -t ${pane.paneId} ${ORACLE_PANE_OPTION}\x1b[0m`);
+    return;
+  }
+  const existingHead = pickIdentifiedPane(await scanIdentifiedPanes(run), oracle!, "head").pane;
+  if (existingHead) {
+    console.log(`\x1b[33m⚠ ${oracle}: already has a head pane at ${existingHead.paneId} (${existingHead.session}:${existingHead.windowName}) — not stamping ${pane.paneId} too, that would be a second head. Clear the stale one first: tmux set-option -pu -t ${existingHead.paneId} ${ORACLE_PANE_OPTION}\x1b[0m`);
+    return;
+  }
+  if (await stampPaneIdentity(pane.paneId, oracle!, "head", hostExec)) {
+    console.log(`\x1b[36m⬡\x1b[0m stamped ${pane.paneId} ${ORACLE_PANE_OPTION}=${wanted} (live pane, adopted in place)`);
+  }
 }
 
 async function buildWakeCommandForPane(windowName: string, cwd: string, opts: WakeCommandOptions, target: string): Promise<string> {
@@ -1221,6 +1275,7 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
       await wakeSession.attachToSession(liveAttachSession);
       await recordWakeSnapshot(opts);
       const attachWindow = preResolvedFleetSession?.windowName || mainWindowNameForWakeSession(sessionContext, oracle);
+      await stampLiveSoloPane(`${liveAttachSession}:${attachWindow}`, oracle); // kobo-777
       return `${liveAttachSession}:${attachWindow}`;
     }
   }
@@ -1342,6 +1397,7 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
         await tmux.selectWindow(`${liveAttachSession}:${attachWindow}`);
         await wakeSession.attachToSession(liveAttachSession);
         await recordWakeSnapshot(opts);
+        await stampLiveSoloPane(`${liveAttachSession}:${attachWindow}`, oracle); // kobo-777
         return `${liveAttachSession}:${attachWindow}`;
       }
     }
@@ -1364,6 +1420,7 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
         console.log(`\x1b[36m→\x1b[0m ${oracle} already awake (session ${liveSession})`);
         console.log(`\x1b[90m  to attach:  maw wake ${oracle} --attach\x1b[0m`);
         console.log(`\x1b[90m  to message: maw hey ${oracle} "..."\x1b[0m`);
+        await stampLiveSoloPane(`${liveSession}:${liveWindow}`, oracle); // kobo-777
         return `${liveSession}:${liveWindow}`;
       }
     }
@@ -1846,6 +1903,7 @@ export async function cmdWake(oracle: string, opts: WakeOptions): Promise<string
       }
 
       console.log(`\x1b[32m⚡\x1b[0m '${existingWindow}' running in ${session}`);
+      await stampLiveSoloPane(target, opts.oracle); // kobo-777
       if (shouldOfferExistingSessionAttach(opts)) {
         process.stdout.write(`  attach? [y/N] `);
         const { openSync, readSync, closeSync } = await import("fs");

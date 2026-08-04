@@ -39,7 +39,7 @@ function isInside(parent: string, child: string): boolean {
   return rel === "" || (!!rel && !rel.startsWith("..") && !rel.includes(`..${sep}`));
 }
 
-type RepoFromCwdResult =
+export type RepoFromCwdResult =
   | { repo: string }
   | { repo: null; reason: string; archiveCopy?: boolean };
 
@@ -47,7 +47,14 @@ function isArchivedSegment(segment: string): boolean {
   return /^_?\.?archive(?:d)?$/i.test(segment);
 }
 
-function repoFromCwdResult(cwd: string | undefined, ghqRoot: string): RepoFromCwdResult {
+/**
+ * Derive the `github.com/org/repo` a cwd lives under, relative to the ghq
+ * root. Exported (kobo-799) so fleet-doctor-checks-session-repo.ts can reuse
+ * the exact same path→repo derivation the fleet writer uses — comparing a
+ * live tmux anchor cwd against a differently-derived repo string would just
+ * relocate the mismatch bug into the detector itself.
+ */
+export function repoFromCwdResult(cwd: string | undefined, ghqRoot: string): RepoFromCwdResult {
   if (!cwd) return { repo: null, reason: "missing cwd" };
   const resolvedCwd = resolve(cwd);
   const candidates: Array<{ root: string; segments: number }> = [
@@ -77,7 +84,7 @@ function repoFromCwdResult(cwd: string | undefined, ghqRoot: string): RepoFromCw
   return { repo: null, reason: `cwd is outside ghq root: ${cwd}` };
 }
 
-function repoFromCwd(cwd: string | undefined, ghqRoot: string): string | null {
+export function repoFromCwd(cwd: string | undefined, ghqRoot: string): string | null {
   return repoFromCwdResult(cwd, ghqRoot).repo;
 }
 

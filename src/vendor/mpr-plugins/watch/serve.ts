@@ -17,47 +17,16 @@ import { handleStateDocRequest } from "../../../core/state-doc/route";
 import { handleRosterRequest } from "../../../core/roster/route";
 import { handlePresenceRequest } from "../../../core/presence/route";
 import { handlePolicyRequest } from "../../../core/policy/route";
-import { handleRoomSendRequest, handleRoomOpenRequest, handleRoomCloseRequest, handleRoomReopenRequest, handleRoomThreadRequest, handleRoomMergeRequest, handleRoomActivityRequest, handleRoomsListRequest, handleRoomReplyRequest, handleRoomInviteRequest } from "../../../core/room/route";
-import { registerRoomListener } from "../../../core/room/listener";
 import { companyVersion } from "../../../views/company";
 import { feedListeners } from "../../../api/feed";
 
 export function serve(ctx: PluginLifecycleContext): { ok: true } {
   // capture (idempotent across reloads)
   registerWorklogListener(feedListeners);
-  // kobo-241 — persist room turns to the off-card artifact off the SAME feed events
-  // (both directions carry [room:<id>]); idempotent, no new capture.
-  registerRoomListener(feedListeners);
   // read/inject route
   ctx.http?.route("GET", "/api/worklog", (request: Request) => handleWorklogRequest(request));
   // company-ui timeline feed (behind auth — see PROTECTED "/worklog/feed")
   ctx.http?.route("GET", "/api/worklog/feed", (request: Request) => handleWorklogFeedRequest(request));
-  // kobo-245 — Brainstorm Room core wire: the web /room input box posts here; we
-  // deliver to the lead via `maw hey` (the SAME transport oracles use, which emits a
-  // MessageSend feed event). The reply renders back on /room by filtering /api/feed on
-  // the room tag — no new transport/session/pane. Behind auth (PROTECTED "/room/…").
-  ctx.http?.route("POST", "/api/room/send", (request: Request) => handleRoomSendRequest(request));
-  // kobo-260 — the room-target reply primitive (a lead/teammate writes into the artifact
-  // directly, replacing the pane-hey hack) + teammate invite (record + one-shot notify).
-  // Behind auth (PROTECTED "/room/…"); reply `from` is server-verified (Rule 6).
-  ctx.http?.route("POST", "/api/room/reply", (request: Request) => handleRoomReplyRequest(request));
-  ctx.http?.route("POST", "/api/room/invite", (request: Request) => handleRoomInviteRequest(request));
-  // kobo-241 — off-card room artifact lifecycle + thread read. open/close/reopen write
-  // rooms/<id>.json (NEVER a kanban card); GET thread reloads the persisted conversation
-  // (private company convo, Rule 6). Behind auth (PROTECTED "/room/…").
-  ctx.http?.route("POST", "/api/room/open", (request: Request) => handleRoomOpenRequest(request));
-  ctx.http?.route("POST", "/api/room/close", (request: Request) => handleRoomCloseRequest(request));
-  ctx.http?.route("POST", "/api/room/reopen", (request: Request) => handleRoomReopenRequest(request));
-  ctx.http?.route("GET", "/api/room/thread", (request: Request) => handleRoomThreadRequest(request));
-  // kobo-243 — lead-driven merge: consolidate same-problem rooms into one thread. Gated
-  // by confirm:true (NEVER auto-merge); sources archived (status→merged), not deleted.
-  ctx.http?.route("POST", "/api/room/merge", (request: Request) => handleRoomMergeRequest(request));
-  // kobo-242 — CC-style activity for a room's participants: a pure join over the
-  // worklog feed + presence (reuses both readers, no new store). Behind auth ("/room/…").
-  ctx.http?.route("GET", "/api/room/activity", (request: Request) => handleRoomActivityRequest(request));
-  // kobo-258 — company-scoped room list (topic pane + company selector + default lead).
-  // Public read like the /room view; the thread/activity reads stay auth-gated.
-  ctx.http?.route("GET", "/api/rooms", (request: Request) => handleRoomsListRequest(request));
   // company-ui coordination markdown panel (behind auth — PROTECTED "/state")
   ctx.http?.route("GET", "/api/state", (request: Request) => handleStateDocRequest(request));
   // company-ui presence roster (kobo-50): authoritative company membership for the

@@ -3,7 +3,7 @@
 // silently lost room messages (read the whole array, push, write the whole array back): if
 // two processes are ever inside the lock at once, the later write drops the earlier's entry.
 // A same-process simulation cannot reproduce this — JS run-to-completion is already immune —
-// so this has to be a separate OS process, same technique as src/core/room/store.test.ts.
+// so this has to be a separate OS process, same technique used by the store tests.
 import { readFileSync, writeFileSync } from "fs";
 import { withPeersLock, _test } from "../lock";
 

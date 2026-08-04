@@ -126,7 +126,7 @@ export function withPeersLock<T>(path: string, fn: () => T): T {
 }
 
 /**
- * kobo-783 test seam — same shape as src/core/room/store.ts's `_test` export.
+ * kobo-783 test seam — same shape as the store test seam.
  * `beforePublish` runs after the pid tmp file is written but BEFORE it is linked into
  * place. Widening that gap is what turns the lost-write race deterministic: under the
  * old open-then-write acquisition a 2ms delay there cost 30 of every 80 appends, so a

@@ -6,7 +6,6 @@ import { infoView } from "./info";
 import { messagesView } from "./messages";
 import { companyView } from "./company";
 import { companyStatusView } from "./company-status";
-import { roomView } from "./room";
 import { assetsView } from "./assets";
 
 // UI moved to Soul-Brews-Studio/maw-ui (dev server on :5173).
@@ -19,6 +18,5 @@ export function mountViews(app: Hono) {
   app.route("/messages", messagesView);
   app.route("/company", companyView);
   app.route("/company-status", companyStatusView); // kobo-445 — read-only per-oracle rollup (separate from the kanban board)
-  app.route("/room", roomView); // kobo-245 — Brainstorm Room core wire
   app.route("/assets", assetsView); // kobo-398 — same-origin static assets (mermaid.js)
 }

@@ -61,16 +61,6 @@ export function isProtected(path: string, method: string): boolean {
   // NOTE: /tasks and /tasks/* are deliberately absent — the task subsystem was
   // removed, so no such route exists to protect. If a board surface ever returns
   // here it needs its OWN auth decision, not a rule that silently pre-approved it.
-  // kobo-245/241 — Brainstorm Room: POST /room/send delivers a `maw hey` as the local
-  // oracle (control op, same surface as /send); open/close/reopen write the off-card
-  // artifact; GET /room/thread reveals a private company conversation (Rule 6). All of
-  // /room/* is company-internal → protected; loopback UI bypasses, LAN must auth. (The
-  // /room VIEW itself is "/room" with no trailing slash → not matched → public read.)
-  if (path.startsWith("/room/")) return true;
-  // kobo-258 — GET /api/rooms lists a company's topics (company-internal, same surface
-  // as the thread it indexes → protected). Path is "/rooms" (no trailing slash), so it's
-  // distinct from the "/room/" prefix above and from the public "/room" VIEW.
-  if (path === "/rooms") return true;
   // Protect plugin invocation — POST /plugins/:name is a control operation
   if (method === "POST" && path.startsWith("/plugins/")) return true;
   // Protect plugin tarball download (Task #1) — serves full artifact bytes.

@@ -1,0 +1,215 @@
+/**
+ * cell state + boot cwd are anchored to the ORACLE's repo — ISOLATED SUITE (kobo-780).
+ *
+ * The bug is environmental and invisible from inside the code: `~/bin/maw` does
+ * `cd /Users/tony/maw-js` before exec, so `process.cwd()` is maw-js in EVERY maw
+ * invocation no matter where it was typed. Everything the cell derived from cwd
+ * therefore named the same directory for every oracle in the fleet:
+ *   - `ψ/active/cell` resolved to maw-js/ψ/active/cell, so each oracle's
+ *     self-spawn overwrote the previous oracle's contracts;
+ *   - worker/reviewer panes were opened in maw-js, working the wrong tree.
+ *
+ * The anchor is now `#{session_path}` — set once by `tmux new-session -c
+ * <repoPath>` (wake-cmd) and unmovable by any later process. It is deliberately
+ * NOT `pane_current_path`: tmux reads that from the pane's foreground process, so
+ * it answers the oracle's repo when read from outside (down) and maw-js when read
+ * from inside (self-spawn, where maw itself is the foreground process). One
+ * function, one field, same answer for the writer and the cleaner.
+ *
+ * Why isolated: spawn shells through maw-js/sdk hostExec and Bun's mock.module is
+ * process-global. No test here touches a real tmux server — the anchor is whatever
+ * the mock says `#{session_path}` is, which is how two oracles get two repos.
+ */
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { mock } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const dir = mkdtempSync(join(tmpdir(), "maw-cellanchor-"));
+const home = join(dir, "home");
+/** two oracles, two repos — the whole point */
+const repoA = join(dir, "repos", "patchwork-oracle");
+const repoB = join(dir, "repos", "stitch-oracle");
+/** where the buggy behaviour landed everything: one shared dir, and this process's cwd */
+const wrapperRepo = join(dir, "maw-js");
+
+const prevDataDir = process.env.MAW_DATA_DIR;
+const prevHome = process.env.HOME;
+const prevAgent = process.env.CLAUDE_AGENT_NAME;
+const prevPane = process.env.TMUX_PANE;
+const prevCwd = process.cwd();
+
+process.env.MAW_DATA_DIR = dir;
+process.env.HOME = home;
+mkdirSync(join(dir, "companies"), { recursive: true });
+writeFileSync(join(dir, "companies", "testco.json"),
+  JSON.stringify({ name: "testco", teams: { core: { members: [{ oracle: "patchwork" }, { oracle: "stitch" }] } } }));
+mkdirSync(join(home, ".claude", "skills", "cell", "contracts"), { recursive: true });
+for (const role of ["head", "worker", "reviewer"]) {
+  writeFileSync(join(home, ".claude", "skills", "cell", "contracts", `${role}.md`),
+    `# ${role} contract\ncompany={{COMPANY}} dept={{DEPT}}\n`);
+}
+for (const p of [repoA, repoB, wrapperRepo]) mkdirSync(p, { recursive: true });
+
+const STATE_FILES = ["head.md", "head-contract.md", "worker-contract.md", "reviewer-contract.md"];
+
+let commands: string[] = [];
+/** what `#{session_path}` answers, per pane — "" means tmux could not tell us */
+let sessionPath: Record<string, string> = {};
+/** the head pane `cell down` will find, and its identity */
+let downOracle = "patchwork";
+
+mock.module("maw-js/sdk", () => ({
+  hostExec: async (cmd: string): Promise<string> => {
+    commands.push(cmd);
+    if (cmd.includes("session_path")) {
+      const pane = /-t '([^']+)'/.exec(cmd)?.[1] ?? "";
+      return `${sessionPath[pane] ?? ""}\n`;
+    }
+    if (cmd.includes("pane_current_command")) return "zsh\n";
+    if (cmd.includes("capture-pane")) return "bypass permissions\n";
+    if (cmd.includes("new-window")) return "%worker\n";
+    if (cmd.includes("split-window")) return "%reviewer\n";
+    if (cmd.includes("list-panes")) return `%head|||👤 head|||cell-head|||${downOracle}:head|||${wrapperRepo}\n`;
+    if (cmd.includes("display-message")) return "sess\n";
+    return "";
+  },
+  listSessions: async () => [],
+  findWindow: () => "sess:win",
+  cmdWake: async () => {},
+  checkBusyGuard: async () => ({ busy: false }),
+}));
+
+const { cellSelfSpawn, companyCellDown } = await import("../../src/vendor/mpr-plugins/cell/spawn");
+const { COMPANIES_DIR, _setCompaniesDir } = await import("../../src/vendor/mpr-plugins/company/company-helpers");
+const prevCompaniesDir = COMPANIES_DIR;
+_setCompaniesDir(join(dir, "companies"));
+
+afterAll(() => {
+  process.chdir(prevCwd);
+  _setCompaniesDir(prevCompaniesDir);
+  if (prevDataDir === undefined) delete process.env.MAW_DATA_DIR; else process.env.MAW_DATA_DIR = prevDataDir;
+  if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+  if (prevAgent === undefined) delete process.env.CLAUDE_AGENT_NAME; else process.env.CLAUDE_AGENT_NAME = prevAgent;
+  if (prevPane === undefined) delete process.env.TMUX_PANE; else process.env.TMUX_PANE = prevPane;
+  rmSync(dir, { recursive: true, force: true });
+});
+
+beforeEach(() => {
+  commands = [];
+  downOracle = "patchwork";
+  sessionPath = { "%headA": repoA, "%headB": repoB, "%head": repoA };
+  // THE ENVIRONMENT UNDER TEST: this process sits in the wrapper's repo, exactly
+  // as `~/bin/maw`'s `cd` leaves it. Nothing correct may come from here.
+  process.chdir(wrapperRepo);
+  for (const p of [repoA, repoB, wrapperRepo]) rmSync(join(p, "ψ"), { recursive: true, force: true });
+  process.env.CELL_SPAWN_POLL_MS = "1";
+});
+
+const stateDirOf = (repo: string) => join(repo, "ψ", "active", "cell");
+const spawnCmds = () => commands.filter((c) => c.includes("new-window") || c.includes("split-window"));
+
+async function selfSpawnAs(oracle: string, pane: string): Promise<string | undefined> {
+  process.env.CLAUDE_AGENT_NAME = oracle;
+  process.env.TMUX_PANE = pane;
+  const result = await cellSelfSpawn("testco", () => {});
+  return result.error;
+}
+
+describe("two oracles, two state dirs (kobo-780)", () => {
+  test("the second self-spawn does not overwrite the first — both sets of contracts exist", async () => {
+    expect(await selfSpawnAs("patchwork", "%headA")).toBeUndefined();
+    expect(await selfSpawnAs("stitch", "%headB")).toBeUndefined();
+
+    for (const f of STATE_FILES) {
+      expect(existsSync(join(stateDirOf(repoA), f))).toBe(true);
+      expect(existsSync(join(stateDirOf(repoB), f))).toBe(true);
+    }
+    // and nothing landed in the wrapper's repo, which is where BOTH used to go
+    expect(existsSync(join(stateDirOf(wrapperRepo), "head.md"))).toBe(false);
+  });
+
+  test("each head.md records its own dir — not the last writer's", async () => {
+    await selfSpawnAs("patchwork", "%headA");
+    await selfSpawnAs("stitch", "%headB");
+
+    expect(readFileSync(join(stateDirOf(repoA), "head.md"), "utf8")).toContain(`state-dir=${stateDirOf(repoA)}`);
+    expect(readFileSync(join(stateDirOf(repoB), "head.md"), "utf8")).toContain(`state-dir=${stateDirOf(repoB)}`);
+  });
+
+  test("worker and reviewer panes are opened in the ORACLE's repo, not this process's cwd", async () => {
+    await selfSpawnAs("stitch", "%headB");
+
+    expect(spawnCmds()).toHaveLength(2);
+    for (const cmd of spawnCmds()) {
+      // the launch line is nested inside the tmux argument — read it as the
+      // pane's shell will, not as the tmux command string
+      const launch = cmd.replaceAll("'\\''", "'");
+      expect(launch).toContain(`cd '${repoB}'`);
+      expect(launch).toContain(`CREW_STATE_DIR='${stateDirOf(repoB)}'`);
+      expect(launch).not.toContain(wrapperRepo);
+    }
+  });
+
+  test("process.cwd() is NOT the anchor — proven by moving it and getting the same answer", async () => {
+    process.chdir(dir); // somewhere else entirely
+    await selfSpawnAs("patchwork", "%headA");
+    expect(existsSync(join(stateDirOf(repoA), "head-contract.md"))).toBe(true);
+    expect(existsSync(join(dir, "ψ", "active", "cell", "head-contract.md"))).toBe(false);
+  });
+});
+
+describe("write and clean resolve the same directory (kobo-780)", () => {
+  test("down removes the files self-spawn wrote — one resolver, both callers", async () => {
+    await selfSpawnAs("patchwork", "%head");
+    expect(existsSync(join(stateDirOf(repoA), "head-contract.md"))).toBe(true);
+
+    const out: string[] = [];
+    await companyCellDown("testco", { verbose: true }, (l) => out.push(l));
+
+    for (const f of STATE_FILES) expect(existsSync(join(stateDirOf(repoA), f))).toBe(false);
+    expect(out.some((l) => l.includes(`cell state removed from ${stateDirOf(repoA)}`))).toBe(true);
+  });
+
+  test("down does NOT read the pane's own cwd — the listing says the wrapper repo and it is ignored", async () => {
+    await selfSpawnAs("patchwork", "%head");
+    // the mocked pane listing reports pane_current_path = wrapperRepo (that is
+    // what the old code used); the state is in repoA and must still be found
+    await companyCellDown("testco", { verbose: true }, () => {});
+    expect(existsSync(join(stateDirOf(repoA), "head.md"))).toBe(false);
+  });
+});
+
+describe("an unresolvable anchor fails loudly (kobo-780)", () => {
+  test("self-spawn refuses rather than writing into the wrapper's repo", async () => {
+    sessionPath = {}; // tmux answers nothing for any pane
+    const error = await selfSpawnAs("patchwork", "%headA") ?? "";
+
+    expect(error).toContain("#{session_path}");
+    expect(error).toContain("%headA");
+    expect(error).toContain("No partial spawn");
+    expect(existsSync(join(stateDirOf(wrapperRepo), "head.md"))).toBe(false);
+    expect(existsSync(join(stateDirOf(repoA), "head.md"))).toBe(false);
+  });
+
+  test("down leaves the state alone rather than deleting from a guessed directory", async () => {
+    await selfSpawnAs("patchwork", "%head");
+    sessionPath = {}; // the answer is gone by the time down runs
+
+    const out: string[] = [];
+    await companyCellDown("testco", { verbose: true }, (l) => out.push(l));
+
+    expect(existsSync(join(stateDirOf(repoA), "head-contract.md"))).toBe(true);
+    expect(out.some((l) => l.includes("LEFT IN PLACE") && l.includes("refusing to guess"))).toBe(true);
+  });
+
+  test("no pane target → no tmux call at all (a blank -t resolves to the caller's own pane)", async () => {
+    process.env.CLAUDE_AGENT_NAME = "patchwork";
+    process.env.TMUX_PANE = "";
+    const result = await cellSelfSpawn("testco", () => {});
+
+    expect(result.error).toContain("TMUX_PANE unset");
+    expect(commands.some((c) => c.includes("session_path"))).toBe(false);
+  });
+});

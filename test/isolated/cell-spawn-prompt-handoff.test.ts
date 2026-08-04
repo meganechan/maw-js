@@ -51,6 +51,7 @@ mock.module("maw-js/sdk", () => ({
     }
     if (cmd.includes("pane_current_command")) return `${paneCommand}\n`;
     if (cmd.includes("session_name")) return `${paneAddr}\n`;
+    if (cmd.includes("session_path")) return "/repos/patchwork-oracle\n"; // kobo-780 anchor
     if (cmd.includes("capture-pane")) return "bypass permissions\n";
     if (cmd.includes("tmux list-panes")) return "%head|||👤 head|||cell-head|||patchwork:head|||/tmp\n";
     return "";
@@ -127,9 +128,11 @@ describe("a claude-occupied pane is asked, not abandoned (kobo-776)", () => {
     expect(heyMessage()).not.toContain("&&");
   });
 
-  test("the message says to read the contract FILE, with the path spelled out", async () => {
+  test("the message says to read the contract FILE, with the ABSOLUTE path spelled out", async () => {
     await spawn();
-    expect(heyMessage()).toContain("ψ/active/cell/head-contract.md");
+    // kobo-780: anchored to the oracle's own repo, not a relative path that only
+    // resolves if the reader's cwd happens to be right.
+    expect(heyMessage()).toContain("/repos/patchwork-oracle/ψ/active/cell/head-contract.md");
   });
 
   test("the message states WHY the file is the only channel — the caveat, not just the instruction", async () => {

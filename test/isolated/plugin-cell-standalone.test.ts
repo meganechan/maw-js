@@ -44,7 +44,7 @@ describe("cell command plugin standalone boundary", () => {
     expect(spawnSrc).toContain("findWindow");
     expect(spawnSrc).toContain("companyRoster");
     expect(spawnSrc).toContain("maw company cell self-spawn");
-    expect(spawnSrc).toContain("headLaunchCommand(company)");
+    expect(spawnSrc).toContain("headLaunchCommand(company, anchor)");
     expect(spawnSrc).toContain("head-contract.md");
     expect(spawnSrc).toContain("CREW_ROLE=head");
     // kobo-765 — the head launch line is a guarded shell chain, no longer `exec
@@ -55,10 +55,20 @@ describe("cell command plugin standalone boundary", () => {
     // RUNNING the line in test/isolated/cell-spawn-state-dir.test.ts.)
     expect(spawnSrc).toContain("if test -s ${shellArg(contract)}; then");
     expect(spawnSrc).toContain("${claude(BRAIN_MODEL)} || ${claude(DEFAULT_WORKER_MODEL)}");
-    // kobo-765/B5 — ONE derivation point for the state dir: the pane's inherited
-    // env is never read, in either the writer or the launch line.
-    expect(spawnSrc).toContain("const stateDir = DEFAULT_STATE_DIR;");
+    // kobo-765/B5 + kobo-780 — ONE derivation point for the state dir, and it is
+    // now anchored on the pane's SESSION path: neither the pane's inherited env
+    // nor this process's cwd is read (the maw wrapper cd's every invocation into
+    // maw-js, so cwd names the same directory for every oracle in the fleet).
+    expect(spawnSrc).toContain("const stateDir = stateDirOf(anchor);");
+    expect(spawnSrc).toContain("const anchor = await cellAnchor(head);");
+    expect(spawnSrc).toContain("#{session_path}");
     expect(spawnSrc).not.toContain("process.env.CREW_STATE_DIR");
+    // the anchor is the ONLY thing worker/reviewer panes are opened in
+    expect(spawnSrc).toContain("const cwd = anchor;");
+    expect(spawnSrc).not.toContain("const cwd = process.cwd()");
+    // -t is not optional: a bare display-message answers for the attached
+    // client's active pane, not the caller's
+    expect(spawnSrc).toContain("display-message -p -t ${shellArg(paneTarget)} '#{session_path}'");
     // kobo-765/B7 — a landed injection is not a repair until head boots
     expect(spawnSrc).toContain("if (await pollHeadReady(injectTarget)) { repaired++; continue; }");
     expect(spawnSrc).toContain("head boot FAILED");
@@ -129,7 +139,7 @@ describe("cell command plugin standalone boundary", () => {
     // Delivery reuses the sanctioned path spawn already shells out to, rather
     // than importing cmdSend through the sdk barrel (which link-breaks every
     // isolated suite that mocks maw-js/sdk with a partial object).
-    expect(spawnSrc).toContain("await hostExec(`maw hey ${shellArg(addr)} ${shellArg(handoffPrompt(company))}`)");
+    expect(spawnSrc).toContain("await hostExec(`maw hey ${shellArg(addr)} ${shellArg(handoffPrompt(company, anchor))}`)");
     const sdkImport = /import \{([^}]*)\} from "maw-js\/sdk"/.exec(spawnSrc)?.[1] ?? "";
     expect(sdkImport).not.toBe("");
     expect(sdkImport).not.toContain("cmdSend");

@@ -55,6 +55,10 @@ mock.module("maw-js/sdk", () => ({
       if (listCalls++ >= listFailsAfter) throw new Error("no server running on socket");
       return panes.map((p) => `${p.id}|||${p.role}|||${p.window}|||${p.identity}|||${p.path}`).join("\n") + "\n";
     }
+    // kobo-780 — down resolves the state dir from the head pane's SESSION path,
+    // the same field self-spawn writes against (it used to read the pane's own
+    // cwd, which self-spawn cannot see the same way).
+    if (cmd.includes("session_path")) return `${headCwd}\n`;
     if (cmd.includes("kill-pane")) {
       const target = cmd.match(/kill-pane -t '([^']+)'/)?.[1] ?? "";
       killAttempts.push(target);

@@ -43,10 +43,16 @@ const PREV_WINDOW_OPTION = "@cell_prev_window";
  * Env cannot be the shared answer here even in principle: the launch line is
  * built in the SPAWNER's process and runs in the TARGET pane's shell — two
  * different environments — and the pane's env is exactly where the stale value
- * lives. The path stays RELATIVE on purpose: writer and launch line both run in
- * the head pane's cwd, so one relative path names one file for both. We still
- * EXPORT CREW_STATE_DIR into the spawned panes (the seat/Stop hooks read it);
- * it is an output, never an input.
+ * lives. We still EXPORT CREW_STATE_DIR into the spawned panes (the seat/Stop
+ * hooks read it); it is an output, never an input.
+ *
+ * kobo-780 — this is now the tail of a path, never a whole one. It used to be
+ * used relative, on the premise that "writer and launch line both run in the head
+ * pane's cwd". That premise was false the whole time: `~/bin/maw` does `cd
+ * /Users/tony/maw-js` before exec, so process.cwd() inside ANY maw invocation is
+ * maw-js — every oracle's self-spawn wrote its contracts into the same maw-js
+ * directory, each overwriting the last, and booted its worker/reviewer there too.
+ * Everything now hangs off cellAnchor(); see it for why the anchor is what it is.
  */
 const DEFAULT_STATE_DIR = "ψ/active/cell";
 const STATE_FILES = ["head.md", "worker.md", "reviewer.md", "head-contract.md", "worker-contract.md", "reviewer-contract.md"];
@@ -331,6 +337,47 @@ async function injectCommand(target: string, command: string): Promise<InjectRes
   return { ok: true };
 }
 
+/**
+ * kobo-780 — the ONE resolution of "which repo is this oracle's cell anchored
+ * to", for the writer (self-spawn), the launch line, and the cleaner (down).
+ * Give it a pane, get that pane's oracle repo, or nothing.
+ *
+ * Why `session_path` and not the obvious candidates:
+ *   - `process.cwd()` is a lie in this process. `~/bin/maw` does `cd
+ *     /Users/tony/maw-js` before exec, so cwd is maw-js in EVERY maw invocation
+ *     regardless of where it was typed. That is the bug being fixed; it cannot
+ *     also be the fix. (`$PWD` is no better — bash's `cd` exports it, verified.)
+ *   - `#{pane_current_path}` is poisoned for the same reason, but only sometimes,
+ *     which is worse. tmux reads it from the pane's FOREGROUND process (macOS:
+ *     tcgetpgrp + proc_pidinfo), and during self-spawn the foreground process is
+ *     maw itself — sitting in maw-js. Read from OUTSIDE (down, where the pane is
+ *     running claude) the very same field answers the oracle's repo. One field,
+ *     two answers, depending on who asks: write and clean would silently disagree.
+ *   - `#{session_path}` is set once by `tmux new-session -c <repoPath>` (wake-cmd
+ *     does exactly that) and no later process can move it. Same answer from
+ *     inside and outside, which is what lets one function serve both callers.
+ *
+ * `-t` is mandatory and a blank target is refused: a bare `display-message`
+ * answers for the ATTACHED CLIENT's active pane, which is whatever the human was
+ * looking at — not the caller. Returns null rather than a default: there is no
+ * safe fallback here, because the wrong answer is a directory this code deletes
+ * files from.
+ */
+async function cellAnchor(paneTarget: string): Promise<string | null> {
+  if (!(paneTarget ?? "").trim()) return null;
+  try {
+    const path = (await hostExec(`tmux display-message -p -t ${shellArg(paneTarget)} '#{session_path}'`)).trim();
+    return path || null;
+  } catch {
+    return null;
+  }
+}
+
+/** The cell state dir for an anchor. The only place these two are joined. */
+function stateDirOf(anchor: string): string {
+  return join(anchor, DEFAULT_STATE_DIR);
+}
+
 /** The pane's `session:window.pane` address — what `maw hey` takes as a target. */
 async function paneAddress(target: string): Promise<string | null> {
   try {
@@ -355,8 +402,10 @@ async function paneAddress(target: string): Promise<string | null> {
  * Leave that out and the pane becomes a head that never read its contract —
  * alive, and behaving like a stranger (the failure kobo-765/B5 closed).
  */
-function handoffPrompt(company: string): string {
-  const contract = join(DEFAULT_STATE_DIR, "head-contract.md");
+function handoffPrompt(company: string, anchor: string): string {
+  // kobo-780: absolute. A relative path only reads correctly if the agent's own
+  // cwd happens to be its repo — true today, but it is free to be exact here.
+  const contract = join(stateDirOf(anchor), "head-contract.md");
   return `[cell spawn ${company}] Your cell is not up and you are its head pane. Run this in your own Bash tool, exactly as written: \`maw company cell self-spawn ${company}\` — it adopts THIS pane as head (it anchors on $TMUX_PANE, which your Bash tool inherits) and opens the worker + reviewer panes beside you. Then read \`${contract}\` and follow it as your head contract. CAVEAT: you are already running, so that contract could NOT be appended to your system prompt the way a freshly launched head gets it — reading the file is the only way it reaches you. Do not restart yourself, do not run any \`claude --append-system-prompt\` launch line, and do not kill this pane.`;
 }
 
@@ -371,11 +420,11 @@ function handoffPrompt(company: string): string {
  * that mocks `maw-js/sdk` with a partial object — the same hazard that made this
  * file inline selfOracleId instead of importing resolveAgentSelf.
  */
-async function handOffToAgent(target: string, company: string): Promise<InjectResult> {
+async function handOffToAgent(target: string, company: string, anchor: string): Promise<InjectResult> {
   const addr = await paneAddress(target);
   if (!addr) return { ok: false, reason: `cannot resolve a hey address for ${target}` };
   try {
-    await hostExec(`maw hey ${shellArg(addr)} ${shellArg(handoffPrompt(company))}`);
+    await hostExec(`maw hey ${shellArg(addr)} ${shellArg(handoffPrompt(company, anchor))}`);
   } catch (e: any) {
     return { ok: false, reason: `maw hey to ${addr} failed (${e.message})` };
   }
@@ -402,14 +451,18 @@ async function handOffToAgent(target: string, company: string): Promise<InjectRe
  * that dies hours later comes back on the fallback model. That is the cheap
  * version of "restart the head"; gate it on `$SECONDS` if boot-only ever matters.
  */
-function headLaunchCommand(company: string): string {
+function headLaunchCommand(company: string, anchor: string): string {
   const settingsPath = join(resolveHome(), ".claude", "crew-worker-settings.json");
-  const contract = join(DEFAULT_STATE_DIR, "head-contract.md");
+  // kobo-780: absolute, from the same anchor the writer used. It was relative,
+  // which only ever worked when the pane's shell happened to sit in the same
+  // directory the writer did — and the maw wrapper's `cd` guaranteed it did not.
+  const stateDir = stateDirOf(anchor);
+  const contract = join(stateDir, "head-contract.md");
   const claude = (model: string) => [
     `MAW_ROOM_COMPANY=${shellArg(company)}`,
     "CREW_ROLE=head",
     'CREW_COORD_PANE="$TMUX_PANE"',
-    `CREW_STATE_DIR=${shellArg(DEFAULT_STATE_DIR)}`,
+    `CREW_STATE_DIR=${shellArg(stateDir)}`,
     "claude",
     `--model ${model}`,
     `--settings ${shellArg(settingsPath)}`,
@@ -496,21 +549,31 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
     const head = findHeadPane(panes, member.oracle);
     if (head.pane && head.duplicates.length > 0) emit(dualHeadWarning(member.oracle, head.pane, head.duplicates));
     const injectTarget = head.pane?.paneId ?? soleLegacyHeadPane(panes) ?? resolved;
+    // kobo-780: the repair line names absolute paths, so it cannot be built at
+    // all without knowing this oracle's repo. Refuse rather than fall back to
+    // this process's cwd — that cwd is maw-js for every oracle, which is the
+    // collision being fixed.
+    const anchor = await cellAnchor(injectTarget);
+    if (!anchor) {
+      emit(`⚠ ${member.oracle}: REFUSED repair — cannot read #{session_path} for ${injectTarget}, so this oracle's repo is unknown. Refusing rather than anchoring the cell to this process's cwd (the maw wrapper makes that maw-js for every oracle).`);
+      refused++;
+      continue;
+    }
     log(`${member.oracle}: cell incomplete/asleep (has: ${[...roles].join("+") || "no identified pane"}) — repairing ${injectTarget} (maw company cell self-spawn)`);
     try {
-      const injected = await injectCommand(injectTarget, `maw company cell self-spawn ${company} && ${headLaunchCommand(company)}`);
+      const injected = await injectCommand(injectTarget, `maw company cell self-spawn ${company} && ${headLaunchCommand(company, anchor)}`);
       if (!injected.ok) {
         // kobo-776 — a pane running an agent is not unreachable, it is reachable
         // by a different channel: ASK it. Reached only after injectCommand has
         // already refused to type, so the 5371b28e guard decides this, not us —
         // no keystroke has been sent to this pane.
         if (AGENT_CMDS.has(paneCommandBasename(injected.command ?? ""))) {
-          const handoff = await handOffToAgent(injectTarget, company);
+          const handoff = await handOffToAgent(injectTarget, company, anchor);
           if (handoff.ok) {
             // Not `repaired`: the agent acts on its own clock, so nothing here has
             // observed a cell come up. Its own counter, or the summary would be
             // claiming a result that has not happened yet.
-            emit(`↗ ${member.oracle}: HANDED OFF to the agent on ${injectTarget} (running '${injected.command}') — asked it to run \`maw company cell self-spawn ${company}\` itself and read ${join(DEFAULT_STATE_DIR, "head-contract.md")}. Not yet a cell: check the board/pane for it acting on this.`);
+            emit(`↗ ${member.oracle}: HANDED OFF to the agent on ${injectTarget} (running '${injected.command}') — asked it to run \`maw company cell self-spawn ${company}\` itself and read ${join(stateDirOf(anchor), "head-contract.md")}. Not yet a cell: check the board/pane for it acting on this.`);
             handed++;
             continue;
           }
@@ -664,12 +727,19 @@ async function restoreHeadWindowName(head: PaneRow, oracle: string): Promise<voi
 async function standDownHead(head: PaneRow, oracle: string, report: (line: string) => void): Promise<void> {
   try { await hostExec(`tmux set-option -pu -t ${shellArg(head.paneId)} @role`); } catch { /* pane may be gone */ }
   await restoreHeadWindowName(head, oracle);
-  // The head pane's own cwd — down runs from the invoker's process, so the state
-  // dir is never relative to us. ponytail: pane_current_path is what tmux knows;
-  // a head whose shell wandered elsewhere keeps its state, which is the safe miss.
-  const stateDir = head.path ? join(head.path, DEFAULT_STATE_DIR) : "";
-  if (stateDir) for (const f of STATE_FILES) { try { rmSync(join(stateDir, f)); } catch { /* absent */ } }
-  report(`${oracle}: head ${head.paneId} kept (the oracle's own pane — never killed by down), @role cleared, window name restored, cell state removed`);
+  // kobo-780: the SAME resolver the writer used. This used to read the pane's
+  // `pane_current_path` from the listing — which answers the oracle repo here (the
+  // pane is running claude) but maw-js inside self-spawn, so down was cleaning a
+  // directory self-spawn had never written to. Deleting files is not a place for
+  // a second opinion: no anchor, no delete.
+  const anchor = await cellAnchor(head.paneId);
+  if (!anchor) {
+    report(`⚠ ${oracle}: head ${head.paneId} stood down, but cell state was LEFT IN PLACE — cannot read #{session_path}, and this is a delete: refusing to guess the directory.`);
+    return;
+  }
+  const stateDir = stateDirOf(anchor);
+  for (const f of STATE_FILES) { try { rmSync(join(stateDir, f)); } catch { /* absent */ } }
+  report(`${oracle}: head ${head.paneId} kept (the oracle's own pane — never killed by down), @role cleared, window name restored, cell state removed from ${stateDir}`);
 }
 
 export function parseCellCompanyArg(args: string[]): string | undefined { return parseCompanyArg(args); }
@@ -689,10 +759,19 @@ export async function cellSelfSpawn(company: string | undefined, emit: (line: st
   for (const line of teardown.logs) emit(line);
   if (!teardown.ok) return { ok: false, error: teardown.error };
 
+  // kobo-780: this oracle's own repo, before anything is written. Without it there
+  // is no honest place to put the contracts — process.cwd() is maw-js inside every
+  // maw invocation (the wrapper's `cd`), which is how every oracle's cell ended up
+  // overwriting the same directory. No partial spawn, same as a missing company.
+  const anchor = await cellAnchor(head);
+  if (!anchor) {
+    return { ok: false, error: `cannot read #{session_path} for ${head} — this oracle's repo is unknown, and anchoring the cell to this process's cwd would put it in the maw wrapper's repo (shared by every oracle). No partial spawn.` };
+  }
+
   const self = selfOracleId();
   const dept = resolveSelfDept();
   const board = company;
-  const stateDir = DEFAULT_STATE_DIR; // kobo-765/B5: one derivation point, never the inherited env
+  const stateDir = stateDirOf(anchor); // kobo-765/B5 + kobo-780: one derivation point, from the pane's session — never cwd, never the inherited env
   mkdirSync(stateDir, { recursive: true });
   for (const f of STATE_FILES) { try { rmSync(join(stateDir, f)); } catch { /* absent */ } }
 
@@ -712,7 +791,10 @@ export async function cellSelfSpawn(company: string | undefined, emit: (line: st
   writeFileSync(join(stateDir, "reviewer-contract.md"), renderContract("reviewer", { company, dept, board }));
   writeFileSync(join(stateDir, "head.md"), `# Head\n\ncompany=${company}\nstate-dir=${stateDir}\nactive-card=none\n`);
 
-  const cwd = process.cwd();
+  // kobo-780: the worker/reviewer panes open in the ORACLE's repo. This was
+  // process.cwd(), i.e. maw-js for every oracle — the panes booted in the wrapper's
+  // repo and worked on the wrong tree.
+  const cwd = anchor;
   const settingsPath = join(resolveHome(), ".claude", "crew-worker-settings.json");
   const worker = await spawnWorkerSelfHeal({ cwd, company, stateDir, settingsPath, head, emit });
   if (!worker.ok || !worker.paneId) return { ok: false, error: worker.error ?? "worker spawn failed" };

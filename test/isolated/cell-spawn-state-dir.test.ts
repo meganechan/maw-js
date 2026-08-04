@@ -89,6 +89,9 @@ mock.module("maw-js/sdk", () => ({
     if (cmd.includes("new-window")) return "%worker\n";
     if (cmd.includes("split-window")) return "%reviewer\n";
     if (cmd.includes("list-panes")) return "%head|||👤 head|||cell-head|||patchwork:head|||/tmp\n";
+    // kobo-780 — the anchor. `dir` stands in for the oracle's own repo, which is
+    // what `tmux new-session -c <repoPath>` puts here and what no later `cd` moves.
+    if (cmd.includes("session_path")) return `${dir}\n`;
     if (cmd.includes("display-message")) return "sess\n";
     return "";
   },
@@ -201,7 +204,10 @@ describe("cell spawn resolves the state dir ONCE and never from the pane's env (
   test("the exported CREW_STATE_DIR (hooks read it) is the resolved dir, not the inherited one", async () => {
     await cellSelfSpawn("testco", () => {});
     const launch = headLaunchOf(await injectedRepairLine());
-    expect(launch).toContain("CREW_STATE_DIR='ψ/active/cell'");
+    // kobo-780: absolute, anchored on the oracle's session path — a relative
+    // 'ψ/active/cell' resolved against the maw wrapper's cwd, which is the same
+    // directory for every oracle on the host.
+    expect(launch).toContain(`CREW_STATE_DIR='${join(dir, "ψ/active/cell")}'`);
     expect(launch).not.toContain(staleStateDir);
     // same for the panes self-spawn opens
     const paneCmds = commands.filter((c) => c.includes("new-window") || c.includes("split-window"));

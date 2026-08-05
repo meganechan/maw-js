@@ -755,7 +755,11 @@ describe("cmdSend — delivery branch coverage", () => {
     expect(sleepCalls).not.toContain(500);
     // Never inject — the half-typed `git status` must survive untouched.
     expect(sendKeysCalls).toEqual([]);
-    expect(logs.join("\n")).toContain("operator input mid-edit");
+    // kobo-835 — the receipt now names what was on screen instead of "operator
+    // input mid-edit", and says which of the two symptoms this is.
+    const out = logs.join("\n");
+    expect(out).toContain("unsent line sitting in its input box");
+    expect(out).toContain("re-sending will not help");
   });
 
   test("--inbox queues to receiver inbox when the pane is busy", async () => {

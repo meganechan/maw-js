@@ -75,7 +75,9 @@ describe("bare hey resolution reads the stamp first (kobo-830)", () => {
     const resolved = await resolveBareLocalTarget("14-utils-pm:cell-head", config, [], undefined, {
       tmuxRun: async () => { asked = true; return ""; },
     });
-    expect(resolved).toEqual({ result: null, locate: null, routing: null });
+    // kobo-835 added `by` (the resolution layer, for the audit row); a declined
+    // query has no layer to name, so it is null alongside the rest.
+    expect(resolved).toEqual({ result: null, locate: null, routing: null, by: null });
     expect(asked).toBe(false);
   });
 });

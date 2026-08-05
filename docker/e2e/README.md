@@ -10,7 +10,7 @@ harness. Different harness, different purpose, deliberately not merged.
 ## Run it
 
 ```sh
-docker/e2e/run.sh                                  # v0 + v1
+docker/e2e/run.sh                                  # v0 + v1 + v2 + v3
 docker/e2e/run.sh /home/maw/e2e/tests/v0-image.sh  # one phase
 docker/e2e/run.sh bash                             # poke around inside
 ```
@@ -94,6 +94,27 @@ The kobo half is built exactly as specified — `task add → dispatch → dispa
    launches its one stub pane with `tmux new-window` directly, so nothing looks up
    a `claude` on `PATH`.
 
+**v3 — hey target resolution under name collisions** (`tests/v3-hey-targeting.sh`,
+kobo-835). The only phase whose job is to make the system get something WRONG. It
+builds a topology that collides on purpose — two windows sharing a name, and a
+session named after another session's window — then replays the misroute from m5
+on 27 Jul: `m5:helm` matches no session or window called helm, falls through to
+`findWindow`'s cross-session substring pass, and lands on `13-patchwork:0.1`
+because patchwork has a window called `helm-notes`. `hey` reports success,
+`detectWindowMismatch` stays silent (it only fires for `-oracle`-suffixed
+intents), and the new `hey-route` audit row is the only thing that notices.
+
+It runs last: it sets `node = m5` and opens sessions the earlier phases would
+otherwise resolve against. It asserts its own isolation before it sends anything —
+`MAW_HOME`, the audit path, `/proc/mounts`, and the tmux socket — because a phase
+that drives `send-keys` is only safe while those hold, and the same test on the
+host has no socket to be isolated by (maw never sets `TMUX_TMPDIR`).
+
+Two traps it records rather than works around: `maw init --node X --force`
+rewrites the config and leaves `node` at its previous value, and the config dir's
+weighted `maw.config.NN.json` wins over the legacy `maw.config.json`, so editing
+the latter puts a value on disk that `loadConfig()` never returns.
+
 ## Not covered — by construction, not by omission
 
 - **PR → review → done.** Implemented but **not exercised here** — deferred to v4.
@@ -114,9 +135,7 @@ The kobo half is built exactly as specified — `task add → dispatch → dispa
 
 ## Next phases
 
-v2 the `dispatch-run` scheduler — v1 calls the drain by hand, and a queued-outbox
-drainer should never make its first automated run against the live board · v3 cell
-topology with three stub panes (needs the `claude` shim) · v4 kobo's `pr-watch`
+Cell topology with three stub panes (needs the `claude` shim) · kobo's `pr-watch`
 behind a `gh` shim, which is what closes PR → review → done.
 
 ## A note on refs

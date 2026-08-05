@@ -188,6 +188,68 @@ export function pickIdentifiedPane(
 }
 
 /**
+ * kobo-830 — "which pane is oracle X?" answered by the STAMP, above every
+ * name-based resolver.
+ *
+ * Every other answer to that question reads a NAME: `routing.ts`'s
+ * `findNamedFleetWindow` wants a window called `{oracle}`/`{oracle}-oracle`,
+ * `find-window.ts`'s `oracleWindowOf` matches `w.name`. A window name is
+ * decoration — anything that renames it (a torn-down cell leaving `cell-head`
+ * behind) deletes the only evidence those resolvers read, and a live oracle
+ * becomes unreachable by its own name. The `@oracle_pane` option is written at
+ * pane birth and by nothing else, so it answers the same question without
+ * depending on what the window is called today.
+ *
+ * Three outcomes, no fourth:
+ *   identity — exactly one pane claims `{oracle}:{role}` → that pane, by id.
+ *   conflict — several claim it → REFUSE and name them all. Picking the
+ *              "probably right" one sends work to the wrong agent silently,
+ *              which is worse than a failed send the operator can see. (This
+ *              deliberately differs from `pickIdentifiedPane`'s oldest-wins
+ *              tie-break, which serves presence questions where a wrong guess
+ *              costs a label, not a delivery.)
+ *   none     — nobody claims it → NOT an error: most of the fleet predates the
+ *              stamp. The caller falls through to its legacy name resolution.
+ */
+export type PaneRouting =
+  | { via: "identity"; pane: IdentifiedPane }
+  | { via: "conflict"; candidates: IdentifiedPane[] }
+  | { via: "none" };
+
+/**
+ * `14-utils-pm` / `utils-pm-oracle` / `utils-pm` all name the same oracle.
+ *
+ * A deliberate second copy of the rule in `hey-locate-resolution.ts` — that one
+ * matches manifest/fleet ENTRIES, this one matches pane STAMPS. Sharing one
+ * function would make a change made for one question silently answer the other.
+ */
+function normalizeOracleName(raw: string | null | undefined): string {
+  return (raw ?? "").trim().toLowerCase().replace(/^\d+-/, "").replace(/-oracle$/, "");
+}
+
+export async function routeOracleByIdentity(
+  oracle: string,
+  role: PaneRole,
+  run: (...args: string[]) => Promise<string>,
+): Promise<PaneRouting> {
+  const wanted = normalizeOracleName(oracle);
+  if (!wanted) return { via: "none" };
+  const claimants = (await scanIdentifiedPanes(run))
+    .filter((p) => p.role === role && normalizeOracleName(p.oracle) === wanted)
+    .sort((a, b) => paneIdNum(a.paneId) - paneIdNum(b.paneId) || a.paneId.localeCompare(b.paneId));
+  if (claimants.length === 1) return { via: "identity", pane: claimants[0]! };
+  if (claimants.length > 1) return { via: "conflict", candidates: claimants };
+  return { via: "none" };
+}
+
+/** The refusal text for a `conflict` — names every claimant and how to clear one. */
+export function conflictingIdentityError(oracle: string, role: PaneRole, candidates: IdentifiedPane[]): string {
+  const where = candidates.map((p) => `${p.paneId} (${p.session}:${p.windowName})`).join(", ");
+  const clears = candidates.map((p) => `tmux set-option -pu -t ${p.paneId} ${ORACLE_PANE_OPTION}`).join("; ");
+  return `${candidates.length} panes claim ${ORACLE_PANE_OPTION}=${oracle}:${role} — ${where}. Refusing to guess which one is ${oracle}: a wrong guess delivers to the wrong agent silently. Ask ${oracle} which pane is theirs, then clear the other(s): ${clears}`;
+}
+
+/**
  * kobo-782 — guidance, never an action. Duplicate heads are LIVE panes with a
  * live agent in them; killing one or clearing its stamp automatically would
  * destroy work to tidy a label. Name every claimant and hand the operator the

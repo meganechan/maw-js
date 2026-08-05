@@ -25,7 +25,12 @@ import { checkBusyGuard, queueForDispatch } from "../../core/agent-status-guard"
 import { runPluginEventHooks } from "../../plugin/event-hooks";
 import { notifyLiveInboxReceiver } from "./live-inbox-notify";
 import { getPaneRoute } from "../../core/pane-routes";
-import { ORACLE_PANE_OPTION, parsePaneIdentity } from "../../core/pane-identity";
+import {
+  ORACLE_PANE_OPTION,
+  conflictingIdentityError,
+  parsePaneIdentity,
+  routeOracleByIdentity,
+} from "../../core/pane-identity";
 
 /** kobo-782 — separates the historical `<index> <command>` prefix from the identity. */
 const PANE_IDENTITY_SEP = "|||";
@@ -1053,17 +1058,50 @@ function isConfiguredPeerAlias(query: string, config: ReturnType<typeof loadConf
   }
 }
 
-async function resolveBareLocalTarget(
+/**
+ * kobo-830 — `routing` says WHICH EVIDENCE picked the pane, and it is reported
+ * on the send receipt. A fallback nobody can see is a fallback nobody fixes:
+ * `identity` means the pane's own `@oracle_pane` stamp answered, `name` means we
+ * were back on window/session names and a rename can still break this target.
+ */
+export type BareRouting = "identity" | "name";
+
+/** @internal exported for tests — the bare-name resolution decision, without cmdSend's send path. */
+export async function resolveBareLocalTarget(
   query: string,
   config: ReturnType<typeof loadConfig>,
   sessions: Awaited<ReturnType<typeof listSessions>>,
   currentSession?: string,
-): Promise<{ result: ReturnType<typeof resolveTarget> | null; locate: HeyLocateResolution | null }> {
-  if (!isBareLocalHeyTarget(query)) return { result: null, locate: null };
+  deps: { tmuxRun?: (...args: string[]) => Promise<string> } = {},
+): Promise<{ result: ReturnType<typeof resolveTarget> | null; locate: HeyLocateResolution | null; routing: BareRouting | null }> {
+  if (!isBareLocalHeyTarget(query)) return { result: null, locate: null, routing: null };
+
+  // kobo-830 — ask the pane's own stamp before any name-based resolver below.
+  // Those resolvers read the window NAME (`findNamedFleetWindow`, `oracleWindowOf`),
+  // so renaming a live oracle's window — which a torn-down cell does, leaving
+  // `cell-head` behind — made it unreachable by its own name while it sat there
+  // running. The stamp is written at pane birth and by nothing else. Unstamped
+  // fleet (most of it, today) → `none` → the legacy path below, unchanged.
+  const routed = await routeOracleByIdentity(
+    query,
+    "head",
+    deps.tmuxRun ?? ((...args: string[]) => new Tmux().run(...args)),
+  );
+  if (routed.via === "conflict") {
+    // Never pick one: both are live agents, and delivering to the wrong one is
+    // silent. Name them and let the operator (or the oracle itself) say which.
+    console.error(`\x1b[31mambiguous\x1b[0m: ${conflictingIdentityError(query, "head", routed.candidates)}`);
+    process.exit(1);
+  }
+  if (routed.via === "identity") {
+    // The pane id IS an exact send-keys target (resolveOraclePane passes `%N`
+    // through untouched, kobo-83) — no window name, no index, nothing to rename.
+    return { result: { type: "local", target: routed.pane.paneId }, locate: null, routing: "identity" };
+  }
 
   try {
     const localResult = normalizeBareLocalResult(query, resolveTarget(query, config, sessions, currentSession), config);
-    if (localResult) return { result: localResult, locate: null };
+    if (localResult) return { result: localResult, locate: null, routing: "name" };
   } catch (e) {
     if (e instanceof AmbiguousMatchError) {
       rejectBareAmbiguous(query, e.candidates);
@@ -1072,8 +1110,8 @@ async function resolveBareLocalTarget(
   }
 
   const locate = await resolveBareHeyByLocatePath(query, config, sessions);
-  if (locate.result) return { result: locate.result, locate };
-  if (locate.repoPath) return { result: null, locate };
+  if (locate.result) return { result: locate.result, locate, routing: "name" };
+  if (locate.repoPath) return { result: null, locate, routing: null };
 
   // kobo-81 — fallback: a live maw-team member's bound tmux pane is a valid local
   // target even though the worker isn't a federation oracle (no repo → the locate
@@ -1084,7 +1122,7 @@ async function resolveBareLocalTarget(
   try {
     const { resolveTeamMemberPane } = await import("./team-member-pane");
     const memberPane = resolveTeamMemberPane(query);
-    if (memberPane) return { result: { type: "local", target: memberPane }, locate: null };
+    if (memberPane) return { result: { type: "local", target: memberPane }, locate: null, routing: "name" };
   } catch { /* fall through to the miss error */ }
 
   rejectBareMiss(query);
@@ -1872,12 +1910,18 @@ export async function cmdSend(
       // back to the raw, unresolved target — that fallback must be visible
       // here, not just internally logged: the text may have landed in the
       // WRONG pane (or a dead one) with nothing about "landed" catching that.
+      // kobo-830 — say which evidence chose this pane. `routing=identity` = the
+      // pane's own `@oracle_pane` stamp; `routing=name` = a window/session name,
+      // which anyone can rename out from under this target. Same reasoning as the
+      // degraded note above: a fallback that prints nothing is a fallback nobody
+      // fixes. Blank for non-bare targets (the operator named the pane themselves).
+      const routing = bareResolution.routing ? ` \x1b[90m[routing=${bareResolution.routing}]\x1b[0m` : "";
       if (paneResolution.degraded) {
-        console.log(`\x1b[33m⚠ sent (pane resolution degraded)\x1b[0m → ${target} \x1b[90m— tmux pane lookup failed (${paneResolution.error}), sent to the raw target as a fallback; verify this reached the right pane\x1b[0m`);
+        console.log(`\x1b[33m⚠ sent (pane resolution degraded)\x1b[0m → ${target}${routing} \x1b[90m— tmux pane lookup failed (${paneResolution.error}), sent to the raw target as a fallback; verify this reached the right pane\x1b[0m`);
       } else if (opts.verbose) {
-        console.log(`\x1b[32mlanded\x1b[0m → ${target}: ${outboundMessage}`);
+        console.log(`\x1b[32mlanded\x1b[0m → ${target}${routing}: ${outboundMessage}`);
       } else {
-        console.log(`\x1b[32mlanded\x1b[0m → ${target} (${outboundMessage.length} chars)`);
+        console.log(`\x1b[32mlanded\x1b[0m → ${target}${routing} (${outboundMessage.length} chars)`);
       }
       // kobo-368: the captured tail-line stays in BOTH modes — it's a small, already-
       // truncated (cfgLimit) diagnostic snippet of what the RECEIVER'S pane now shows,

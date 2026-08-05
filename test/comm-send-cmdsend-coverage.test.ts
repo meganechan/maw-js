@@ -1134,7 +1134,13 @@ describe("cmdSend — bare-name, wake, and safety gates", () => {
     expect(receiverWrites).toHaveLength(0);
     expect(ghqFindCalls).toEqual(["/renamed-oracle", "/renamed"]);
     expect(fleetLoadCalls).toBe(1);
-    expect(tmuxRunCalls).toEqual([["display-message", "-p", "#S"]]);
+    // kobo-830 — the bare path now also asks tmux WHICH PANE CLAIMS THIS NAME
+    // (`@oracle_pane`) before it trusts window names. Still hermetic in the sense
+    // this test guards: two read-only tmux queries, no ghq/fleet/network surprises.
+    expect(tmuxRunCalls).toEqual([
+      ["display-message", "-p", "#S"],
+      ["list-panes", "-a", "-F", "#{pane_id}|||#{session_name}|||#{window_index}|||#{window_name}|||#{@oracle_pane}"],
+    ]);
     expect(curlFetchCalls).toEqual([]);
   });
 

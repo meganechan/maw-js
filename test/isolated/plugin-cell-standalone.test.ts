@@ -80,7 +80,7 @@ describe("cell command plugin standalone boundary", () => {
     expect(sdkImport).not.toContain("cmdWake");
   });
 
-  test("spawn adds worker+reviewer to a running oracle and stamps all three by identity", () => {
+  test("spawn adds worker+reviewer to a running oracle and stamps only those two", () => {
     const spawnSrc = readFileSync(spawnPath, "utf8");
     expect(spawnSrc).toContain("export async function companyCellSpawn");
     expect(spawnSrc).toContain('CELL_WORKERS_WINDOW = "cell-workers"');
@@ -88,11 +88,10 @@ describe("cell command plugin standalone boundary", () => {
     expect(spawnSrc).toContain("companyRoster");
     expect(spawnSrc).toContain("listSessions");
     expect(spawnSrc).toContain("findWindow");
-    // kobo-759 — every pane carries `@oracle_pane`, head included: without the
-    // head stamp the feeder resolves nothing and reports
-    // `routing=legacy panes=head:0/worker:0/reviewer:0` for the oracle.
+    // kobo-822 — the head stamp is `wake`'s (`stampWakePane`, wake-cmd.ts). Cell
+    // stamps the two panes it creates and nothing else.
     // (Behaviour proven in test/isolated/cell-pane-identity.test.ts.)
-    expect(spawnSrc).toContain('stampCellPane(headPane, member.oracle, "head", emit)');
+    expect(spawnSrc).not.toContain('"head", emit');
     expect(spawnSrc).toContain("stampPaneIdentity");
     expect(spawnSrc).toContain("export function resolveOracleDept(oracle: string)");
     // the -t is what keeps eleven oracles' panes out of the caller's session
@@ -130,12 +129,17 @@ describe("cell command plugin standalone boundary", () => {
     expect(spawnSrc).toContain("${ready} ready, ${partial} incomplete, ${asleep} not-running, ${refused} refused");
   });
 
-  test("spawn refuses rather than guessing which pane is the oracle", () => {
+  /**
+   * kobo-822 — spawn does not decide which pane an oracle is. The resolver that
+   * guessed from window name/index is DELETED, not corrected: it never matched a
+   * single oracle, and a guess that lands wrong hands one oracle's pane to
+   * another. The head is `@oracle_pane` or it is a refusal.
+   */
+  test("spawn finds the head only by its stamp, and points an unstamped one at wake", () => {
     const spawnSrc = readFileSync(spawnPath, "utf8");
-    expect(spawnSrc).toContain("function resolveHeadPane(");
-    expect(spawnSrc).toContain("if (unclaimed.length === 1) return { pane: unclaimed[0], duplicates: [] };");
-    expect(spawnSrc).toContain("refusing to overwrite one");
-    expect(spawnSrc).toContain("cannot say which one is the oracle");
+    expect(spawnSrc).toContain("const head = findHeadPane(panes, member.oracle);");
+    expect(spawnSrc).toContain("Cell does not stamp heads; wake does. Run \\`maw wake ${member.oracle}\\`");
+    expect(codeOnly(spawnPath)).not.toContain("resolveHeadPane");
   });
 
   test("down kills this oracle's worker+reviewer by identity and leaves every head alive", () => {

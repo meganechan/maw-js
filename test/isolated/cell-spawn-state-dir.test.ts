@@ -77,19 +77,20 @@ chmodSync(join(bin, "claude"), 0o755);
 
 const stateDir = join(dir, "ψ", "active", "cell");
 let commands: string[] = [];
-/** `id|||@role|||window|||@oracle_pane|||path|||window_index` — the head starts
- *  alone and UNSTAMPED, which is the fleet's real steady state. */
+/** `id|||@role|||window|||@oracle_pane|||path` — the head starts alone, carrying
+ *  the `{oracle}:head` stamp `wake` put on it. Cell reads that; it never writes
+ *  it, and refuses when it is missing (kobo-822). */
 let paneRows: string[] = [];
 
 mock.module("maw-js/sdk", () => ({
   hostExec: async (cmd: string): Promise<string> => {
     commands.push(cmd);
     if (cmd.includes("new-window")) {
-      paneRows.push("%worker|||⚒ worker|||cell-workers|||patchwork:worker|||/tmp|||1");
+      paneRows.push("%worker|||⚒ worker|||cell-workers|||patchwork:worker|||/tmp");
       return "%worker\n";
     }
     if (cmd.includes("split-window")) {
-      paneRows.push("%reviewer|||🔎 reviewer|||cell-workers|||patchwork:reviewer|||/tmp|||1");
+      paneRows.push("%reviewer|||🔎 reviewer|||cell-workers|||patchwork:reviewer|||/tmp");
       return "%reviewer\n";
     }
     if (cmd.includes("list-panes")) return paneRows.join("\n") + "\n";
@@ -122,7 +123,7 @@ afterAll(() => {
 
 beforeEach(() => {
   commands = [];
-  paneRows = [["%head", "", "patchwork-oracle", "", "/tmp", "0"].join("|||")];
+  paneRows = [["%head", "", "patchwork-oracle", "patchwork:head", "/tmp"].join("|||")];
   // THE ENVIRONMENT UNDER TEST: this process does NOT sit in the oracle's repo —
   // `~/bin/maw` cd's to maw-js before exec, and spawn now runs from outside every
   // oracle besides. CREW_STATE_DIR is the STALE export left by a pane's previous

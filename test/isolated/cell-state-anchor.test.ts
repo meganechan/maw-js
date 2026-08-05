@@ -57,7 +57,7 @@ for (const role of ["worker", "reviewer"]) {
 }
 for (const p of [repoA, repoB, wrapperRepo]) mkdirSync(p, { recursive: true });
 
-interface FakePane { id: string; window: string; index: string; identity: string }
+interface FakePane { id: string; window: string; identity: string }
 
 let commands: string[] = [];
 /** panes per session — two sessions, one per oracle */
@@ -81,20 +81,20 @@ mock.module("maw-js/sdk", () => ({
     }
     if (cmd.includes("list-panes")) {
       const panes = sessions[sessionOfTarget(cmd)] ?? [];
-      // `#{pane_id}|||#{@role}|||#{window_name}|||#{@oracle_pane}|||#{pane_current_path}|||#{window_index}`
-      return panes.map((p) => [p.id, "", p.window, p.identity, "/tmp", p.index].join("|||")).join("\n") + "\n";
+      // `#{pane_id}|||#{@role}|||#{window_name}|||#{@oracle_pane}|||#{pane_current_path}`
+      return panes.map((p) => [p.id, "", p.window, p.identity, "/tmp"].join("|||")).join("\n") + "\n";
     }
     if (cmd.includes("new-window")) {
       const sess = sessionOfTarget(cmd);
       const id = `%w${nextPane++}`;
-      (sessions[sess] ??= []).push({ id, window: "cell-workers", index: "1", identity: "" });
+      (sessions[sess] ??= []).push({ id, window: "cell-workers", identity: "" });
       return `${id}\n`;
     }
     if (cmd.includes("split-window")) {
       const target = /-t '([^']+)'/.exec(cmd)?.[1] ?? "";
       const sess = Object.keys(sessions).find((s) => sessions[s]!.some((p) => p.id === target)) ?? "";
       const id = `%r${nextPane++}`;
-      (sessions[sess] ??= []).push({ id, window: "cell-workers", index: "1", identity: "" });
+      (sessions[sess] ??= []).push({ id, window: "cell-workers", identity: "" });
       return `${id}\n`;
     }
     const stamp = /set-option -p -t '([^']+)' @oracle_pane '([^']+)'/.exec(cmd);
@@ -137,8 +137,8 @@ beforeEach(() => {
   commands = [];
   nextPane = 0;
   sessions = {
-    sessA: [{ id: "%headA", window: "patchwork-oracle", index: "0", identity: "" }],
-    sessB: [{ id: "%headB", window: "stitch-oracle", index: "0", identity: "" }],
+    sessA: [{ id: "%headA", window: "patchwork-oracle", identity: "patchwork:head" }],
+    sessB: [{ id: "%headB", window: "stitch-oracle", identity: "stitch:head" }],
   };
   sessionPath = { "%headA": repoA, "%headB": repoB };
   // THE ENVIRONMENT UNDER TEST: this process sits in the wrapper's repo, exactly

@@ -3,9 +3,12 @@
  * panes it needs to work a company board.
  *
  * `wake` is what brings an oracle up, and cell never touches it. The oracle's own
- * native pane IS the head: not adopted, not renamed, not relaunched, not killed.
- * `spawn` adds a `worker` and a `reviewer` beside it and stamps `@oracle_pane` on
- * all three; `down` removes exactly the two it made.
+ * native pane IS the head: not adopted, not renamed, not relaunched, not killed,
+ * and — since kobo-822 — not stamped either. `wake` stamps it when it launches
+ * the agent; cell only READS `@oracle_pane={oracle}:head` to find it, and refuses
+ * when it is absent rather than deciding for itself which pane the oracle is.
+ * `spawn` adds a `worker` and a `reviewer` beside the head and stamps those two;
+ * `down` removes exactly the two it made.
  *
  * Why the head needs no contract and no launch line — this is what shrank the
  * file: the feeder dispatches work to panes by ROLE directly (kobo-771), nothing
@@ -98,18 +101,18 @@ function companyRoster(co: Company): RosterMember[] {
   return out;
 }
 
-interface PaneRow { paneId: string; role: string; windowName: string; identity: string; path: string; windowIndex: string }
+interface PaneRow { paneId: string; role: string; windowName: string; identity: string; path: string }
 
 async function listSessionPanes(sessionName: string): Promise<PaneRow[]> {
   let raw: string;
   try {
-    raw = await hostExec(`tmux list-panes -s -t ${shellArg(sessionName)} -F '#{pane_id}|||#{@role}|||#{window_name}|||#{${ORACLE_PANE_OPTION}}|||#{pane_current_path}|||#{window_index}'`);
+    raw = await hostExec(`tmux list-panes -s -t ${shellArg(sessionName)} -F '#{pane_id}|||#{@role}|||#{window_name}|||#{${ORACLE_PANE_OPTION}}|||#{pane_current_path}'`);
   } catch {
     return [];
   }
   return raw.split("\n").filter(Boolean).map((line) => {
-    const [paneId = "", role = "", windowName = "", identity = "", path = "", windowIndex = ""] = line.split("|||");
-    return { paneId, role, windowName, identity, path, windowIndex };
+    const [paneId = "", role = "", windowName = "", identity = "", path = ""] = line.split("|||");
+    return { paneId, role, windowName, identity, path };
   });
 }
 
@@ -172,51 +175,6 @@ function dualHeadWarning(oracle: string, winner: PaneRow, duplicates: PaneRow[])
 }
 
 /**
- * Which pane is this oracle's head — the pane it already lives in.
- *
- * Already stamped is the easy case. Unstamped is the fleet's steady state (14 of
- * 51 panes carried an identity when the feeder went live), and it is why spawn
- * still stamps at all: without `@oracle_pane` on the head the feeder resolves
- * nothing and reports `routing=legacy panes=head:0/worker:0/reviewer:0`.
- *
- * The unstamped answer is "the one pane in the oracle's OWN window that nobody
- * has claimed". Refuses in every ambiguous case, mirroring wake's
- * `stampLiveSoloPane` (kobo-777): a wrong stamp silently hands a pane to another
- * oracle and nothing downstream would question it.
- *
- * kobo-822 F1 — the window is matched by INDEX, and that is not cosmetic. This
- * compared `#{window_name}` against the tail of `findWindow`, which answers
- * `session:INDEX` on every return path (`Window.index` is a number). So the
- * comparison was `'eq3-oracle' === '0'`: false for every oracle, forever, and
- * spawn refused exactly the unstamped case it was written for. The suite missed
- * it because the mock returned `sess:patchwork`, a shape the real resolver cannot
- * produce — a mock is a claim about the collaborator, so it has to be its shape.
- */
-function resolveHeadPane(panes: PaneRow[], oracle: string, windowIndex: string): { pane?: PaneRow; duplicates: PaneRow[]; reason?: string } {
-  const stamped = findHeadPane(panes, oracle);
-  if (stamped.pane) return stamped;
-
-  const where = `window index ${windowIndex || "(unresolved)"}`;
-  const inWindow = panes.filter((p) => p.windowIndex === windowIndex && windowIndex !== "");
-  if (inWindow.length === 0) {
-    return { duplicates: [], reason: `no pane in ${where} — nothing carries ${ORACLE_PANE_OPTION}=${oracle}:head and there is no candidate to stamp` };
-  }
-  // A head is never in a window cell built. `findWindow` falls back to the
-  // session's FIRST window when no window name matches the oracle, so without
-  // this a leftover `cell-worker` window could be handed the head stamp.
-  const scaffolding = inWindow.filter((p) => CELL_WINDOWS.has(p.windowName));
-  if (scaffolding.length > 0) {
-    return { duplicates: [], reason: `${where} is '${scaffolding[0]!.windowName}', a window cell creates panes in — a head is never there, so refusing to stamp one. Stamp the oracle's own pane directly: tmux set-option -p -t <pane> ${ORACLE_PANE_OPTION} ${shellArg(`${oracle}:head`)}` };
-  }
-  const unclaimed = inWindow.filter((p) => !paneIdentityOf(p));
-  if (unclaimed.length === 1) return { pane: unclaimed[0], duplicates: [] };
-  if (unclaimed.length === 0) {
-    return { duplicates: [], reason: `every pane in ${where} already carries another identity (${inWindow.map((p) => `${p.paneId}=${p.identity}`).join(", ")}) — refusing to overwrite one. Clear the wrong stamp first: tmux set-option -pu -t <pane> ${ORACLE_PANE_OPTION}` };
-  }
-  return { duplicates: [], reason: `${where} has ${unclaimed.length} unstamped panes (${unclaimed.map((p) => p.paneId).join(", ")}) — cannot say which one is the oracle. Stamp it directly: tmux set-option -p -t <pane> ${ORACLE_PANE_OPTION} ${shellArg(`${oracle}:head`)}` };
-}
-
-/**
  * kobo-822 F2 — panes cell created whose stamp never landed. They are invisible
  * to everything else here (`rolePanesOf` and `isTeardownTarget` key on
  * `@oracle_pane` and nothing else, kobo-764), so spawn builds a second worker
@@ -243,15 +201,6 @@ function parseCompanyArg(args: string[]): string | undefined {
 function sessionNameOf(resolved: string): string {
   const i = resolved.indexOf(":");
   return i === -1 ? resolved : resolved.slice(0, i);
-}
-
-/** `findWindow` answers `session:INDEX` — a tmux window_index, never a name
- *  (`find-window.ts` returns `w.index`, a number, on every path). A tail that is
- *  not an index is not a window this can select on, so it answers "". */
-function windowIndexOf(resolved: string): string {
-  const i = resolved.indexOf(":");
-  const tail = i === -1 ? "" : resolved.slice(i + 1);
-  return /^\d+$/.test(tail) ? tail : "";
 }
 
 function resolveMemberSession(oracle: string, sessions: Session[]): string | null {
@@ -417,19 +366,20 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
     const panes = await listSessionPanes(sessionName);
     const orphans = orphanCellPanes(panes);
     if (orphans.length > 0) emit(orphanWarning(member.oracle, orphans));
-    const head = resolveHeadPane(panes, member.oracle, windowIndexOf(resolved));
+    // The head is found by its `@oracle_pane` stamp and by nothing else, and
+    // spawn does not write that stamp — `wake` does, at the moment it launches
+    // the agent (`stampWakePane`, wake-cmd.ts). Everything that guessed which
+    // pane "must be" the head from window name or index is deleted: a guess that
+    // lands wrong hands one oracle's pane to another, silently, and nothing
+    // downstream would question it. Unstamped is not spawn's to fix.
+    const head = findHeadPane(panes, member.oracle);
     if (head.duplicates.length > 0 && head.pane) emit(dualHeadWarning(member.oracle, head.pane, head.duplicates));
     if (!head.pane) {
-      emit(`⚠ ${member.oracle}: REFUSED — ${head.reason}`);
+      emit(`⚠ ${member.oracle}: REFUSED — no pane in session ${sessionName} carries ${ORACLE_PANE_OPTION}=${member.oracle}:head. Cell does not stamp heads; wake does. Run \`maw wake ${member.oracle}\` and re-run this. (An oracle running since before kobo-759 has no stamp until it is re-woken.)`);
       refused++;
       continue;
     }
     const headPane = head.pane.paneId;
-
-    // The head stamp, and the ONLY thing spawn does to a head. `set-option -p`
-    // from outside: the process in that pane is not signalled, not interrupted
-    // and not even aware. Idempotent — re-stamping the same value is a no-op.
-    await stampCellPane(headPane, member.oracle, "head", emit);
 
     const anchor = await cellAnchor(headPane);
     if (!anchor) {

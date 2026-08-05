@@ -25,6 +25,10 @@ import { checkBusyGuard, queueForDispatch } from "../../core/agent-status-guard"
 import { runPluginEventHooks } from "../../plugin/event-hooks";
 import { notifyLiveInboxReceiver } from "./live-inbox-notify";
 import { getPaneRoute } from "../../core/pane-routes";
+// kobo-835 — direct module import, NOT the sdk barrel: comm-send is imported by
+// suites that partially mock.module() the barrel, and pulling a new symbol
+// through it breaks link-time for all of them.
+import { logHeyRoute } from "../../core/fleet/audit";
 import {
   ORACLE_PANE_OPTION,
   conflictingIdentityError,
@@ -910,6 +914,38 @@ export async function isSafeToInject(
 }
 
 /**
+ * kobo-835 — the receipt for a send that `isSafeToInject` deferred.
+ *
+ * It used to say "a permission/confirm menu is open" / "has a permission menu
+ * open". There is no permission check anywhere on this path: the gate is
+ * `detectPermissionMenu` matching a numbered cursor and an `Esc to cancel`
+ * footer in the last SEND_GATE_SNAPSHOT_LINES lines of the target's screen, plus
+ * `checkPaneIdle` seeing a non-empty prompt line. Naming an ACL that does not
+ * exist sent people looking for one — four times in one session on m5 — so the
+ * message now names what was actually on screen.
+ *
+ * Both symptoms produce the same outcome here (queued), and they need opposite
+ * responses, so the same line says which is which: a screen waiting on its owner
+ * does not clear because someone sent to it again; a message in the wrong pane
+ * does move when it is re-aimed.
+ *
+ * @internal exported for tests.
+ */
+export function deferredPaneReason(
+  target: string,
+  oracle: string | undefined,
+  reason: "typing" | "menu" | undefined,
+): string {
+  const seen = reason === "menu"
+    ? `${target} is showing a menu that is waiting for an answer`
+    : `${target} has an unsent line sitting in its input box`;
+  const who = oracle ? `'${oracle}'` : "the intended oracle";
+  return `${seen} (no permission check is involved — this is what its last ${SEND_GATE_SNAPSHOT_LINES} screen lines show); queued, auto-delivers when that screen clears. ` +
+    `Stuck screen → only that pane's owner can clear it, re-sending will not help. ` +
+    `Wrong pane (that screen is not ${who}) → re-send to a full session:window.pane address.`;
+}
+
+/**
  * eq3-005 — federation-vs-local guard. When an explicit `node:name` target was
  * routed to a peer but `name` ALSO has a live local session, surface a hint that
  * a direct local path exists. We deliberately do NOT auto-redirect: addressing a
@@ -1066,6 +1102,40 @@ function isConfiguredPeerAlias(query: string, config: ReturnType<typeof loadConf
  */
 export type BareRouting = "identity" | "name";
 
+/**
+ * kobo-835 — which resolution layer decided where a `hey` went, recorded on the
+ * audit row so a misroute is countable instead of noticed by accident.
+ *
+ * ⚠ `name-resolver` is a COLLAPSED bucket, and knowing that matters when reading
+ * the numbers. routing.ts's local ladder has five distinct name-based layers
+ * (exact fleet window, fleet session, session alias, session:index alias,
+ * findWindow's two-pass match) and `resolveTarget` returns the same
+ * `{type:"local", target}` shape from all five — the layer that decided is not
+ * observable from outside the function. Splitting this bucket means routing.ts
+ * itself must report the layer, which is deliberately out of scope for this card.
+ * Every OTHER label here is derived from evidence this file already holds, not
+ * from a second copy of routing.ts's rules.
+ */
+export type HeyResolvedBy =
+  | "pane-identity"       // kobo-830 `@oracle_pane` stamp — the pane named itself
+  | "locate-path"         // hey-locate-resolution.ts repo/worktree lookup
+  | "team-member-pane"    // kobo-81 maw-team member's bound pane
+  | "name-resolver"       // routing.ts local name ladder (5 layers, see above)
+  | "exact-pane-address"  // operator typed `session:window.pane` verbatim
+  | "node-prefix-self"    // `<selfNode>:<agent>` resolved on this host
+  | "node-prefix-peer"    // `<node>:<agent>` routed to a peer
+  | "peer-route";         // bare name → peer (manifest / agents map / peer alias)
+
+export interface BareTargetResolution {
+  result: ReturnType<typeof resolveTarget> | null;
+  locate: HeyLocateResolution | null;
+  routing: BareRouting | null;
+  /** kobo-835 — resolution layer, for the audit row. */
+  by: HeyResolvedBy | null;
+  /** kobo-835 — human-readable `session:window`, when the layer already knew it. */
+  where?: string;
+}
+
 /** @internal exported for tests — the bare-name resolution decision, without cmdSend's send path. */
 export async function resolveBareLocalTarget(
   query: string,
@@ -1073,8 +1143,8 @@ export async function resolveBareLocalTarget(
   sessions: Awaited<ReturnType<typeof listSessions>>,
   currentSession?: string,
   deps: { tmuxRun?: (...args: string[]) => Promise<string> } = {},
-): Promise<{ result: ReturnType<typeof resolveTarget> | null; locate: HeyLocateResolution | null; routing: BareRouting | null }> {
-  if (!isBareLocalHeyTarget(query)) return { result: null, locate: null, routing: null };
+): Promise<BareTargetResolution> {
+  if (!isBareLocalHeyTarget(query)) return { result: null, locate: null, routing: null, by: null };
 
   // kobo-830 — ask the pane's own stamp before any name-based resolver below.
   // Those resolvers read the window NAME (`findNamedFleetWindow`, `oracleWindowOf`),
@@ -1096,12 +1166,27 @@ export async function resolveBareLocalTarget(
   if (routed.via === "identity") {
     // The pane id IS an exact send-keys target (resolveOraclePane passes `%N`
     // through untouched, kobo-83) — no window name, no index, nothing to rename.
-    return { result: { type: "local", target: routed.pane.paneId }, locate: null, routing: "identity" };
+    return {
+      result: { type: "local", target: routed.pane.paneId },
+      locate: null,
+      routing: "identity",
+      by: "pane-identity",
+      // kobo-835 — a `%N` pane id names nobody; carry the pane's own session/window
+      // so the audit row can be read without a live tmux to look it up in.
+      where: `${routed.pane.session}:${routed.pane.windowName}`,
+    };
   }
 
   try {
     const localResult = normalizeBareLocalResult(query, resolveTarget(query, config, sessions, currentSession), config);
-    if (localResult) return { result: localResult, locate: null, routing: "name" };
+    if (localResult) {
+      return {
+        result: localResult,
+        locate: null,
+        routing: "name",
+        by: localResult.type === "peer" ? "peer-route" : "name-resolver",
+      };
+    }
   } catch (e) {
     if (e instanceof AmbiguousMatchError) {
       rejectBareAmbiguous(query, e.candidates);
@@ -1110,8 +1195,8 @@ export async function resolveBareLocalTarget(
   }
 
   const locate = await resolveBareHeyByLocatePath(query, config, sessions);
-  if (locate.result) return { result: locate.result, locate, routing: "name" };
-  if (locate.repoPath) return { result: null, locate, routing: null };
+  if (locate.result) return { result: locate.result, locate, routing: "name", by: "locate-path" };
+  if (locate.repoPath) return { result: null, locate, routing: null, by: null };
 
   // kobo-81 — fallback: a live maw-team member's bound tmux pane is a valid local
   // target even though the worker isn't a federation oracle (no repo → the locate
@@ -1122,10 +1207,49 @@ export async function resolveBareLocalTarget(
   try {
     const { resolveTeamMemberPane } = await import("./team-member-pane");
     const memberPane = resolveTeamMemberPane(query);
-    if (memberPane) return { result: { type: "local", target: memberPane }, locate: null, routing: "name" };
+    if (memberPane) return { result: { type: "local", target: memberPane }, locate: null, routing: "name", by: "team-member-pane" };
   } catch { /* fall through to the miss error */ }
 
   rejectBareMiss(query);
+}
+
+/**
+ * kobo-835 — the layer that decided, for queries that went straight to
+ * `resolveTarget` (i.e. everything `resolveBareLocalTarget` declined).
+ *
+ * Derived from the SHAPE of the query and the SHAPE of the answer, both of which
+ * this file already has. It re-runs none of routing.ts's matching: a second copy
+ * of those rules would drift, and an instrument that drifts from the thing it
+ * measures reports confidently wrong numbers rather than no numbers.
+ */
+export function classifyDirectResolution(
+  query: string,
+  result: { type: "local" | "self-node" | "peer"; target: string },
+): HeyResolvedBy {
+  if (result.type === "peer") return query.includes(":") ? "node-prefix-peer" : "peer-route";
+  if (result.type === "self-node") return "node-prefix-self";
+  // Only the exact-pane layer answers a `session:window.pane` query with itself;
+  // the alias layer canonicalizes the session name, so a differing target means
+  // a name resolver got there instead.
+  const q = query.trim();
+  if (/^[^:]+:\d+\.\d+$/.test(q) && result.target === q) return "exact-pane-address";
+  return "name-resolver";
+}
+
+/**
+ * kobo-835 — `session:windowName` for a `session:index(.pane)` target, read off
+ * the session list already in memory. Returns undefined for a `%N` pane id (no
+ * name to read) — those callers pass their own `where`.
+ */
+export function describeTargetLocation(
+  target: string,
+  sessions: Awaited<ReturnType<typeof listSessions>>,
+): string | undefined {
+  const m = target.match(/^(.+):(\d+)(?:\.\d+)?$/);
+  if (!m) return undefined;
+  const sess = sessions.find((s) => s.name === m[1]);
+  const win = sess?.windows.find((w) => w.index === Number(m[2]));
+  return win ? `${sess!.name}:${win.name}` : undefined;
 }
 
 /**
@@ -1832,15 +1956,23 @@ export async function cmdSend(
       if (!safe.safe) {
         queueForDispatch({ from: `${config.node ?? "local"}:${senderName}`, to: query, target, message: outboundMessage });
         const inbox = await writeReceiverInbox(target);
-        const reason = safe.reason === "menu"
-          ? `a permission/confirm menu is open on '${guard.oracle}'; queued — auto-delivers when it clears`
-          : `operator input in progress on '${guard.oracle}'; queued — auto-delivers when the pane clears`;
+        // kobo-835 — say what was SEEN, not what it was mistaken for. Nothing on
+        // this path checks a permission: `isSafeToInject` reads the last
+        // SEND_GATE_SNAPSHOT_LINES lines of the target's screen and matches a
+        // numbered cursor + `Esc to cancel` footer (detectPermissionMenu, above),
+        // or a non-empty prompt line (checkPaneIdle). Calling that "permission"
+        // sent people looking for an ACL that does not exist, so the word is gone.
+        //
+        // Both symptoms look identical from here — the message is queued either
+        // way — but they need opposite actions, so the receipt says which is which:
+        // a screen that is waiting on its owner does not clear by being sent to
+        // again, while a message sitting in the wrong pane does move when re-aimed.
+        const reason = deferredPaneReason(target, guard.oracle, safe.reason);
         if (logQueuedInbox(inbox, target, reason)) {
           await notifyQueuedInbox(inbox, target, reason);
           return;
         }
-        const label = safe.reason === "menu" ? "has a permission menu open" : "has operator input mid-edit";
-        console.log(`\x1b[33mqueued\x1b[0m '${guard.oracle}' ${label} — will auto-deliver when the pane clears \x1b[90m(📬)\x1b[0m`);
+        console.log(`\x1b[33mqueued\x1b[0m ${reason} \x1b[90m(📬)\x1b[0m`);
         return;
       }
     }
@@ -1944,6 +2076,17 @@ export async function cmdSend(
       // #1980: warn on silent misdelivery to a window that isn't the named oracle.
       const mismatch = detectWindowMismatch(query, result.target, sessions);
       if (mismatch) console.log(`  \x1b[33m⚠\x1b[0m ${mismatch}`);
+      // kobo-835 — record WHERE it landed next to WHAT was typed. The warning
+      // above only fires for `-oracle`-suffixed intents; this row is written for
+      // every send, because "how often does this happen" cannot be answered from
+      // a warning that only prints when someone is watching the terminal.
+      logHeyRoute({
+        query,
+        resolvedTarget: target,
+        resolvedWhere: bareResolution.where ?? describeTargetLocation(target, sessions),
+        resolvedBy: bareResolution.by ?? classifyDirectResolution(query, result),
+        route: result.type,
+      });
     } catch (err) {
       console.error(`  \x1b[31m✗\x1b[0m post-send bookkeeping failed (message already sent) — ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1989,6 +2132,17 @@ export async function cmdSend(
       if (res.data.lastLine) console.log(`\x1b[90m  ⤷ ${res.data.lastLine.slice(0, cfgLimit("messageTruncate"))}\x1b[0m`);
       // #1980: surface the receiving node's misdelivery warning, if any.
       if (res.data.warning) console.log(`  \x1b[33m⚠\x1b[0m ${res.data.warning}`);
+      // kobo-835 — the peer half. `res.data.target` is the pane the RECEIVING node
+      // resolved to; when it differs from what we asked for, that difference is the
+      // whole point of the row (this node cannot see the peer's session list).
+      logHeyRoute({
+        query,
+        resolvedTarget: res.data.target || result.target,
+        resolvedWhere: `${result.node}:${res.data.target || result.target}`,
+        resolvedBy: bareResolution.by ?? classifyDirectResolution(query, result),
+        route: "peer",
+        node: result.node,
+      });
       await runPluginEventHooks("transport:after_send", {
         event: "transport:after_send",
         route: "peer",

@@ -10,7 +10,7 @@ import { UserError } from "../core/util/user-error";
 const CORE_ROUTES = [
   "hey", "send", "notify", "flush", "route",
   "plugins", "plugin", "artifacts", "artifact",
-  "agents", "agent", "audit", "serve",
+  "agents", "agent", "audit", "hey-audit", "serve",
   "update", "upgrade", "version",
 ];
 

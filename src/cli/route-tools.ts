@@ -88,6 +88,7 @@ export type RouteToolsDeps = {
   loadArtifactsTools: () => Promise<ArtifactsTools>;
   loadAgentsTools: () => Promise<AgentsTools>;
   loadAuditTools: () => Promise<{ cmdAudit: (args: string[]) => Promise<void> | void }>;
+  loadHeyAuditTools: () => Promise<{ cmdHeyAudit: (args: string[]) => Promise<void> | void }>;
   loadTmuxTools: () => Promise<TmuxTools>;
   loadServeStatusTools: () => Promise<ServeStatusTools>;
   loadServeStartTools: () => Promise<ServeStartTools>;
@@ -190,6 +191,10 @@ export function createDefaultRouteToolsDeps(loadCoreServer?: CoreServerLoader): 
     loadAuditTools: async () => {
       const { cmdAudit } = await import("../commands/shared/audit");
       return { cmdAudit };
+    },
+    loadHeyAuditTools: async () => {
+      const { cmdHeyAudit } = await import("../commands/shared/hey-audit");
+      return { cmdHeyAudit };
     },
     loadTmuxTools: async () => {
       const { default: tmuxHandler } = await import("../commands/plugins/tmux/index");
@@ -344,6 +349,15 @@ export async function routeToolsWithDeps(cmd: string, args: string[], deps: Rout
   if (cmd === "audit") {
     const { cmdAudit } = await deps.loadAuditTools();
     await cmdAudit(args.slice(1));
+    return true;
+  }
+  // kobo-835 — its own verb rather than a flag on `audit`: the question it
+  // answers ("did my message go where I aimed it") is asked by people who are
+  // not reading an audit trail, and a flag on another command is not a thing
+  // anyone types from memory.
+  if (cmd === "hey-audit") {
+    const { cmdHeyAudit } = await deps.loadHeyAuditTools();
+    await cmdHeyAudit(args.slice(1));
     return true;
   }
   if (cmd === "tmux") {

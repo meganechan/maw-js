@@ -134,11 +134,29 @@ describe("cell down selects panes by @oracle_pane identity (kobo-764)", () => {
   });
 
   test("a pane with NO identity inside the cell-workers window survives — emoji @role and window name are not selectors", async () => {
-    await down();
+    const out = await down();
     expect(killAttempts).not.toContain("%human");
     expect(panes.some((p) => p.id === "%human")).toBe(true);
     // and nothing was selected off a pane title
     expect(commands.some((c) => c.includes("pane_title"))).toBe(false);
+    // kobo-822 F2 — not killed, but not invisible either: a pane down cannot
+    // reach is the one thing its "torn" line would otherwise be wrong about.
+    expect(out.some((l) => l.includes("%human") && l.includes("carry no @oracle_pane"))).toBe(true);
+  });
+
+  /**
+   * kobo-822 F3 — down used to drop `$TMUX_PANE` from the kill list. Run from a
+   * cell pane (a worker doing a board card, say) that pane survived, was never
+   * named, and the summary still said `torn`: a cell reported gone while it was
+   * still up. Membership is the pane's own `@oracle_pane`, never who asked.
+   */
+  test("run FROM a cell pane → that pane is killed like any other, not silently exempted", async () => {
+    process.env.TMUX_PANE = "%a-worker";
+    const out = await down();
+
+    expect(killAttempts.sort()).toEqual(["%a-reviewer", "%a-worker"]);
+    expect(panes.some((p) => p.id === "%a-worker")).toBe(false);
+    expect(out.at(-1)).toContain("1 torn, 0 partial");
   });
 
   test("another oracle's worker is never killed even in the same session and window", async () => {

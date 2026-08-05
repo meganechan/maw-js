@@ -31,6 +31,14 @@ import { ORACLE_PANE_OPTION, stampPaneIdentity, type PaneRole } from "../../../c
 
 const CELL_WORKERS_WINDOW = "cell-workers";
 /**
+ * Windows cell CREATES panes in — this one and the two singular names older
+ * versions used. A head never lives in one, which is the only thing this list is
+ * trusted for: it narrows head candidates and names orphans (see
+ * `orphanCellPanes`). It is deliberately NOT a kill selector — window name is a
+ * shared namespace and selecting kills by it is the kobo-764 bug.
+ */
+const CELL_WINDOWS = new Set([CELL_WORKERS_WINDOW, "cell-worker", "cell-reviewer"]);
+/**
  * kobo-780 — the tail of the cell state path, never a whole one. It used to be
  * used relative, on the premise that the writer ran in the head pane's cwd. That
  * premise was false: `~/bin/maw` does `cd /Users/tony/maw-js` before exec, so
@@ -90,18 +98,18 @@ function companyRoster(co: Company): RosterMember[] {
   return out;
 }
 
-interface PaneRow { paneId: string; role: string; windowName: string; identity: string; path: string }
+interface PaneRow { paneId: string; role: string; windowName: string; identity: string; path: string; windowIndex: string }
 
 async function listSessionPanes(sessionName: string): Promise<PaneRow[]> {
   let raw: string;
   try {
-    raw = await hostExec(`tmux list-panes -s -t ${shellArg(sessionName)} -F '#{pane_id}|||#{@role}|||#{window_name}|||#{${ORACLE_PANE_OPTION}}|||#{pane_current_path}'`);
+    raw = await hostExec(`tmux list-panes -s -t ${shellArg(sessionName)} -F '#{pane_id}|||#{@role}|||#{window_name}|||#{${ORACLE_PANE_OPTION}}|||#{pane_current_path}|||#{window_index}'`);
   } catch {
     return [];
   }
   return raw.split("\n").filter(Boolean).map((line) => {
-    const [paneId = "", role = "", windowName = "", identity = "", path = ""] = line.split("|||");
-    return { paneId, role, windowName, identity, path };
+    const [paneId = "", role = "", windowName = "", identity = "", path = "", windowIndex = ""] = line.split("|||");
+    return { paneId, role, windowName, identity, path, windowIndex };
   });
 }
 
@@ -175,21 +183,57 @@ function dualHeadWarning(oracle: string, winner: PaneRow, duplicates: PaneRow[])
  * has claimed". Refuses in every ambiguous case, mirroring wake's
  * `stampLiveSoloPane` (kobo-777): a wrong stamp silently hands a pane to another
  * oracle and nothing downstream would question it.
+ *
+ * kobo-822 F1 — the window is matched by INDEX, and that is not cosmetic. This
+ * compared `#{window_name}` against the tail of `findWindow`, which answers
+ * `session:INDEX` on every return path (`Window.index` is a number). So the
+ * comparison was `'eq3-oracle' === '0'`: false for every oracle, forever, and
+ * spawn refused exactly the unstamped case it was written for. The suite missed
+ * it because the mock returned `sess:patchwork`, a shape the real resolver cannot
+ * produce — a mock is a claim about the collaborator, so it has to be its shape.
  */
-function resolveHeadPane(panes: PaneRow[], oracle: string, windowName: string): { pane?: PaneRow; duplicates: PaneRow[]; reason?: string } {
+function resolveHeadPane(panes: PaneRow[], oracle: string, windowIndex: string): { pane?: PaneRow; duplicates: PaneRow[]; reason?: string } {
   const stamped = findHeadPane(panes, oracle);
   if (stamped.pane) return stamped;
 
-  const inWindow = panes.filter((p) => p.windowName === windowName);
+  const where = `window index ${windowIndex || "(unresolved)"}`;
+  const inWindow = panes.filter((p) => p.windowIndex === windowIndex && windowIndex !== "");
   if (inWindow.length === 0) {
-    return { duplicates: [], reason: `no pane in window '${windowName}' — nothing carries ${ORACLE_PANE_OPTION}=${oracle}:head and there is no candidate to stamp` };
+    return { duplicates: [], reason: `no pane in ${where} — nothing carries ${ORACLE_PANE_OPTION}=${oracle}:head and there is no candidate to stamp` };
+  }
+  // A head is never in a window cell built. `findWindow` falls back to the
+  // session's FIRST window when no window name matches the oracle, so without
+  // this a leftover `cell-worker` window could be handed the head stamp.
+  const scaffolding = inWindow.filter((p) => CELL_WINDOWS.has(p.windowName));
+  if (scaffolding.length > 0) {
+    return { duplicates: [], reason: `${where} is '${scaffolding[0]!.windowName}', a window cell creates panes in — a head is never there, so refusing to stamp one. Stamp the oracle's own pane directly: tmux set-option -p -t <pane> ${ORACLE_PANE_OPTION} ${shellArg(`${oracle}:head`)}` };
   }
   const unclaimed = inWindow.filter((p) => !paneIdentityOf(p));
   if (unclaimed.length === 1) return { pane: unclaimed[0], duplicates: [] };
   if (unclaimed.length === 0) {
-    return { duplicates: [], reason: `every pane in window '${windowName}' already carries another identity (${inWindow.map((p) => `${p.paneId}=${p.identity}`).join(", ")}) — refusing to overwrite one. Clear the wrong stamp first: tmux set-option -pu -t <pane> ${ORACLE_PANE_OPTION}` };
+    return { duplicates: [], reason: `every pane in ${where} already carries another identity (${inWindow.map((p) => `${p.paneId}=${p.identity}`).join(", ")}) — refusing to overwrite one. Clear the wrong stamp first: tmux set-option -pu -t <pane> ${ORACLE_PANE_OPTION}` };
   }
-  return { duplicates: [], reason: `window '${windowName}' has ${unclaimed.length} unstamped panes (${unclaimed.map((p) => p.paneId).join(", ")}) — cannot say which one is the oracle. Stamp it directly: tmux set-option -p -t <pane> ${ORACLE_PANE_OPTION} ${shellArg(`${oracle}:head`)}` };
+  return { duplicates: [], reason: `${where} has ${unclaimed.length} unstamped panes (${unclaimed.map((p) => p.paneId).join(", ")}) — cannot say which one is the oracle. Stamp it directly: tmux set-option -p -t <pane> ${ORACLE_PANE_OPTION} ${shellArg(`${oracle}:head`)}` };
+}
+
+/**
+ * kobo-822 F2 — panes cell created whose stamp never landed. They are invisible
+ * to everything else here (`rolePanesOf` and `isTeardownTarget` key on
+ * `@oracle_pane` and nothing else, kobo-764), so spawn builds a second worker
+ * beside them and down leaves them running forever. Real ones exist:
+ * `09-repo-architect` `%367`/`%370`.
+ *
+ * ponytail: named, not adopted and not killed. Adopting them by window name is
+ * the exact selector kobo-764 removed for killing a human's pane, and a stamp is
+ * as irreversible as a kill for routing purposes. Naming them is what the caller
+ * cannot get anywhere else; the fix is one `tmux` line they can read here.
+ */
+function orphanCellPanes(panes: PaneRow[]): PaneRow[] {
+  return panes.filter((p) => CELL_WINDOWS.has(p.windowName) && !paneIdentityOf(p));
+}
+
+function orphanWarning(oracle: string, orphans: PaneRow[]): string {
+  return `⚠ ${oracle}: ${orphans.length} pane(s) in a cell window carry no ${ORACLE_PANE_OPTION} (${orphans.map((p) => `${p.paneId} in ${p.windowName}`).join(", ")}) — cell selects on that option only, so spawn will build alongside them and down will never remove them. Stamp one: tmux set-option -p -t <pane> ${ORACLE_PANE_OPTION} ${shellArg(`${oracle}:worker`)} — or kill it: tmux kill-pane -t <pane>.`;
 }
 
 function parseCompanyArg(args: string[]): string | undefined {
@@ -201,11 +245,13 @@ function sessionNameOf(resolved: string): string {
   return i === -1 ? resolved : resolved.slice(0, i);
 }
 
-/** `findWindow` answers `session:window` and resolves bare oracle names by window
- *  NAME, so this is the oracle's own window — where its head pane lives. */
-function windowNameOf(resolved: string): string {
+/** `findWindow` answers `session:INDEX` — a tmux window_index, never a name
+ *  (`find-window.ts` returns `w.index`, a number, on every path). A tail that is
+ *  not an index is not a window this can select on, so it answers "". */
+function windowIndexOf(resolved: string): string {
   const i = resolved.indexOf(":");
-  return i === -1 ? "" : resolved.slice(i + 1);
+  const tail = i === -1 ? "" : resolved.slice(i + 1);
+  return /^\d+$/.test(tail) ? tail : "";
 }
 
 function resolveMemberSession(oracle: string, sessions: Session[]): string | null {
@@ -369,7 +415,9 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
 
     const sessionName = sessionNameOf(resolved);
     const panes = await listSessionPanes(sessionName);
-    const head = resolveHeadPane(panes, member.oracle, windowNameOf(resolved));
+    const orphans = orphanCellPanes(panes);
+    if (orphans.length > 0) emit(orphanWarning(member.oracle, orphans));
+    const head = resolveHeadPane(panes, member.oracle, windowIndexOf(resolved));
     if (head.duplicates.length > 0 && head.pane) emit(dualHeadWarning(member.oracle, head.pane, head.duplicates));
     if (!head.pane) {
       emit(`⚠ ${member.oracle}: REFUSED — ${head.reason}`);
@@ -459,13 +507,16 @@ export async function companyCellDown(company: string | undefined, opts: { force
   let torn = 0, partial = 0, skipped = 0, refused = 0;
   const roster = companyRoster(co);
   const sessions = await listSessions();
-  const invokerPane = (process.env.TMUX_PANE || "").trim();
 
   for (const member of roster) {
     const resolved = resolveMemberSession(member.oracle, sessions);
     if (!resolved) { log(`${member.oracle}: no session found — nothing to tear down`); skipped++; continue; }
     const sessionName = sessionNameOf(resolved);
     const panes = await listSessionPanes(sessionName);
+    // Said here too: an orphan is a pane down is ABOUT to report gone-and-quiet
+    // over, while it stays up running an agent.
+    const orphans = orphanCellPanes(panes);
+    if (orphans.length > 0) emit(orphanWarning(member.oracle, orphans));
     // Only a pane `findHeadPane` actually RESOLVES gates a teardown, and only the
     // winner is ever named — kobo-782: a duplicate `{oracle}:head` can be a live
     // agent in someone else's session. Down does not kill heads at all, so the
@@ -495,7 +546,14 @@ export async function companyCellDown(company: string | undefined, opts: { force
       }
     }
 
-    const toKill = panes.filter((p) => p.paneId && p.paneId !== invokerPane && isTeardownTarget(p, member.oracle));
+    // kobo-822 F3 — no `process.env.TMUX_PANE` exemption. It was the last read of
+    // the CALLER's identity in this file, and it did not protect anything: a cell
+    // pane running `down` dropped SILENTLY out of the kill list while the summary
+    // still said `torn`, so a cell reported as gone was still up. Membership of
+    // the kill list is the pane's own `@oracle_pane` and nothing about who asked.
+    // ponytail: `down` from inside a cell pane now kills that pane, ending the run
+    // there — visible (the pane vanishes), unlike the survivor it used to leave.
+    const toKill = panes.filter((p) => p.paneId && isTeardownTarget(p, member.oracle));
 
     for (const pane of toKill) {
       try { await hostExec(`tmux kill-pane -t ${shellArg(pane.paneId)}`); } catch { /* verified below, not here */ }

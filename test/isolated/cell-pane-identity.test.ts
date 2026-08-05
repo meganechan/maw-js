@@ -44,13 +44,24 @@ for (const role of ["worker", "reviewer"]) {
   writeFileSync(join(home, ".claude", "skills", "cell", "contracts", `${role}.md`), `# ${role} {{COMPANY}} dept={{DEPT}}\n`);
 }
 
-interface FakePane { id: string; role: string; window: string; identity: string; path: string }
+/**
+ * `window` is the tmux window NAME and `index` its window_index — kept apart on
+ * purpose. Conflating them is kobo-822 F1: spawn matched the head's window by
+ * name against `findWindow`'s answer, which is `session:INDEX` on every path, so
+ * it compared `'patchwork-oracle' === '0'` and refused every unstamped oracle.
+ * The mock returned `sess:patchwork` — a value the real resolver cannot produce —
+ * so the suite was green on a contract that does not exist. Fixture names below
+ * are the fleet's real shape: window `<oracle>-oracle` at index 0.
+ */
+interface FakePane { id: string; role: string; window: string; index: string; identity: string; path: string }
 
 let panes: FakePane[] = [];
 let commands: string[] = [];
 let nextPaneId = 0;
 /** the oracle is not running — findWindow resolves nothing */
 let noSession = false;
+/** what `findWindow` resolves the oracle to, as a window_index */
+let headWindowIndex = "0";
 /** the creation call returns, but no pane appears (the kobo-822 failure itself) */
 let creationVanishes = false;
 
@@ -60,7 +71,7 @@ mock.module("maw-js/sdk", () => ({
   hostExec: async (cmd: string): Promise<string> => {
     commands.push(cmd);
     if (cmd.includes("tmux list-panes")) {
-      return panes.map((p) => `${p.id}|||${p.role}|||${p.window}|||${p.identity}|||${p.path}`).join("\n") + "\n";
+      return panes.map((p) => `${p.id}|||${p.role}|||${p.window}|||${p.identity}|||${p.path}|||${p.index}`).join("\n") + "\n";
     }
     if (cmd.includes("session_path")) return `${anchor}\n`;
     // Creation calls carry the launch line as their ARGUMENT — the pane is born
@@ -68,13 +79,13 @@ mock.module("maw-js/sdk", () => ({
     if (cmd.includes("new-window")) {
       if (creationVanishes) return "";
       const id = `%new-worker-${nextPaneId++}`;
-      panes.push({ id, role: "", window: "cell-workers", identity: "", path: anchor });
+      panes.push({ id, role: "", window: "cell-workers", index: "1", identity: "", path: anchor });
       return `${id}\n`;
     }
     if (cmd.includes("split-window")) {
       if (creationVanishes) return "";
       const id = `%new-reviewer-${nextPaneId++}`;
-      panes.push({ id, role: "", window: "cell-workers", identity: "", path: anchor });
+      panes.push({ id, role: "", window: "cell-workers", index: "1", identity: "", path: anchor });
       return `${id}\n`;
     }
     // The stamp is what makes a pane findable by role afterwards.
@@ -87,7 +98,10 @@ mock.module("maw-js/sdk", () => ({
     return "";
   },
   listSessions: async () => [],
-  findWindow: () => { if (noSession) throw new Error("no window for oracle"); return "sess:patchwork"; },
+  // The real `findWindow` answers `session:INDEX` — `find-window.ts` returns
+  // `w.index` (a number) on every return path. Anything else here is a contract
+  // the production resolver cannot honour.
+  findWindow: () => { if (noSession) throw new Error("no window for oracle"); return `sess:${headWindowIndex}`; },
   checkBusyGuard: async () => ({ busy: false }),
 }));
 
@@ -106,13 +120,14 @@ afterAll(() => {
 
 /** The steady state this had to work against: a live oracle pane, unstamped. */
 function liveSoloOracle(): void {
-  panes = [{ id: "%head", role: "", window: "patchwork", identity: "", path: anchor }];
+  panes = [{ id: "%head", role: "", window: "patchwork-oracle", index: "0", identity: "", path: anchor }];
 }
 
 beforeEach(() => {
   commands = [];
   nextPaneId = 0;
   noSession = false;
+  headWindowIndex = "0";
   creationVanishes = false;
   process.env.TMUX_PANE = "%invoker";
   liveSoloOracle();
@@ -202,9 +217,9 @@ describe("cell spawn does not wake (kobo-822)", () => {
 describe("cell spawn is idempotent and per-role (kobo-822)", () => {
   test("a cell already up creates nothing — no all-three-or-rebuild", async () => {
     panes = [
-      { id: "%head", role: "", window: "patchwork", identity: "patchwork:head", path: anchor },
-      { id: "%w", role: "", window: "cell-workers", identity: "patchwork:worker", path: anchor },
-      { id: "%r", role: "", window: "cell-workers", identity: "patchwork:reviewer", path: anchor },
+      { id: "%head", role: "", window: "patchwork-oracle", index: "0", identity: "patchwork:head", path: anchor },
+      { id: "%w", role: "", window: "cell-workers", index: "1", identity: "patchwork:worker", path: anchor },
+      { id: "%r", role: "", window: "cell-workers", index: "1", identity: "patchwork:reviewer", path: anchor },
     ];
     const out = await spawn();
 
@@ -214,8 +229,8 @@ describe("cell spawn is idempotent and per-role (kobo-822)", () => {
 
   test("worker present, reviewer missing → only the reviewer is created, split off the EXISTING worker", async () => {
     panes = [
-      { id: "%head", role: "", window: "patchwork", identity: "patchwork:head", path: anchor },
-      { id: "%w", role: "", window: "cell-workers", identity: "patchwork:worker", path: anchor },
+      { id: "%head", role: "", window: "patchwork-oracle", index: "0", identity: "patchwork:head", path: anchor },
+      { id: "%w", role: "", window: "cell-workers", index: "1", identity: "patchwork:worker", path: anchor },
     ];
     await spawn();
 
@@ -227,8 +242,8 @@ describe("cell spawn is idempotent and per-role (kobo-822)", () => {
 describe("cell spawn refuses rather than guessing which pane is the oracle (kobo-822)", () => {
   test("two unstamped panes in the oracle's window → refused, both named, nothing stamped", async () => {
     panes = [
-      { id: "%a", role: "", window: "patchwork", identity: "", path: anchor },
-      { id: "%b", role: "", window: "patchwork", identity: "", path: anchor },
+      { id: "%a", role: "", window: "patchwork-oracle", index: "0", identity: "", path: anchor },
+      { id: "%b", role: "", window: "patchwork-oracle", index: "0", identity: "", path: anchor },
     ];
     const out = await spawn();
 
@@ -238,7 +253,7 @@ describe("cell spawn refuses rather than guessing which pane is the oracle (kobo
   });
 
   test("the only pane already belongs to another oracle → never overwritten", async () => {
-    panes = [{ id: "%other", role: "", window: "patchwork", identity: "stitch:head", path: anchor }];
+    panes = [{ id: "%other", role: "", window: "patchwork-oracle", index: "0", identity: "stitch:head", path: anchor }];
     const out = await spawn();
 
     expect(identityCmds()).toEqual([]);
@@ -250,15 +265,93 @@ describe("cell spawn refuses rather than guessing which pane is the oracle (kobo
    * panes both stamped `worker1:head`). A duplicate is a LIVE agent in someone
    * else's session: name it, use the oldest, touch nothing.
    */
-  test("duplicate {oracle}:head → lowest pane id wins, the other is named and left alone", async () => {
+  /**
+   * `%9` and `%10` on purpose: lowest pane id means NUMERICALLY lowest, and tmux
+   * hands out `%N` monotonically, so `%9` is the older pane. Compared as strings
+   * `"%10" < "%9"`, and the winner flips to the newer pane — which is why
+   * `paneIdNum` exists. This is the assertion that pins it (the pair it had,
+   * `%3`/`%9`, sorts the same either way and pinned nothing).
+   */
+  test("duplicate {oracle}:head → lowest pane id wins NUMERICALLY, the other is named and left alone", async () => {
     panes = [
-      { id: "%9", role: "", window: "patchwork", identity: "patchwork:head", path: anchor },
-      { id: "%3", role: "", window: "other", identity: "patchwork:head", path: anchor },
+      { id: "%10", role: "", window: "patchwork-oracle", index: "0", identity: "patchwork:head", path: anchor },
+      { id: "%9", role: "", window: "other", index: "3", identity: "patchwork:head", path: anchor },
     ];
     const out = await spawn();
 
-    expect(out.some((l) => l.includes("2 panes claim") && l.includes("LEFT ALONE"))).toBe(true);
-    expect(commands.some((c) => c.includes("'%9'") && !c.includes("list-panes"))).toBe(false);
+    expect(out.some((l) => l.includes("2 panes claim") && l.includes("LEFT ALONE") && l.includes("using %9"))).toBe(true);
+    expect(commands.some((c) => c.includes("-t '%9'"))).toBe(true);
+    expect(commands.some((c) => c.includes("'%10'") && !c.includes("list-panes"))).toBe(false);
+  });
+});
+
+/**
+ * kobo-822 F1 — `findWindow` answers `session:INDEX`, so the head's window is
+ * selected by window_index. The whole file exercises this now (every fixture
+ * carries a realistic `<oracle>-oracle` window name that is never equal to the
+ * index), and these are the cases that only this shape can express.
+ */
+describe("cell spawn finds the head by window INDEX, not window name (kobo-822)", () => {
+  test("the oracle's window name never equals the resolved index — matching on it stamps nothing", async () => {
+    // The pre-fix comparison was `'patchwork-oracle' === '0'`. The stamp landing
+    // at all is the regression assertion; `%elsewhere` proves the index actually
+    // narrows rather than the single-candidate case carrying it.
+    panes = [
+      { id: "%head", role: "", window: "patchwork-oracle", index: "0", identity: "", path: anchor },
+      { id: "%elsewhere", role: "", window: "notes", index: "4", identity: "", path: anchor },
+    ];
+    await spawn();
+
+    expect(identityOf("%head")).toBe("patchwork:head");
+    expect(identityOf("%elsewhere")).toBe("");
+  });
+
+  test("a pane in a DIFFERENT window index is not a head candidate → refused, nothing stamped", async () => {
+    headWindowIndex = "2"; // the oracle's window; the only unstamped pane is in 0
+    const out = await spawn();
+
+    expect(identityCmds()).toEqual([]);
+    expect(out.some((l) => l.includes("REFUSED") && l.includes("window index 2"))).toBe(true);
+  });
+
+  /**
+   * `findWindow` falls back to the session's FIRST window when no window name
+   * matches the oracle, and on this fleet that can be a `cell-workers` window
+   * (`14-utils-pm`, `28-bob` resolve to index 0 = a cell window). A head is never
+   * in one, so the fallback must not hand it the stamp.
+   */
+  test("the resolved window is one cell BUILT → refused rather than stamping a worker pane as head", async () => {
+    panes = [{ id: "%orphan", role: "", window: "cell-workers", index: "0", identity: "", path: anchor }];
+    const out = await spawn();
+
+    expect(identityCmds()).toEqual([]);
+    expect(out.some((l) => l.includes("REFUSED") && l.includes("cell-workers"))).toBe(true);
+  });
+});
+
+/**
+ * kobo-822 F2 — a pane cell created whose stamp never landed is invisible to
+ * `rolePanesOf` and `isTeardownTarget` alike (both key on `@oracle_pane` only),
+ * so spawn builds a second worker beside it and down never removes it. Real ones:
+ * `09-repo-architect` `%367`/`%370`.
+ */
+describe("cell spawn names panes whose stamp never landed (kobo-822)", () => {
+  test("an unstamped pane in a cell window is reported by pane id, with the tmux line that fixes it", async () => {
+    panes = [
+      { id: "%head", role: "", window: "patchwork-oracle", index: "0", identity: "", path: anchor },
+      { id: "%367", role: "", window: "cell-worker", index: "1", identity: "", path: anchor },
+    ];
+    const out = await spawn();
+
+    expect(out.some((l) => l.includes("%367") && l.includes("cell-worker") && l.includes("set-option -p -t"))).toBe(true);
+    // it is named, never adopted: cell still keys on the option alone
+    expect(identityOf("%367")).toBe("");
+    expect(commands.some((c) => c.includes("new-window"))).toBe(true);
+  });
+
+  test("silent when every cell pane carries its identity", async () => {
+    const out = await spawn();
+    expect(out.some((l) => l.includes("carry no @oracle_pane"))).toBe(false);
   });
 });
 

@@ -1,37 +1,34 @@
 ---
 name: cell
-description: Spawn Cell v2 for a company roster: each oracle gets head + reviewer|worker tmux panes. Use when user says /cell, "สร้าง cell", or wants oracle-based cells.
+description: Give each oracle in a company roster the worker + reviewer panes it needs to work the board. Use when user says /cell, "สร้าง cell", or wants oracle-based cells.
 ---
 
-# /cell — Cell v2: head + reviewer|worker
+# /cell — worker + reviewer panes for a company roster
 
-Use this when Tony asks for “cell”, “สร้าง cell”, “กดสร้าง cell”, or an oracle/company needs the simple Cell v2 shape.
+Use this when Tony asks for “cell”, “สร้าง cell”, “กดสร้าง cell”, or an oracle/company needs its worker/reviewer panes.
 
-## What this creates
+## What cell is (and is not)
 
-`maw company cell spawn <company>` is company/oracle based. It wakes every oracle in the company roster and repairs each oracle's tmux session to this shape:
+`cell` is an **add-on**. It does not bring an oracle up — that is `maw wake`, and cell never calls it.
+
+**The oracle's own pane IS the head.** Cell does not adopt it, rename its window, relaunch it, kill it — or stamp it. `wake` writes `@oracle_pane = {oracle}:head` when it launches the agent; cell only **reads** that stamp to find the head, and **refuses** the oracle when it is missing (`maw wake <oracle>` is the fix, and the refusal says so). It then adds two panes beside the head:
 
 ```text
-Window/Page 1: head
-  - talks to human
-  - owns routing/reporting
-  - keeps only one active card in the cell
-
-Window/Page 2: reviewer | worker
-  - worker executes only
-  - reviewer reviews only
-  - worker and reviewer are separate panes
+The oracle's own window: the oracle, untouched   ← head
+Window `cell-workers`:   worker | reviewer       ← the only thing cell creates
 ```
+
+The head needs no contract and no launch line: the queue feeder dispatches work to panes **by role**, so nothing routes through the head (kobo-771).
 
 This is NOT a caller-local split and NOT the older `/crew` 4-pane cell.
 
 ## Run
 
-From any controlling pane:
+From anywhere — a controlling pane, a plain shell, a session that belongs to no oracle. You do not have to be inside any oracle's pane.
 
 ```bash
 maw company cell spawn <company>
-maw company cell down <company> [--force]
+maw company cell down  <company> [--force]
 ```
 
 Example:
@@ -40,33 +37,23 @@ Example:
 maw company cell spawn kobo
 ```
 
-The public spawn verb controls the company fleet: wake missing oracle sessions headlessly, locate each oracle session, then inject the local self-spawn into that oracle's pane so tmux layout is created in the correct place and the head pane launches Claude afterward.
+**`spawn`** walks the company roster and, for each oracle: resolves its tmux session, finds the pane already stamped `{oracle}:head` (refusing the oracle if there is none), writes that oracle's `worker-contract.md` and `reviewer-contract.md` into **its own repo** (`#{session_path}/ψ/active/cell`), then creates whichever of the two role panes it is missing. Per role, not all-or-nothing: an oracle that already has a worker gets only a reviewer, and a complete cell gets nothing. Both panes are created with their launch line as the tmux **creation argument** — nothing is ever typed into an existing pane.
 
-The public down verb controls Cell v2 teardown for the company roster: it resolves each oracle session, requires an identifiable cell head pane before killing anything, honors busy guard unless `--force` is passed, and kills only the panes whose `@oracle_pane` identity is `{that oracle}:worker` or `{that oracle}:reviewer`. A pane carrying no identity, or another oracle's, is never killed — window name and pane title are not selectors. The head pane is never killed: it is the oracle's own adopted pane, so down stands it down instead (clears `@role`, removes the cell state files, keeps its `{oracle}:head` identity). `killed` counts panes verified gone; anything still standing is reported as a PARTIAL teardown and leaves the cell state in place.
+An oracle that is **not running** is reported, not woken. Run `maw wake <oracle>` first, then re-run.
 
-The hidden internal verb is:
+**`down`** kills only the panes whose `@oracle_pane` identity is `{that oracle}:worker` or `{that oracle}:reviewer`. A pane with no identity, or another oracle's, is never touched — window name and pane title are not selectors. **The head is never killed and never written to**, and it keeps its `{oracle}:head` stamp (that is exactly what a solo `maw wake` pane carries; dropping it would blind the feeder to an oracle that is still there). The busy guard fails closed unless `--force` is passed. `killed` counts panes verified gone; anything still standing is a PARTIAL teardown.
+
+Both verbs count from a fresh `tmux list-panes` read afterwards, never from what their own commands returned.
+
+## Verifying it worked
+
+Ask tmux directly, not the summary line:
 
 ```bash
-maw company cell self-spawn <company>
+tmux list-panes -a -F '#{session_name}:#{window_name} @=#{@oracle_pane}'
 ```
 
-Do not run `self-spawn` by hand unless debugging a single target pane.
-
-## Two spawn modes — chosen per pane, never by a flag
-
-Spawn looks at what the target pane is actually running and picks the only route that pane can receive:
-
-| Pane is running | Mode | What happens | Counted as |
-|---|---|---|---|
-| a shell (`zsh`, `bash`, …) | **inject** | the self-spawn + head launch line is typed into it | `repaired` (once head boots) |
-| an agent REPL (`claude`, `node`, `bun`) | **prompt handoff** | `maw hey` delivers a message asking the AGENT to run self-spawn itself | `handed-off` |
-| anything else, or unreadable | — | nothing is sent | `refused/failed` |
-
-A shell line is never typed into an agent pane — it would land as prompt text and never run. A pane running neither a shell nor an agent (an editor, a pager, a database client) is left alone: a message typed at it is the same blind send.
-
-**Handed-off is not done.** The agent acts on its own clock, so `handed-off` means "asked", not "cell is up". Re-run `maw company cell spawn <company>` afterwards to see it turn into `ready`.
-
-**The head-contract caveat.** A head started by the inject mode receives its contract through `claude --append-system-prompt`. An agent that is **already running** cannot be handed a system prompt by anyone — so the handoff message tells it to read `ψ/active/cell/head-contract.md` from disk instead. That file is written by `self-spawn`, so the order is: run self-spawn first, then read the contract. An agent that skips the read is a head that never got its contract: alive, and behaving like a stranger.
+`-a` is required. A `-t <session>` query answers for that session's **current window only**, and will read as a failure when nothing is wrong.
 
 ## Cell rules
 
@@ -91,34 +78,21 @@ A shell line is never typed into an agent pane — it would land as prompt text 
 
 ## Completion signal
 
-Public company spawn is complete when the command prints:
-
 ```text
-✓ cell spawn <company>: <ready> ready, <repaired> repaired, <handed-off> handed-off, <boot-failed> head-boot-failed, <refused> refused/failed (<N> oracles)
+✓ cell spawn <company>: <ready> ready, <incomplete> incomplete, <not-running> not-running, <refused> refused (<N> oracles)
 ```
 
-`repaired` means the head pane came up. A pane where the repair line ran but no
-Claude prompt appeared counts as **head-boot-failed**, never repaired — that pane
-is named in a `⚠ head boot FAILED` line above the summary; go look at it.
+- **ready** — that oracle has a stamped worker AND reviewer, confirmed by re-reading tmux.
+- **incomplete** — a creation call returned but no stamped pane appeared. The missing role is named in a `⚠ … INCOMPLETE` line above; the head is untouched and still stamped.
+- **not-running** — no tmux session. Run `maw wake <oracle>` and re-run.
+- **refused** — cell would have had to guess, so it did not act. Two causes: **no pane carries `{oracle}:head`** (an oracle running since before kobo-759 has no stamp until it is re-woken — run `maw wake <oracle>`); or `#{session_path}` is unreadable, so the oracle's repo is unknown — refused rather than anchoring the cell to the maw wrapper's repo, which is shared by every oracle.
+- **orphan panes** — a pane in a `cell-workers`/`cell-worker`/`cell-reviewer` window with no `@oracle_pane` is named by both verbs, with the `tmux` line that fixes it. Cell selects on the identity option alone, so it can neither reuse nor remove such a pane.
 
-`handed-off` means an agent pane was asked (see spawn modes above) — each one is
-named in a `↗ HANDED OFF` line. `refused/failed` is reserved for panes nothing
-could be delivered to at all.
+A duplicate `{oracle}:head` is reported, the **lowest pane id wins** (oldest pane = the one the oracle has been living in), and the losers are **left completely alone** — a duplicate head can be a live agent in someone else's session (kobo-782).
 
-Each target pane's local self-spawn prints before the head pane starts Claude:
+A worker or reviewer whose contract file is missing or empty **does not start at all** and says so in its pane: there is no path to a pane booting with an empty system prompt. If spawn reports a missing contract *asset*, run `maw crew-skills sync` and retry.
 
-```text
-✓ cell spawned — head=<pane> worker=<pane> (<model>) reviewer=<pane>
-```
+## Removed verbs
 
-After that, the head pane should be a live Claude process, not a shell. If head
-refuses to start, the pane says so instead: an empty/missing
-`ψ/active/cell/head-contract.md` never boots a head with a blank system prompt.
-
-If it reports a missing contract asset, run:
-
-```bash
-maw crew-skills sync
-```
-
-then retry `/cell`.
+- **`self-spawn`** — gone. It was typed into the oracle's own pane with `send-keys`, and every working oracle runs `claude`, where a typed line lands as prompt text and never runs. `cell spawn pgw` once reported `1 ready · 0 repaired · 10 refused` having changed nothing at all. Cell types into no pane any more.
+- **`up`** — replaced by `spawn`.

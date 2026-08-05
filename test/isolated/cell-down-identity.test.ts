@@ -134,11 +134,29 @@ describe("cell down selects panes by @oracle_pane identity (kobo-764)", () => {
   });
 
   test("a pane with NO identity inside the cell-workers window survives — emoji @role and window name are not selectors", async () => {
-    await down();
+    const out = await down();
     expect(killAttempts).not.toContain("%human");
     expect(panes.some((p) => p.id === "%human")).toBe(true);
     // and nothing was selected off a pane title
     expect(commands.some((c) => c.includes("pane_title"))).toBe(false);
+    // kobo-822 F2 — not killed, but not invisible either: a pane down cannot
+    // reach is the one thing its "torn" line would otherwise be wrong about.
+    expect(out.some((l) => l.includes("%human") && l.includes("carry no @oracle_pane"))).toBe(true);
+  });
+
+  /**
+   * kobo-822 F3 — down used to drop `$TMUX_PANE` from the kill list. Run from a
+   * cell pane (a worker doing a board card, say) that pane survived, was never
+   * named, and the summary still said `torn`: a cell reported gone while it was
+   * still up. Membership is the pane's own `@oracle_pane`, never who asked.
+   */
+  test("run FROM a cell pane → that pane is killed like any other, not silently exempted", async () => {
+    process.env.TMUX_PANE = "%a-worker";
+    const out = await down();
+
+    expect(killAttempts.sort()).toEqual(["%a-reviewer", "%a-worker"]);
+    expect(panes.some((p) => p.id === "%a-worker")).toBe(false);
+    expect(out.at(-1)).toContain("1 torn, 0 partial");
   });
 
   test("another oracle's worker is never killed even in the same session and window", async () => {
@@ -153,7 +171,7 @@ describe("cell down selects panes by @oracle_pane identity (kobo-764)", () => {
 
     expect(killAttempts.sort()).toEqual(["%a-reviewer", "%a-worker"]);
     expect(alive()).toEqual(["%a-head"]);
-    expect(out.some((l) => l.includes("%a-head") && l.includes("kept"))).toBe(true);
+    expect(out.some((l) => l.includes("%a-head") && l.includes("ALIVE"))).toBe(true);
   });
 
   test("no pane carries {oracle}:head → fail closed, nothing is killed", async () => {
@@ -165,28 +183,44 @@ describe("cell down selects panes by @oracle_pane identity (kobo-764)", () => {
   });
 });
 
-describe("cell down cleans up after itself (kobo-764)", () => {
-  test("cell state files under the HEAD pane's cwd are removed", async () => {
-    expect(existsSync(join(stateDir, "head.md"))).toBe(true);
+/**
+ * kobo-822 — the head is the oracle's OWN pane, so `down` does nothing to it at
+ * all. The old `standDownHead` cleared its `@role`, renamed its window back and
+ * deleted its cell state; every one of those is a write to a pane with a live
+ * agent in it, to tidy labels. Down removes two panes and stops.
+ */
+describe("cell down does not touch the head (kobo-822)", () => {
+  test("no write of any kind lands on the head pane", async () => {
     await down();
-    for (const f of STATE_FILES) expect(existsSync(join(stateDir, f))).toBe(false);
+    const headWrites = commands.filter((c) => c.includes("%a-head") && !c.includes("list-panes") && !c.includes("display-message"));
+    expect(headWrites).toEqual([]);
   });
 
-  test("the head's cell @role is cleared but its {oracle}:head identity is kept — the oracle is still there", async () => {
+  test("the head keeps its {oracle}:head identity — the oracle is still there", async () => {
     await down();
-    expect(commands).toContain("tmux set-option -pu -t '%a-head' @role");
     expect(commands.some((c) => c.includes("@oracle_pane") && c.includes("-u"))).toBe(false);
+    expect(panes.find((p) => p.id === "%a-head")?.identity).toBe("patchwork:head");
+  });
+
+  test("the head's window is never renamed and its @role never cleared", async () => {
+    await down();
+    expect(commands.some((c) => c.includes("rename-window"))).toBe(false);
+    expect(commands.some((c) => c.includes("set-option -pu") && c.includes("@role"))).toBe(false);
+  });
+
+  test("cell state files are left in place — down deletes panes, not directories", async () => {
+    await down();
+    for (const f of STATE_FILES) expect(existsSync(join(stateDir, f))).toBe(true);
   });
 });
 
 describe("cell down counters report what actually happened (kobo-764)", () => {
-  test("kill that tmux refuses → NOT counted killed, summary says partial, state left in place", async () => {
+  test("kill that tmux refuses → NOT counted killed, summary says partial", async () => {
     killThrows.add("%a-reviewer");
     const out = await down();
 
     expect(out.at(-1)).toContain("0 torn, 1 partial");
     expect(out.some((l) => l.includes("PARTIAL") && l.includes("killed 1/2") && l.includes("%a-reviewer"))).toBe(true);
-    expect(existsSync(join(stateDir, "head.md"))).toBe(true);
   });
 
   test("kill returns cleanly but the pane is still there → still a failure (killed means gone)", async () => {
@@ -205,20 +239,26 @@ describe("cell down counters report what actually happened (kobo-764)", () => {
     expect(out.at(-1)).toContain("0 torn, 1 partial");
   });
 
-  test("nothing left to kill → idempotent: head stood down, counted torn, not partial", async () => {
+  test("nothing left to kill → idempotent: counted torn, not partial, head untouched", async () => {
     panes = panes.filter((p) => !["%a-worker", "%a-reviewer"].includes(p.id));
     const out = await down();
 
     expect(killAttempts).toEqual([]);
     expect(out.at(-1)).toContain("1 torn, 0 partial");
-    expect(existsSync(join(stateDir, "head.md"))).toBe(false);
+    expect(panes.some((p) => p.id === "%a-head")).toBe(true);
   });
 });
 
-describe("cell usage names the verb that replaced 'up' (kobo-764)", () => {
+describe("cell usage names the verb that replaced the removed ones (kobo-764, kobo-822)", () => {
   test("unknown verb 'up' → usage points at spawn", async () => {
     const result = await runCell(["up", "testco"], () => {});
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("'up' was replaced by 'spawn'");
+    expect(result.error).toContain("replaced by 'spawn'");
+  });
+
+  test("`self-spawn` is gone and says why — nothing is injected into a pane any more", async () => {
+    const result = await runCell(["self-spawn", "testco"], () => {});
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("no longer types anything into a pane");
   });
 });

@@ -151,26 +151,39 @@ describe("crew-skills global asset contract", () => {
     expect(SYNC_ITEMS.filter((i) => /^skills\/(crew|head)\//.test(i.dest))).toEqual([]);
   });
 
-  test("/cell skill is the oracle-based Cell v2 trigger and points to the deterministic binary spawn", () => {
+  /**
+   * kobo-822 — the doc is the procedure an operator follows, so it fails the same
+   * way the code would: a SKILL.md still describing `self-spawn` and head adoption
+   * teaches a flow that no longer exists, and the reader has no way to tell.
+   */
+  test("/cell skill documents the add-on design: head untouched, worker+reviewer added from outside", () => {
     const skill = readFileSync(join(assetsDir, "skills/cell/SKILL.md"), "utf8");
     expect(skill).toContain("name: cell");
-    expect(skill).toContain("head + reviewer|worker");
-    expect(skill).toContain("wakes every oracle in the company roster");
     expect(skill).toContain("maw company cell spawn <company>");
-    expect(skill).toContain("maw company cell down <company> [--force]");
-    expect(skill).toContain("requires an identifiable cell head pane before killing anything");
+    expect(skill).toContain("maw company cell down  <company> [--force]");
+    expect(skill).toContain("This is NOT a caller-local split and NOT the older `/crew` 4-pane cell");
+
+    // The head: the oracle's own pane, and cell's relationship to it
+    expect(skill).toContain("**The oracle's own pane IS the head.**");
+    expect(skill).toContain("does not bring an oracle up — that is `maw wake`, and cell never calls it");
+    expect(skill).toContain("**The head is never killed and never written to**");
+    expect(skill).toContain("nothing routes through the head (kobo-771)");
+
     // kobo-764 — the doc must state the selector, not just "cell-owned panes"
     expect(skill).toContain("`@oracle_pane` identity is `{that oracle}:worker` or `{that oracle}:reviewer`");
-    expect(skill).toContain("The head pane is never killed");
-    expect(skill).toContain("maw company cell self-spawn <company>");
-    expect(skill).toContain("This is NOT a caller-local split and NOT the older `/crew` 4-pane cell");
-    expect(skill).toContain("After that, the head pane should be a live Claude process, not a shell");
-    // kobo-776 — the doc must name BOTH routes and the caveat that makes the
-    // agent route work, since a running agent can only get its contract by file
-    expect(skill).toContain("prompt handoff");
-    expect(skill).toContain("**Handed-off is not done.**");
-    expect(skill).toContain("cannot be handed a system prompt by anyone");
-    expect(skill).toContain("ψ/active/cell/head-contract.md");
+    // kobo-782 — the duplicate-head rule is guidance, never an action
+    expect(skill).toContain("**lowest pane id wins**");
+    expect(skill).toContain("left completely alone");
+
+    // The retired verbs must be NAMED, not silently absent: an operator running
+    // one from muscle memory needs to be told what replaced it and why.
+    expect(skill).toContain("## Removed verbs");
+    expect(skill).toContain("**`self-spawn`** — gone");
+    expect(skill).toContain("Cell types into no pane any more");
+
+    // The verification command, with the flag that decides whether it can answer
+    expect(skill).toContain("tmux list-panes -a -F '#{session_name}:#{window_name} @=#{@oracle_pane}'");
+    expect(skill).toContain("`-a` is required");
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/head.md"), "utf8")).toContain("spawn/supervise a background implementation agent");
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/worker.md"), "utf8")).toContain("Act as execution supervisor by default");
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/worker.md"), "utf8")).toContain("Do not review your own work");

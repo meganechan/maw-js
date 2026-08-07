@@ -16,6 +16,7 @@ import type { MawConfig } from "../config/types";
 import type { TransportRouter } from "../core/transport/transport";
 import type { ServeProfile } from "../core/server";
 import type { LoadedPlugin, PluginLifecycleHook, ServeRouteRegistrar } from "./types";
+import type { FeedEvent } from "../lib/feed";
 
 export type LifecyclePhase = "wake" | "sleep" | "serve" | "transport";
 
@@ -35,6 +36,23 @@ export interface PluginLifecycleContext {
   http?: ServeRouteRegistrar;
   ws?: ServeWsRouteRegistrar;
   engine?: MawEngine;
+  /**
+   * The HOST's feed listener set, handed over rather than imported.
+   *
+   * A hook module is loaded with a runtime `import()` of an absolute path (see
+   * runLifecycleHook below). Under a compiled bundle that import is NOT part of
+   * the bundle: bun resolves and evaluates the real source file at call time, so
+   * every `import` inside it produces a SECOND instance of that module. Shared
+   * mutable state reached that way is a different object than the host's — a
+   * plugin that does `feedListeners.add(...)` registers into a Set nobody pushes
+   * to, silently, while everything reached through this context (http, ws,
+   * engine) keeps working because those arrive as live objects.
+   *
+   * That is not hypothetical: worklog capture and room capture were both dead
+   * from 2026-08-02 to 2026-08-07 for exactly this reason, with the plugin's own
+   * routes answering 200 the whole time.
+   */
+  feedListeners?: Set<(event: FeedEvent) => void>;
   log?: {
     info?: (...args: unknown[]) => void;
     warn?: (...args: unknown[]) => void;
@@ -66,6 +84,8 @@ export interface ServeLifecycleContextInput {
   http?: ServeRouteRegistrar;
   ws?: ServeWsRouteRegistrar;
   engine?: MawEngine;
+  /** The host's feed listener set — see PluginLifecycleContext.feedListeners. */
+  feedListeners?: Set<(event: FeedEvent) => void>;
   /** Serve logger scoped by CLI verbosity for core lifecycle plugins. */
   log?: {
     info?: (...args: unknown[]) => void;

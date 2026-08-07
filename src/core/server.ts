@@ -586,6 +586,10 @@ export async function startBunGatewayServer(
     http: serveRoutes,
     ws: serveWs,
     engine,
+    // Handed over, never imported by the hook: a lifecycle hook is loaded with a
+    // runtime import() and, under a bundle, gets its own copy of any module it
+    // imports — including this Set (see PluginLifecycleContext.feedListeners).
+    feedListeners,
     log,
     plugins: serveLifecyclePlugins,
     reloadPlugins: serveLifecycleReloadPlugins,

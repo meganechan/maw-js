@@ -35,6 +35,11 @@ import {
   parsePaneIdentity,
   routeOracleByIdentity,
 } from "../../core/pane-identity";
+import {
+  assertPaneInjectAllowed,
+  identityOfExactTarget,
+  WorkerPaneAccessError,
+} from "../../core/worker-pane-guard";
 
 /** kobo-782 — separates the historical `<index> <command>` prefix from the identity. */
 const PANE_IDENTITY_SEP = "|||";
@@ -98,18 +103,28 @@ export async function resolveOraclePane(
   route: { oracle?: string; channel?: string } = {},
   diagnostics?: OraclePaneResolution,
 ): Promise<string> {
-  // Already pane-specific — honor caller's choice.
-  if (/\.[0-9]+$/.test(target)) return target;
+  const run = deps.tmuxRun ?? ((...args: string[]) => new Tmux().run(...args));
+
+  // Already pane-specific — honor caller's choice. D-E: this IS the exact
+  // send-keys target, so it's also exactly the target the worker-pane guard
+  // must check — an already-resolved `.N` is precisely how a dispatcher (or
+  // a bypass attempt) would name a worker pane directly.
+  if (/\.[0-9]+$/.test(target)) {
+    assertPaneInjectAllowed(target, await identityOfExactTarget(run, target));
+    return target;
+  }
 
   // kobo-83 — a tmux pane-id (`%NNN`, e.g. a maw-team member's bound pane from
   // kobo-81) is ALREADY an exact send-keys target. It must NOT get a
   // `.{pane_index}` suffix: `tmux send-keys -t '%678.1'` is invalid (there is no
   // window `%678`). Only session:window targets get the lowest-agent-pane index
   // appended below; a `%`-prefixed pane id is passed straight through.
-  if (target.startsWith("%")) return target;
+  if (target.startsWith("%")) {
+    assertPaneInjectAllowed(target, await identityOfExactTarget(run, target));
+    return target;
+  }
 
   try {
-    const run = deps.tmuxRun ?? ((...args: string[]) => new Tmux().run(...args));
     const isAgent = deps.isAgentCommandFn ?? isAgentCommand;
     // kobo-782 — the `@oracle_pane` identity rides along on the SAME list-panes
     // call (appended after `|||` so the historical `<index> <command>` prefix and
@@ -117,11 +132,18 @@ export async function resolveOraclePane(
     // identity" and takes the historical path).
     const raw = await run("list-panes", "-t", target, "-F", `#{pane_index} #{pane_current_command}${PANE_IDENTITY_SEP}#{${ORACLE_PANE_OPTION}}`);
     const lines = raw.split("\n").map((l: string) => l.trim()).filter(Boolean);
-    if (lines.length <= 1) return target; // single-pane window: active pane is the only pane
+    if (lines.length <= 1) {
+      // single-pane window: active pane is the only pane — its identity rode
+      // along on the same call, no second lookup needed (D-E).
+      const [, onlyIdentity = ""] = (lines[0] ?? "").split(PANE_IDENTITY_SEP);
+      assertPaneInjectAllowed(target, onlyIdentity);
+      return target;
+    }
 
     const paneIndexes = new Set<number>();
     const agentIndexes: number[] = [];
     const headIndexes: number[] = [];
+    const identityByIndex = new Map<number, string>();
     for (const rawLine of lines) {
       const [line = "", identity = ""] = rawLine.split(PANE_IDENTITY_SEP);
       const spaceIdx = line.indexOf(" ");
@@ -129,6 +151,7 @@ export async function resolveOraclePane(
       const idx = parseInt(line.slice(0, spaceIdx), 10);
       if (!Number.isFinite(idx)) continue;
       paneIndexes.add(idx);
+      identityByIndex.set(idx, identity);
       const cmd = line.slice(spaceIdx + 1);
       if (!isAgent(cmd)) continue;
       agentIndexes.push(idx);
@@ -146,7 +169,10 @@ export async function resolveOraclePane(
     if (route.oracle && route.channel) {
       const getRoute = deps.getPaneRouteFn ?? getPaneRoute;
       const mapped = getRoute(route.oracle, route.channel);
-      if (mapped !== null && paneIndexes.has(mapped)) return `${target}.${mapped}`;
+      if (mapped !== null && paneIndexes.has(mapped)) {
+        assertPaneInjectAllowed(`${target}.${mapped}`, identityByIndex.get(mapped));
+        return `${target}.${mapped}`;
+      }
     }
 
     // kobo-782 — a cell's head window holds worker and reviewer panes too, and
@@ -157,11 +183,23 @@ export async function resolveOraclePane(
     // oldest-wins tie-break cell down/spawn uses (kobo-775) expressed in the
     // units this function speaks. No claimant (an un-backfilled pane, which is
     // most of the fleet) → the historical default below, unchanged.
-    if (headIndexes.length > 0) return `${target}.${Math.min(...headIndexes)}`;
+    if (headIndexes.length > 0) {
+      const winner = Math.min(...headIndexes);
+      // Always role "head" by construction above — cheap to re-check anyway
+      // rather than special-case it out of the guard's coverage.
+      assertPaneInjectAllowed(`${target}.${winner}`, identityByIndex.get(winner));
+      return `${target}.${winner}`;
+    }
 
     if (agentIndexes.length === 0) return target;
-    return `${target}.${Math.min(...agentIndexes)}`;
+    const winner = Math.min(...agentIndexes);
+    assertPaneInjectAllowed(`${target}.${winner}`, identityByIndex.get(winner));
+    return `${target}.${winner}`;
   } catch (e) {
+    // D-E — a deliberate refusal is not a resolution failure: it must reach
+    // the caller as a thrown error, not get folded into the "degraded,
+    // fell back to the raw target" diagnostics path below.
+    if (e instanceof WorkerPaneAccessError) throw e;
     // kobo-596 (option C): this used to fail SILENTLY — same return value
     // (the unchanged raw target) as the deliberate short-circuits above, with
     // no way for a caller to tell "resolution wasn't needed" apart from

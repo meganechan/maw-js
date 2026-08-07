@@ -111,6 +111,14 @@ describe("buildPolicyInject — brain INDEX section", () => {
     expect(inject).toContain("topic-x — hook");
   });
 
+  it("emitted heading is line-anchored '## Company brain' (pins the AC5 pull-probe: grep -c '^## Company brain')", () => {
+    setPolicyAttach("nai", { company: "pgw", dept: "core" });
+    writeIndex("- topic-x — hook\n");
+
+    const inject = buildPolicyInject("nai");
+    expect(inject.split("\n")).toContainEqual(expect.stringMatching(/^## Company brain/));
+  });
+
   it("attached + no brain dir -> prior sections still present, no brain section, no throw", () => {
     setPolicyAttach("nai", { company: "pgw", dept: "core" });
 

@@ -8,7 +8,7 @@
  *
  * Isolated because mock.module is process-global and stubs the tmux transport.
  */
-import { describe, test, expect, mock, beforeEach } from "bun:test";
+import { describe, test, expect, mock, beforeEach, afterAll } from "bun:test";
 import { join } from "path";
 import { mockConfigModule } from "../helpers/mock-config";
 
@@ -104,21 +104,27 @@ describe("resolveOraclePane — H1 defensive refactor", () => {
     expect(runCalls[0].args[1]).toBe(injectionTarget);
   });
 
-  test("Case 3 — pane-specific target passes through untouched (no Tmux.run call)", async () => {
+  test("Case 3 — pane-specific target passes through untouched (D-E: one display-message identity check)", async () => {
     const result = await resolveOraclePane("session:window.2");
-    // Regex short-circuit: already has .N suffix
+    // Regex short-circuit: already has .N suffix — no list-panes call, but D-E
+    // still needs this exact target's identity to gate a worker/reviewer pane.
     expect(result).toBe("session:window.2");
-    expect(runCalls).toHaveLength(0);
+    expect(runCalls).toHaveLength(1);
+    expect(runCalls[0].subcommand).toBe("display-message");
+    expect(runCalls[0].args).toEqual(["-p", "-t", "session:window.2", "#{@oracle_pane}"]);
   });
 
-  test("kobo-83 — a %NNN pane-id passes through untouched, no .index suffix (no Tmux.run call)", async () => {
+  test("kobo-83 — a %NNN pane-id passes through untouched, no .index suffix (D-E: one display-message identity check)", async () => {
     // Multi-agent-pane output would otherwise trigger a `.{index}` append; a
     // pane-id must short-circuit BEFORE that so `send-keys -t '%678.1'` (invalid)
     // is never constructed for a kobo-81 team-member pane.
     runReturnValue = "0 zsh\n1 claude\n2 claude\n";
     const result = await resolveOraclePane("%678");
     expect(result).toBe("%678");
-    expect(runCalls).toHaveLength(0);
+    // Not the multi-pane list-panes call above — a single identity lookup on
+    // the exact pane-id target (D-E worker-pane guard).
+    expect(runCalls).toHaveLength(1);
+    expect(runCalls[0].subcommand).toBe("display-message");
   });
 
   test("Case 4 — single-pane window: returns target unchanged", async () => {
@@ -238,7 +244,7 @@ describe("resolveOraclePane — kobo-36 channel→pane routing", () => {
       { oracle: "eq3", channel: "task-events" },
     );
     expect(result).toBe("eq3:eq3-oracle.2");
-    expect(runCalls).toHaveLength(0); // short-circuits before list-panes
+    expect(runCalls).toHaveLength(1); // short-circuits before list-panes, but D-E still checks identity
   });
 });
 
@@ -299,13 +305,18 @@ describe("resolveOraclePane picks the head pane by identity (kobo-782)", () => {
   });
 
   test("a head whose agent died is not deliverable — the live agent default stands", async () => {
-    runReturnValue = "0 zsh|||eq3:head\n1 claude|||eq3:worker\n";
+    // pane 1 deliberately carries no identity here (most of the fleet
+    // doesn't) — this test is about the dead-head fallback, not D-E's
+    // worker/reviewer gate, which is covered separately below.
+    runReturnValue = "0 zsh|||eq3:head\n1 claude|||\n";
 
     expect(await resolveOraclePane("54-eq3:cell-head", {}, { oracle: "eq3" })).toBe("54-eq3:cell-head.1");
   });
 
   test("an explicit channel→pane mapping still wins — identity does not override a declared route", async () => {
-    runReturnValue = "0 claude|||eq3:worker\n1 claude|||eq3:head\n";
+    // pane 0 deliberately carries no identity — this test is about mapping
+    // beating identity-based head selection, not D-E's worker/reviewer gate.
+    runReturnValue = "0 claude|||\n1 claude|||eq3:head\n";
 
     const result = await resolveOraclePane(
       "54-eq3:cell-head",
@@ -313,5 +324,74 @@ describe("resolveOraclePane picks the head pane by identity (kobo-782)", () => {
       { oracle: "eq3", channel: "task-events" },
     );
     expect(result).toBe("54-eq3:cell-head.0");
+  });
+});
+
+/**
+ * D-E — the worker-pane injection guard, exercised through the funnel
+ * (not just the pure `assertPaneInjectAllowed` unit, see
+ * test/worker-pane-guard.test.ts). Confirms resolveOraclePane's OWN
+ * return points call the guard with the right identity, on every path
+ * that can land on a worker/reviewer pane.
+ */
+describe("resolveOraclePane — D-E worker-pane guard", () => {
+  const ENV = "MAW_WORKER_PANE_OK";
+  const prevEnv = process.env[ENV];
+
+  beforeEach(() => {
+    runCalls = [];
+    runReturnValue = "";
+    delete process.env[ENV];
+  });
+
+  afterAll(() => {
+    if (prevEnv === undefined) delete process.env[ENV];
+    else process.env[ENV] = prevEnv;
+  });
+
+  test("already-pane-specific target (.N) resolving to a worker pane is refused", async () => {
+    runReturnValue = "patchwork:worker\n"; // the display-message reply for this exact pane
+    await expect(resolveOraclePane("session:window.2")).rejects.toThrow(/worker pane/);
+  });
+
+  test("a %NNN pane-id resolving to a reviewer pane is refused", async () => {
+    runReturnValue = "patchwork:reviewer\n";
+    await expect(resolveOraclePane("%678")).rejects.toThrow(/reviewer pane/);
+  });
+
+  test("single-pane window whose only pane is a worker is refused (no extra tmux call)", async () => {
+    runReturnValue = "0 claude|||patchwork:worker\n";
+    await expect(resolveOraclePane("my-session:oracle")).rejects.toThrow(/worker pane/);
+    expect(runCalls).toHaveLength(1); // the same list-panes call, no second lookup
+  });
+
+  test("the default lowest-agent-pane pick is refused when that pane is a worker", async () => {
+    runReturnValue = "0 claude|||patchwork:worker\n1 zsh|||\n";
+    await expect(resolveOraclePane("my-session:oracle")).rejects.toThrow(/worker pane/);
+  });
+
+  test("a channel-mapped pane is refused when the mapped index is a worker", async () => {
+    runReturnValue = "0 claude|||patchwork:worker\n1 claude|||eq3:head\n";
+    await expect(
+      resolveOraclePane(
+        "eq3:eq3-oracle",
+        { getPaneRouteFn: () => 0 },
+        { oracle: "eq3", channel: "task-events" },
+      ),
+    ).rejects.toThrow(/worker pane/);
+  });
+
+  test("MAW_WORKER_PANE_OK=1 allows the same worker target through", async () => {
+    process.env[ENV] = "1";
+    runReturnValue = "patchwork:worker\n";
+    await expect(resolveOraclePane("session:window.2")).resolves.toBe("session:window.2");
+  });
+
+  test("a worker-gate refusal is a thrown error, not the silent degraded-diagnostics fallback", async () => {
+    runReturnValue = "0 claude|||patchwork:worker\n1 zsh|||\n";
+    const diagnostics: { degraded?: boolean; error?: string } = {};
+    await expect(resolveOraclePane("my-session:oracle", {}, {}, diagnostics)).rejects.toThrow(/worker pane/);
+    // Not folded into "resolution failed, guessing" — this was a deliberate refusal.
+    expect(diagnostics.degraded).toBeUndefined();
   });
 });

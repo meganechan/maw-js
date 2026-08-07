@@ -19,6 +19,11 @@ import { notifyLiveInboxReceiver, type LiveInboxNotifyDeps } from "../commands/s
 export { formatInboxNotification, resolveLiveInboxNotificationTarget } from "../commands/shared/live-inbox-notify";
 import { checkBusyGuard, queueForDispatch } from "../core/agent-status-guard";
 import type { Session } from "../core/transport/ssh";
+import {
+  assertPaneInjectAllowed,
+  identityOfExactTarget,
+  WorkerPaneAccessError,
+} from "../core/worker-pane-guard";
 
 type Config = ReturnType<typeof loadConfig>;
 type IdleCheck = Awaited<ReturnType<typeof checkPaneIdle>>;
@@ -692,12 +697,27 @@ export function createSessionsApi(deps: SessionsApiDeps = {}) {
    *
    * No readiness guard, no paste delay — this is the dual of `maw send-enter`.
    * Used by `maw send` (enter=false) and `maw run` (enter=true) cross-node.
+   *
+   * D-E — this handler bypasses the `resolveOraclePane` funnel entirely (it's
+   * the cross-node leg of `run`/`send`), so it needs its own worker-pane
+   * guard rather than inheriting the funnel's. Checked before either send —
+   * skipped when there is nothing to send (empty text, no enter): a no-op
+   * call injects nothing, so there is nothing for the guard to gate.
    */
   api.post("/pane-keys", async ({ body, set }) => {
     try {
       const { target, text, enter } = body;
       if (!target) { set.status = 400; return { error: "target required" }; }
+      const willSend = (text && text.length > 0) || enter;
       const t = d.createTmux();
+      if (willSend) {
+        try {
+          assertPaneInjectAllowed(target, await identityOfExactTarget((...args) => t.run(...args), target));
+        } catch (e) {
+          if (e instanceof WorkerPaneAccessError) { set.status = 403; return { error: e.message, target }; }
+          throw e;
+        }
+      }
       if (text && text.length > 0) {
         await t.sendKeysLiteral(target, text);
       }

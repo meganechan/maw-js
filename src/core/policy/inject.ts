@@ -5,8 +5,9 @@
  *
  * This is the dynamic, attach-gated counterpart of the static "Department" block
  * that used to live in CLAUDE.md (decision 6): when attached, the oracle's
- * identity header + company/dept policy are injected live; when detached, nothing
- * is injected and the oracle has no company policy in context.
+ * identity header + company/dept policy + company brain INDEX are injected
+ * live; when detached, nothing is injected and the oracle has no company
+ * policy in context.
  *
  * Returns "" (and the hook injects nothing) when the oracle is not attached, has
  * no company scope, or there is simply nothing to inject.
@@ -15,7 +16,7 @@
 import { isPolicyAttached } from "./attach-store";
 import { scopeOfOracle } from "../worklog/company-scope";
 import { loadCompany, kbTagFor } from "../../vendor/mpr-plugins/company/company-helpers";
-import { readCompanyPolicy, readDeptPolicy } from "./policy-store";
+import { readCompanyPolicy, readDeptPolicy, readBrainIndex, brainLearningsDir } from "./policy-store";
 
 export function buildPolicyInject(oracle: string): string {
   if (!isPolicyAttached(oracle)) return "";
@@ -48,6 +49,16 @@ export function buildPolicyInject(oracle: string): string {
 
   const deptPolicy = dept ? readDeptPolicy(company, dept) : null;
   if (deptPolicy) sections.push(deptPolicy.trim());
+
+  // Company brain INDEX — last section, so it doesn't crowd out policy above it.
+  // The learnings dir path is always included so the oracle can open a full
+  // entry itself (INDEX-only inject, never the entry bodies).
+  const brainIndex = readBrainIndex(company)?.trim();
+  if (brainIndex) {
+    sections.push(
+      `## Company brain — INDEX (อ่าน entry เต็มจาก ${brainLearningsDir(company)} เมื่อต้องใช้)\n\n${brainIndex}`,
+    );
+  }
 
   return sections.join("\n\n");
 }

@@ -53,10 +53,10 @@ export function buildPolicyInject(oracle: string): string {
   // Company brain INDEX — last section, so it doesn't crowd out policy above it.
   // The learnings dir path is always included so the oracle can open a full
   // entry itself (INDEX-only inject, never the entry bodies).
-  const brainIndex = readBrainIndex(company);
+  const brainIndex = readBrainIndex(company)?.trim();
   if (brainIndex) {
     sections.push(
-      `## Company brain — INDEX (อ่าน entry เต็มจาก ${brainLearningsDir(company)} เมื่อต้องใช้)\n\n${brainIndex.trim()}`,
+      `## Company brain — INDEX (อ่าน entry เต็มจาก ${brainLearningsDir(company)} เมื่อต้องใช้)\n\n${brainIndex}`,
     );
   }
 

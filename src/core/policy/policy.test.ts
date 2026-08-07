@@ -120,6 +120,14 @@ describe("buildPolicyInject — brain INDEX section", () => {
     expect(inject).not.toContain("Company brain — INDEX");
   });
 
+  it("whitespace-only INDEX behaves like absent — no heading, no section (AC7)", () => {
+    setPolicyAttach("nai", { company: "pgw", dept: "core" });
+    writeIndex("\n\n   \n");
+
+    const inject = buildPolicyInject("nai");
+    expect(inject).not.toContain("## Company brain");
+  });
+
   it("detached oracle -> inject is empty (regression guard)", () => {
     writeIndex();
     expect(buildPolicyInject("nai")).toBe("");

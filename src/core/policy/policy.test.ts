@@ -17,7 +17,7 @@ import {
   saveCompany,
   type Company,
 } from "../../vendor/mpr-plugins/company/company-helpers";
-import { policyDir, readCompanyPolicy, readDeptPolicy } from "./policy-store";
+import { policyDir, readCompanyPolicy, readDeptPolicy, brainLearningsDir } from "./policy-store";
 import { buildPolicyInject } from "./inject";
 import { setPolicyAttach, clearPolicyAttach } from "./attach-store";
 import { _clearScopeCache } from "../worklog/company-scope";
@@ -111,12 +111,12 @@ describe("buildPolicyInject — brain INDEX section", () => {
     expect(inject).toContain("topic-x — hook");
   });
 
-  it("emitted heading is line-anchored '## Company brain' (pins the AC5 pull-probe: grep -c '^## Company brain')", () => {
+  it("emits the absolute learnings-dir path (pins the AC5 pull-probe: grep -cF \"$HOME/…/<company>-brain/ψ/memory/learnings\" — a heading string is free text other people write into and produced a false positive, see PR)", () => {
     setPolicyAttach("nai", { company: "pgw", dept: "core" });
     writeIndex("- topic-x — hook\n");
 
     const inject = buildPolicyInject("nai");
-    expect(inject.split("\n")).toContainEqual(expect.stringMatching(/^## Company brain/));
+    expect(inject).toContain(brainLearningsDir("pgw"));
   });
 
   it("attached + no brain dir -> prior sections still present, no brain section, no throw", () => {

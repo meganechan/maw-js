@@ -116,7 +116,9 @@ describe("buildPolicyInject — brain INDEX section", () => {
     writeIndex("- topic-x — hook\n");
 
     const inject = buildPolicyInject("nai");
-    expect(inject).toContain(brainLearningsDir("pgw"));
+    // The probe COUNTS matches (grep -c) — a duplicate would double it silently.
+    const path = brainLearningsDir("pgw");
+    expect(inject.split(path).length - 1).toBe(1);
   });
 
   it("attached + no brain dir -> prior sections still present, no brain section, no throw", () => {

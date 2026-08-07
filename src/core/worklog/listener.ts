@@ -11,13 +11,18 @@ import type { FeedEvent } from "../../lib/feed";
 import { eventToWorklog } from "./significant";
 import { appendWorklogAsync } from "./store";
 
-let registered = false;
+// Keyed on the SET, not a module-global boolean. The boolean was idempotent in the
+// wrong dimension: it made the FIRST set win forever, so once anything registered
+// into one Set, a later call carrying the host's real Set was silently skipped —
+// turning a wiring fix into a no-op. Per-set keeps the original promise (no double
+// registration across serve-hook reloads) without deciding which Set is the one.
+const registered = new WeakSet<Set<(event: FeedEvent) => void>>();
 
 export function registerWorklogListener(
   feedListeners: Set<(event: FeedEvent) => void>,
 ): void {
-  if (registered) return; // idempotent — survive serve-hook reloads
-  registered = true;
+  if (registered.has(feedListeners)) return; // idempotent — survive serve-hook reloads
+  registered.add(feedListeners);
   feedListeners.add((event) => {
     try {
       const entry = eventToWorklog(event);
@@ -29,6 +34,6 @@ export function registerWorklogListener(
 }
 
 /** @internal — tests */
-export function _resetWorklogListener(): void {
-  registered = false;
+export function _resetWorklogListener(set?: Set<(event: FeedEvent) => void>): void {
+  if (set) registered.delete(set);
 }

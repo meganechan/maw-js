@@ -14,8 +14,13 @@ import { join } from "path";
 import {
   COMPANIES_DIR,
   _setCompaniesDir,
+  saveCompany,
+  type Company,
 } from "../../vendor/mpr-plugins/company/company-helpers";
 import { policyDir, readCompanyPolicy, readDeptPolicy } from "./policy-store";
+import { buildPolicyInject } from "./inject";
+import { setPolicyAttach, clearPolicyAttach } from "./attach-store";
+import { _clearScopeCache } from "../worklog/company-scope";
 
 const ORIGINAL_DIR = COMPANIES_DIR;
 let tmp: string;
@@ -56,6 +61,82 @@ describe("policy-store", () => {
   it("returns null when dept policy is missing (company dir exists)", () => {
     mkdirSync(join(tmp, "acme", "policy"), { recursive: true });
     expect(readDeptPolicy("acme", "nope")).toBeNull();
+  });
+});
+
+describe("buildPolicyInject — brain INDEX section", () => {
+  const ORIGINAL_BRAIN_ROOT = process.env.MAW_BRAIN_ROOT;
+  let brainTmp: string;
+
+  const pgw = (): Company => ({
+    name: "pgw",
+    manager: "thawanban",
+    teams: {
+      core: { lead: "nai", members: [{ oracle: "nai", role: "lead" }] },
+    },
+  });
+
+  function writeIndex(content = "- some-entry — hook\n") {
+    const dir = join(brainTmp, "pgw-brain", "ψ");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "INDEX.md"), content);
+  }
+
+  beforeEach(() => {
+    brainTmp = mkdtempSync(join(tmpdir(), "brain-root-test-"));
+    process.env.MAW_BRAIN_ROOT = brainTmp;
+    saveCompany(pgw());
+    _clearScopeCache();
+  });
+
+  afterEach(() => {
+    clearPolicyAttach("nai");
+    _clearScopeCache();
+    if (ORIGINAL_BRAIN_ROOT === undefined) delete process.env.MAW_BRAIN_ROOT;
+    else process.env.MAW_BRAIN_ROOT = ORIGINAL_BRAIN_ROOT;
+    try {
+      rmSync(brainTmp, { recursive: true, force: true });
+    } catch {
+      /* best-effort cleanup */
+    }
+  });
+
+  it("attached + brain INDEX present -> inject has the heading and the absolute path", () => {
+    setPolicyAttach("nai", { company: "pgw", dept: "core" });
+    writeIndex("- topic-x — hook\n");
+
+    const inject = buildPolicyInject("nai");
+    expect(inject).toContain("Company brain — INDEX");
+    expect(inject).toContain(join(brainTmp, "pgw-brain", "ψ", "memory", "learnings"));
+    expect(inject).toContain("topic-x — hook");
+  });
+
+  it("attached + no brain dir -> prior sections still present, no brain section, no throw", () => {
+    setPolicyAttach("nai", { company: "pgw", dept: "core" });
+
+    expect(() => buildPolicyInject("nai")).not.toThrow();
+    const inject = buildPolicyInject("nai");
+    expect(inject).toContain("Department"); // identity header still present
+    expect(inject).not.toContain("Company brain — INDEX");
+  });
+
+  it("detached oracle -> inject is empty (regression guard)", () => {
+    writeIndex();
+    expect(buildPolicyInject("nai")).toBe("");
+  });
+
+  it("section order: brain INDEX appears after the dept policy section", () => {
+    setPolicyAttach("nai", { company: "pgw", dept: "core" });
+    const dir = join(tmp, "pgw", "policy");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "core.md"), "# core dept policy\n");
+    writeIndex("- entry — hook\n");
+
+    const inject = buildPolicyInject("nai");
+    const deptIdx = inject.indexOf("core dept policy");
+    const brainIdx = inject.indexOf("Company brain — INDEX");
+    expect(deptIdx).toBeGreaterThan(-1);
+    expect(brainIdx).toBeGreaterThan(deptIdx);
   });
 });
 

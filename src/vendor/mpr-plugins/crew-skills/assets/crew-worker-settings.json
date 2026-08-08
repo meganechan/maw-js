@@ -1,16 +1,5 @@
 {
   "hooks": {
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash $HOME/.claude/hooks/crew-worker-stop.sh"
-          }
-        ]
-      }
-    ],
     "SessionStart": [
       {
         "matcher": "startup|resume|clear",

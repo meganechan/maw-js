@@ -11,9 +11,9 @@
  *
  * The design under test: the oracle's own pane IS the head, and cell does not
  * touch it AT ALL — `wake` stamps it when it launches the agent (`stampWakePane`
- * in wake-cmd.ts), cell only READS that stamp to find it. Spawn adds a worker and
- * a reviewer beside it. It never wakes, adopts, renames, relaunches or kills a
- * head, and it never sends a keystroke anywhere.
+ * in wake-cmd.ts), cell only READS that stamp to find it. Spawn adds a worker
+ * beside it (kobo-859: no more reviewer pane). It never wakes, adopts, renames,
+ * relaunches or kills a head, and it never sends a keystroke anywhere.
  *
  * An unstamped head is REFUSED, not resolved. Spawn used to guess ("the one
  * unclaimed pane in the oracle's window") and got it wrong for every oracle for a
@@ -47,9 +47,7 @@ mkdirSync(join(dir, "companies"), { recursive: true });
 writeFileSync(join(dir, "companies", "testco.json"),
   JSON.stringify({ name: "testco", teams: { core: { members: [{ oracle: "patchwork" }] } } }));
 mkdirSync(join(home, ".claude", "skills", "cell", "contracts"), { recursive: true });
-for (const role of ["worker", "reviewer"]) {
-  writeFileSync(join(home, ".claude", "skills", "cell", "contracts", `${role}.md`), `# ${role} {{COMPANY}} dept={{DEPT}}\n`);
-}
+writeFileSync(join(home, ".claude", "skills", "cell", "contracts", "worker.md"), "# worker {{COMPANY}} dept={{DEPT}}\n");
 
 interface FakePane { id: string; role: string; window: string; identity: string; path: string }
 
@@ -75,12 +73,6 @@ mock.module("maw-js/sdk", () => ({
     if (cmd.includes("new-window")) {
       if (creationVanishes) return "";
       const id = `%new-worker-${nextPaneId++}`;
-      panes.push({ id, role: "", window: "cell-workers", identity: "", path: anchor });
-      return `${id}\n`;
-    }
-    if (cmd.includes("split-window")) {
-      if (creationVanishes) return "";
-      const id = `%new-reviewer-${nextPaneId++}`;
       panes.push({ id, role: "", window: "cell-workers", identity: "", path: anchor });
       return `${id}\n`;
     }
@@ -139,12 +131,11 @@ async function spawn(verbose = true): Promise<string[]> {
 const identityCmds = () => commands.filter((c) => c.includes("set-option") && c.includes("@oracle_pane"));
 const identityOf = (id: string) => panes.find((p) => p.id === id)?.identity;
 
-describe("cell spawn adds the two panes it owns, beside a head wake stamped (kobo-822)", () => {
-  test("a woken oracle gains a worker and a reviewer; the head's stamp is only READ", async () => {
+describe("cell spawn adds the one pane it owns, beside a head wake stamped (kobo-822)", () => {
+  test("a woken oracle gains a worker; the head's stamp is only READ", async () => {
     const out = await spawn();
 
     expect(identityOf("%new-worker-0")).toBe("patchwork:worker");
-    expect(identityOf("%new-reviewer-1")).toBe("patchwork:reviewer");
     expect(identityCmds().some((c) => c.includes("%head"))).toBe(false);
     expect(out.at(-1)).toContain("1 ready, 0 incomplete, 0 not-running, 0 refused");
   });
@@ -174,8 +165,8 @@ describe("cell spawn never touches the running process in the head pane (kobo-82
   test("NO write targets the head pane at all — not even its identity stamp", async () => {
     await spawn();
     // `-t '%head'` — the tmux TARGET, not every command that merely mentions the
-    // pane id (the worker's launch line carries CREW_COORD_PANE='%head', and the
-    // reviewer's @idle_notify_pane points at it; neither writes to the head).
+    // pane id (the worker's launch line carries CREW_COORD_PANE='%head'; that
+    // never writes to the head).
     const headWrites = commands.filter((c) => c.includes("-t '%head'") && !c.includes("display-message"));
     expect(headWrites).toEqual([]);
   });
@@ -196,32 +187,20 @@ describe("cell spawn does not wake (kobo-822)", () => {
     expect(out.some((l) => l.includes("never wakes one") && l.includes("maw wake patchwork"))).toBe(true);
     expect(out.at(-1)).toContain("0 ready, 0 incomplete, 1 not-running");
     // and no pane was created anywhere while the oracle was down
-    expect(commands.some((c) => c.includes("new-window") || c.includes("split-window"))).toBe(false);
+    expect(commands.some((c) => c.includes("new-window"))).toBe(false);
   });
 });
 
 describe("cell spawn is idempotent and per-role (kobo-822)", () => {
-  test("a cell already up creates nothing — no all-three-or-rebuild", async () => {
+  test("a cell already up creates nothing — no rebuild", async () => {
     panes = [
       { id: "%head", role: "", window: "patchwork-oracle", identity: "patchwork:head", path: anchor },
       { id: "%w", role: "", window: "cell-workers", identity: "patchwork:worker", path: anchor },
-      { id: "%r", role: "", window: "cell-workers", identity: "patchwork:reviewer", path: anchor },
     ];
     const out = await spawn();
 
-    expect(commands.some((c) => c.includes("new-window") || c.includes("split-window"))).toBe(false);
-    expect(out.at(-1)).toContain("1 ready");
-  });
-
-  test("worker present, reviewer missing → only the reviewer is created, split off the EXISTING worker", async () => {
-    panes = [
-      { id: "%head", role: "", window: "patchwork-oracle", identity: "patchwork:head", path: anchor },
-      { id: "%w", role: "", window: "cell-workers", identity: "patchwork:worker", path: anchor },
-    ];
-    await spawn();
-
     expect(commands.some((c) => c.includes("new-window"))).toBe(false);
-    expect(commands.some((c) => c.includes("split-window") && c.includes("-t '%w'"))).toBe(true);
+    expect(out.at(-1)).toContain("1 ready");
   });
 });
 
@@ -239,7 +218,7 @@ describe("cell spawn refuses an unstamped head instead of picking one (kobo-822)
     const out = await spawn();
 
     expect(identityCmds()).toEqual([]);
-    expect(commands.some((c) => c.includes("new-window") || c.includes("split-window"))).toBe(false);
+    expect(commands.some((c) => c.includes("new-window"))).toBe(false);
     expect(out.some((l) => l.includes("REFUSED") && l.includes("maw wake patchwork"))).toBe(true);
     expect(out.at(-1)).toContain("1 refused");
   });
@@ -315,7 +294,6 @@ describe("cell spawn anchors every oracle on ITS OWN repo and dept (kobo-780, ko
   test("contracts are written under #{session_path}, not this process's cwd", async () => {
     await spawn();
     expect(existsSync(join(stateDir, "worker-contract.md"))).toBe(true);
-    expect(existsSync(join(stateDir, "reviewer-contract.md"))).toBe(true);
   });
 
   test("the launch line cd's into the oracle's repo and gates on a non-empty contract", async () => {

@@ -80,24 +80,25 @@ describe("cell command plugin standalone boundary", () => {
     expect(sdkImport).not.toContain("cmdWake");
   });
 
-  test("spawn adds worker+reviewer to a running oracle and stamps only those two", () => {
+  test("spawn adds a worker to a running oracle and stamps only that one", () => {
     const spawnSrc = readFileSync(spawnPath, "utf8");
     expect(spawnSrc).toContain("export async function companyCellSpawn");
     expect(spawnSrc).toContain('CELL_WORKERS_WINDOW = "cell-workers"');
-    expect(spawnSrc).toContain('const CELL_ROLES = ["worker", "reviewer"] as const');
+    expect(spawnSrc).toContain('const CELL_ROLES = ["worker"] as const');
     expect(spawnSrc).toContain("companyRoster");
     expect(spawnSrc).toContain("listSessions");
     expect(spawnSrc).toContain("findWindow");
     // kobo-822 — the head stamp is `wake`'s (`stampWakePane`, wake-cmd.ts). Cell
-    // stamps the two panes it creates and nothing else.
+    // stamps the pane it creates and nothing else.
     // (Behaviour proven in test/isolated/cell-pane-identity.test.ts.)
     expect(spawnSrc).not.toContain('"head", emit');
     expect(spawnSrc).toContain("stampPaneIdentity");
     expect(spawnSrc).toContain("export function resolveOracleDept(oracle: string)");
     // the -t is what keeps eleven oracles' panes out of the caller's session
     expect(spawnSrc).toContain("tmux new-window -d -t ${shellArg(`${sessionName}:`)}");
-    expect(spawnSrc).toContain("split-window -h -p 50 -t ${shellArg(workerPaneId)}");
     expect(spawnSrc).toContain("-P -F '#{pane_id}'");
+    // kobo-859 — reviewer pane removed; no split-window in the file any more.
+    expect(spawnSrc).not.toContain("split-window");
     // kobo-780 — one anchor resolver, from #{session_path}, never process.cwd()
     expect(spawnSrc).toContain("'#{session_path}'");
 
@@ -114,7 +115,7 @@ describe("cell command plugin standalone boundary", () => {
   });
 
   /**
-   * kobo-822 — presence is per ROLE, not all-three-or-rebuild. The old
+   * kobo-822 — presence is per ROLE, not all-or-rebuild. The old
    * `isReady = head && worker && reviewer` meant one missing pane rebuilt the
    * whole cell, which is what made "repair" reach for the head at all.
    */
@@ -122,7 +123,6 @@ describe("cell command plugin standalone boundary", () => {
     const spawnSrc = readFileSync(spawnPath, "utf8");
     expect(spawnSrc).toContain("const have = rolePanesOf(panes, member.oracle);");
     expect(spawnSrc).toContain("if (!worker) {");
-    expect(spawnSrc).toContain("if (!reviewer) {");
     // the summary is read back off the server, never assembled from intentions
     expect(spawnSrc).toContain("const after = rolePanesOf(await listSessionPanes(sessionName), member.oracle);");
     expect(spawnSrc).toContain("const missing = CELL_ROLES.filter((r) => !after.has(r));");
@@ -142,7 +142,7 @@ describe("cell command plugin standalone boundary", () => {
     expect(codeOnly(spawnPath)).not.toContain("resolveHeadPane");
   });
 
-  test("down kills this oracle's worker+reviewer by identity and leaves every head alive", () => {
+  test("down kills this oracle's worker by identity and leaves every head alive", () => {
     const spawnSrc = readFileSync(spawnPath, "utf8");
     expect(spawnSrc).toContain("export async function companyCellDown");
     expect(spawnSrc).toContain("usage: maw company cell down <company> [--force] [--verbose|--full]");

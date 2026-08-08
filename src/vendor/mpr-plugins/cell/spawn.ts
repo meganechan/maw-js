@@ -1,14 +1,19 @@
 /**
- * `maw company cell` — the ADD-ON that gives an already-running oracle the two
- * panes it needs to work a company board.
+ * `maw company cell` — the ADD-ON that gives an already-running oracle the
+ * pane it needs to work a company board.
  *
  * `wake` is what brings an oracle up, and cell never touches it. The oracle's own
  * native pane IS the head: not adopted, not renamed, not relaunched, not killed,
  * and — since kobo-822 — not stamped either. `wake` stamps it when it launches
  * the agent; cell only READS `@oracle_pane={oracle}:head` to find it, and refuses
  * when it is absent rather than deciding for itself which pane the oracle is.
- * `spawn` adds a `worker` and a `reviewer` beside the head and stamps those two;
- * `down` removes exactly the two it made.
+ * `spawn` adds a `worker` beside the head and stamps it; `down` removes it.
+ *
+ * kobo-859 — a cell is head + worker only. There used to be a `reviewer` pane
+ * too; review-requests already land on the worker pane (feeder dispatches by
+ * role, kobo-771), so the reviewer pane had no work of its own to do. Removed
+ * system-wide, not per-company: an option added only to disable a feature
+ * leaves you maintaining both.
  *
  * Why the head needs no contract and no launch line — this is what shrank the
  * file: the feeder dispatches work to panes by ROLE directly (kobo-771), nothing
@@ -51,11 +56,11 @@ const CELL_WINDOWS = new Set([CELL_WORKERS_WINDOW, "cell-worker", "cell-reviewer
  */
 const DEFAULT_STATE_DIR = "ψ/active/cell";
 
-/** The two panes cell owns. The head is the oracle's, and is not on this list. */
-const CELL_ROLES = ["worker", "reviewer"] as const;
+/** The one pane cell owns. The head is the oracle's, and is not on this list. */
+const CELL_ROLES = ["worker"] as const;
 type CellRole = (typeof CELL_ROLES)[number];
 
-const ROLE_TITLE: Record<CellRole, string> = { worker: "⚒ worker", reviewer: "🔎 reviewer" };
+const ROLE_TITLE: Record<CellRole, string> = { worker: "⚒ worker" };
 
 function shellArg(s: string): string { return `'${s.replace(/'/g, "'\\''")}'`; }
 function resolveHome(): string { return process.env.HOME || homedir(); }
@@ -242,14 +247,14 @@ function stateDirOf(anchor: string): string {
 
 /**
  * The launch line for a pane cell is about to CREATE. It is passed to
- * `new-window`/`split-window` as the creation argument — it is never typed at a
- * pane, so there is no pane here to be occupied by anything.
+ * `new-window` as the creation argument — it is never typed at a pane, so
+ * there is no pane here to be occupied by anything.
  *
  * B5 (kobo-765): `test -s <contract>` first. A missing or empty contract means
  * the pane would boot with an EMPTY system prompt — alive, and behaving like a
  * stranger. There must be no path to that, so the launch does not happen and the
- * pane says why. It applies to worker and reviewer for the same reason it once
- * applied to head; the head no longer needs one because nothing routes through it.
+ * pane says why. It applies to worker for the same reason it once applied to
+ * head; the head no longer needs one because nothing routes through it.
  *
  * B7 (kobo-765): no `exec`. `exec claude` REPLACED the pane's shell, so a boot
  * failure (bad model) killed the pane outright — nothing to fall back to, nothing
@@ -313,21 +318,11 @@ async function createWorkerPane(sessionName: string, launch: string): Promise<st
   return paneId;
 }
 
-/** Create the reviewer pane beside the worker. Pane-id target, so it cannot land
- *  in the wrong window even if the worker window was renamed by someone. */
-async function createReviewerPane(workerPaneId: string, launch: string): Promise<string> {
-  const paneId = (await hostExec(
-    `tmux split-window -h -p 50 -t ${shellArg(workerPaneId)} -P -F '#{pane_id}' ${shellArg(launch)}`,
-  )).trim();
-  return paneId;
-}
-
-/** Cosmetics + the idle-notify chain, on panes cell created. Never on a head. */
-async function dressCellPane(paneId: string, role: CellRole, oracle: string, notify: string, emit: (line: string) => void): Promise<void> {
+/** Cosmetics on panes cell created. Never on a head. */
+async function dressCellPane(paneId: string, role: CellRole, oracle: string, emit: (line: string) => void): Promise<void> {
   await hostExec(`tmux set-option -p -t ${shellArg(paneId)} @role ${shellArg(ROLE_TITLE[role])}`);
   await stampCellPane(paneId, oracle, role, emit);
   await hostExec(`tmux select-pane -t ${shellArg(paneId)} -T ${shellArg(ROLE_TITLE[role])}`);
-  if (notify) await hostExec(`tmux set-option -p -t ${shellArg(paneId)} @idle_notify_pane ${shellArg(notify)}`);
 }
 
 export interface CellSpawnResult {
@@ -335,7 +330,6 @@ export interface CellSpawnResult {
   error?: string;
   head?: string;
   worker?: string;
-  reviewer?: string;
 }
 
 export async function companyCellSpawn(company: string | undefined, emit: (line: string) => void, verbose = false): Promise<CellSpawnResult> {
@@ -403,7 +397,6 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
 
     const have = rolePanesOf(panes, member.oracle);
     let worker = have.get("worker") ?? "";
-    let reviewer = have.get("reviewer") ?? "";
     log(`${member.oracle}: head=${headPane} anchor=${anchor} existing=${[...have.keys()].join("+") || "none"}`);
 
     try {
@@ -411,21 +404,9 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
         worker = await createWorkerPane(sessionName, roleLaunchCommand("worker", company, anchor, headPane));
         if (worker) {
           await showPaneLabels(worker);
-          await dressCellPane(worker, "worker", member.oracle, "", emit);
+          await dressCellPane(worker, "worker", member.oracle, emit);
         }
       }
-      if (!reviewer) {
-        // Split the worker — existing or just made. With no worker there is no
-        // safe target: splitting the HEAD would put a reviewer inside the
-        // oracle's own window and resize the pane it is working in.
-        if (worker) {
-          reviewer = await createReviewerPane(worker, roleLaunchCommand("reviewer", company, anchor, headPane));
-          if (reviewer) await dressCellPane(reviewer, "reviewer", member.oracle, headPane, emit);
-        }
-      }
-      // The chain is worker → reviewer → head, so it can only be wired once both
-      // ends exist; a pre-existing worker never got this on THIS run.
-      if (worker && reviewer) await hostExec(`tmux set-option -p -t ${shellArg(worker)} @idle_notify_pane ${shellArg(reviewer)}`);
     } catch (e: any) {
       emit(`⚠ ${member.oracle}: pane creation failed (${e.message})`);
     }
@@ -436,7 +417,7 @@ export async function companyCellSpawn(company: string | undefined, emit: (line:
     const after = rolePanesOf(await listSessionPanes(sessionName), member.oracle);
     const missing = CELL_ROLES.filter((r) => !after.has(r));
     if (missing.length === 0) {
-      log(`${member.oracle}: worker=${after.get("worker")} reviewer=${after.get("reviewer")} (head ${headPane} untouched)`);
+      log(`${member.oracle}: worker=${after.get("worker")} (head ${headPane} untouched)`);
       ready++;
     } else {
       emit(`⚠ ${member.oracle}: INCOMPLETE — no pane carrying ${ORACLE_PANE_OPTION}=${member.oracle}:${missing.join(`/${member.oracle}:`)} after spawn; head ${headPane} is untouched and still stamped.`);

@@ -1,0 +1,12 @@
+{
+  "name": "policy-probe",
+  "version": "1.0.0",
+  "entry": "./index.ts",
+  "sdk": "^1.0.0",
+  "description": "Did this pane's company policy + brain INDEX inject actually arrive? Names which silent hook exit swallowed it.",
+  "cli": {
+    "command": "policy-probe",
+    "help": "maw policy-probe — pull-probe: did the policy/brain inject reach this pane, and if not, which of the hook's silent exits swallowed it"
+  },
+  "weight": 5
+}

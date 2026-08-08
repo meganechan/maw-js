@@ -48,15 +48,6 @@ const HOOKS: HookSpec[] = [
     b64: "IyEvYmluL2Jhc2gKIyBDbGF1ZGUgQ29kZSBTZXNzaW9uU3RhcnQgaG9vayDihpIgbWF3IHdvcmtsb2c6IGluamVjdCBsYXRlc3QgY29tcGFueSBzdGF0ZSBvbiB3YWtlCiMgKG9yaWVudGF0aW9uKSwgc28gYW4gb3JhY2xlIHN0YXJ0cyBhbHJlYWR5IGF3YXJlIG9mIHJlY2VudCBhY3Rpdml0eSArIG9wZW4gY2xhaW1zLgojIFByb3Zpc2lvbmVkIGJ5IGBtYXcgd2F0Y2ggc2V0dXAtaG9va3NgLgoKTUFXX1BPUlQ9IiR7TUFXX1BPUlQ6LTM0NTZ9IgpCQVNFPSJodHRwOi8vbG9jYWxob3N0OiR7TUFXX1BPUlR9Igpjb21tYW5kIC12IGpxID4vZGV2L251bGwgMj4mMSB8fCBleGl0IDAKCk9SQUNMRT0iJHtDTEFVREVfQUdFTlRfTkFNRTotfSIKaWYgWyAteiAiJE9SQUNMRSIgXTsgdGhlbgogIE9SQUNMRT0kKHRtdXggZGlzcGxheS1tZXNzYWdlIC1wICcje3Nlc3Npb25fbmFtZX0nIDI+L2Rldi9udWxsIHwgc2VkICdzL15bMC05XSotLy8nKQpmaQpbIC16ICIkT1JBQ0xFIiBdICYmIGV4aXQgMAoKSU5KRUNUPSQoY3VybCAtcyAtLW1heC10aW1lIDIgIiRCQVNFL2FwaS93b3JrbG9nP29yYWNsZT0ke09SQUNMRX0iIDI+L2Rldi9udWxsIHwganEgLXIgJy5pbmplY3QgLy8gZW1wdHknKQpbIC16ICIkSU5KRUNUIiBdICYmIGV4aXQgMApqcSAtbiAtLWFyZyBjdHggIiRJTkpFQ1QiICd7aG9va1NwZWNpZmljT3V0cHV0Ontob29rRXZlbnROYW1lOiJTZXNzaW9uU3RhcnQiLCBhZGRpdGlvbmFsQ29udGV4dDokY3R4fX0nCmV4aXQgMAo=",
   },
   {
-    // Company/dept policy — inject ONLY while the oracle is attached (server
-    // decides via the attach marker). Separate concern + endpoint from worklog,
-    // toggles independently. UserPromptSubmit only — wake injects nothing.
-    event: "UserPromptSubmit",
-    matcher: "",
-    file: "company-policy.sh",
-    b64: "IyEvYmluL2Jhc2gKIyBDbGF1ZGUgQ29kZSBVc2VyUHJvbXB0U3VibWl0IGhvb2sg4oaSIG1hdyBwb2xpY3k6IGluamVjdCBjb21wYW55ICsgZGVwdCBwb2xpY3kKIyBiYWNrIGludG8gY29udGV4dCwgYnV0IE9OTFkgd2hpbGUgdGhlIG9yYWNsZSBpcyBhdHRhY2hlZCAoc2VydmVyIGRlY2lkZXM7CiMgZGV0YWNoZWQg4oaSIGVtcHR5IOKGkiBub3RoaW5nIGluamVjdGVkKS4gSW5qZWN0LW9ubHkg4oCUIG5vIGNhcHR1cmUuCiMgUHJvdmlzaW9uZWQgYnkgYG1hdyB3YXRjaCBzZXR1cC1ob29rc2AuCgpNQVdfUE9SVD0iJHtNQVdfUE9SVDotMzQ1Nn0iCkJBU0U9Imh0dHA6Ly9sb2NhbGhvc3Q6JHtNQVdfUE9SVH0iCmNvbW1hbmQgLXYganEgPi9kZXYvbnVsbCAyPiYxIHx8IGV4aXQgMAoKT1JBQ0xFPSIke0NMQVVERV9BR0VOVF9OQU1FOi19IgppZiBbIC16ICIkT1JBQ0xFIiBdOyB0aGVuCiAgT1JBQ0xFPSQodG11eCBkaXNwbGF5LW1lc3NhZ2UgLXAgJyN7c2Vzc2lvbl9uYW1lfScgMj4vZGV2L251bGwgfCBzZWQgJ3MvXlswLTldKi0vLycpCmZpClsgLXogIiRPUkFDTEUiIF0gJiYgZXhpdCAwCgpJTkpFQ1Q9JChjdXJsIC1zIC0tbWF4LXRpbWUgMiAiJEJBU0UvYXBpL3BvbGljeT9vcmFjbGU9JHtPUkFDTEV9IiAyPi9kZXYvbnVsbCB8IGpxIC1yICcuaW5qZWN0IC8vIGVtcHR5JykKWyAteiAiJElOSkVDVCIgXSAmJiBleGl0IDAKanEgLW4gLS1hcmcgY3R4ICIkSU5KRUNUIiAne2hvb2tTcGVjaWZpY091dHB1dDp7aG9va0V2ZW50TmFtZToiVXNlclByb21wdFN1Ym1pdCIsIGFkZGl0aW9uYWxDb250ZXh0OiRjdHh9fScKZXhpdCAwCg==",
-  },
-  {
     // /toilet away (kobo-280) — set presence away at harness submit-time, before the
     // skill boots, so hey can't inject mid-wrap. Gated on the explicit /toilet prompt;
     // the skill's step-0 away stays as backup. Inject-nothing (no stdout).
@@ -91,6 +82,16 @@ const HOOKS: HookSpec[] = [
     b64: MAW_MCP_NUDGE_B64, // single source of truth in status-reporter.ts (co-located universal hook)
   },
 ];
+
+// Retired hooks — no longer generated or installed, but STILL stripped by
+// pruneOracleHooks so `maw company hooks prune <oracle>` can clean an existing
+// settings.json that was provisioned before the retirement. Dropping a file from
+// HOOKS alone would silently narrow prune (it strips by iterating HOOKS), leaving
+// the stale line un-removable by any maw verb.
+//   company-policy.sh — UserPromptSubmit company/dept policy + brain INDEX inject,
+//   retired at Tony's call. Script source kept at scripts/hooks/company-policy.sh;
+//   /api/policy and the policy store are untouched and still serve over HTTP.
+const RETIRED_HOOK_FILES = ["company-policy.sh"];
 
 export function hookScriptBody(file: string): string {
   const h = HOOKS.find(x => x.file === file);
@@ -268,8 +269,9 @@ function ensureSeatResumeEntry(settings: any): boolean {
 export type ProvisionOutcome = "updated" | "alreadyOk" | "skipped";
 
 /**
- * Provision the unified company-context hook set (worklog capture/inject +
- * company-policy inject) into ONE oracle's `.claude/settings.json`, idempotently.
+ * Provision the unified company-context hook set (worklog capture/inject) into
+ * ONE oracle's `.claude/settings.json`, idempotently. The company-policy inject
+ * hook was part of this set until it was retired — see RETIRED_HOOK_FILES.
  *
  * Returns:
  *  - "updated"   — installed the missing hooks
@@ -378,7 +380,10 @@ export function pruneOracleHooks(
     const kept: any[] = [];
     for (const e of entries) {
       if (Array.isArray(e.hooks)) {
-        const hooksKept = e.hooks.filter((hk: any) => !HOOKS.some(h => isWorklogHook(hk, h.file)));
+        const hooksKept = e.hooks.filter(
+          (hk: any) => !HOOKS.some(h => isWorklogHook(hk, h.file))
+            && !RETIRED_HOOK_FILES.some(f => isWorklogHook(hk, f)),
+        );
         if (hooksKept.length !== e.hooks.length) changed = true;
         if (hooksKept.length === 0) continue; // entry now empty → drop
         e.hooks = hooksKept;

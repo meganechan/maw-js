@@ -21,6 +21,9 @@
  *   server — `curl -s --max-time 2 .../api/policy` failed or timed out
  *   inject — the endpoint answered with an empty `.inject` (not attached, or
  *            attached to a company the registry doesn't place this oracle in)
+ *   brain  — NOT a hook exit: the inject arrived, but with no brain-INDEX
+ *            section at all (inject.ts only appends it when ψ/INDEX.md exists
+ *            and is non-empty). Half the inject missing, silently.
  *
  * Plus the case a green "entry count" probe CANNOT see (kobo-853 AC3): the INDEX
  * is injected from a clone ON DISK, so a clone that trails its remote injects a
@@ -36,10 +39,18 @@ import { execFileSync } from "child_process";
 import { existsSync } from "fs";
 import { mawConfigPath } from "../xdg";
 import { getPolicyAttach } from "./attach-store";
+import { BRAIN_SECTION_HEADING } from "./inject";
 import { brainDir } from "./policy-store";
 
-/** Which stage of the inject chain swallowed it. Ordered as the hook runs. */
-export type ProbeStage = "hook" | "jq" | "oracle" | "server" | "inject";
+/**
+ * Which stage swallowed it. The first five are the hook's own exits, in the
+ * order it runs them. `brain` is the odd one out: the inject DID arrive, it
+ * just arrived without its brain half — see BRAIN_ONLY_STAGE.
+ */
+export type ProbeStage = "hook" | "jq" | "oracle" | "server" | "inject" | "brain";
+
+/** The one stage that means "arrived, but incomplete" rather than "never arrived". */
+export const BRAIN_ONLY_STAGE = "brain";
 
 export type BrainFreshness =
   | { state: "fresh"; upstream: string }
@@ -95,9 +106,22 @@ export function resolveOracleLikeHook(): string {
   }
 }
 
-/** Brain INDEX entry lines, counted the same way the field probe greps them. */
+/**
+ * Brain INDEX entry lines — counted INSIDE the brain section only.
+ *
+ * A whole-inject grep for `- \`` is wrong and was actively misleading: policy
+ * markdown carries the same bullet shape (pgw's company.md has one right now),
+ * so a company with no brain repo printed "brain INDEX: 1 entries" — a number
+ * manufactured out of policy prose. 0 here means "the inject carried no brain
+ * section", which is a real answer, not a formatting detail.
+ *
+ * ponytail: no end anchor — inject.ts appends the brain section last, by design.
+ */
 export function countBrainEntries(inject: string): number {
-  return inject.split("\n").filter(l => l.startsWith("- `")).length;
+  const lines = inject.split("\n");
+  const start = lines.findIndex(l => l.startsWith(BRAIN_SECTION_HEADING));
+  if (start < 0) return 0;
+  return lines.slice(start + 1).filter(l => l.startsWith("- `")).length;
 }
 
 /** Port the hook talks to (`${MAW_PORT:-3456}`), read fresh so a test/alt port works. */
@@ -243,8 +267,26 @@ export async function probePolicyInject(
 
   const company = attach?.company ?? null;
   const entries = countBrainEntries(inject);
-  const brain = company ? deps.brainFreshness(company) : null;
   const brainPath = company ? deps.brainPathOf(company) : null;
+
+  // Policy arrived, brain INDEX did not. inject.ts appends that section only
+  // when ψ/INDEX.md exists and is non-empty, so a missing clone / unbuilt INDEX
+  // silently drops half the inject — the exact silence this probe exists for.
+  // Checked BEFORE freshness: there is no point comparing a clone that isn't
+  // feeding the inject in the first place.
+  if (entries === 0) {
+    return {
+      ...BLANK,
+      oracle, company, dept: attach?.dept ?? null, brainPath,
+      stage: "brain",
+      reason: `policy inject arrived, but it carried NO brain INDEX section${company ? ` for '${company}'` : ""} — ψ/INDEX.md is missing, empty, or the clone isn't there, so every attached oracle is running without the brain half`,
+      fix: brainPath
+        ? `check ${brainPath}/ψ/INDEX.md exists and is non-empty (regenerate: bun scripts/index.ts in that repo)`
+        : "attach this oracle to a company with a brain repo",
+    };
+  }
+
+  const brain = company ? deps.brainFreshness(company) : null;
 
   if (brain?.state === "behind") {
     return {

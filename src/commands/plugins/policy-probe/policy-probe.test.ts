@@ -29,6 +29,12 @@ describe("policy-probe exit codes", () => {
     expect(r.ok).toBe(false);
     expect(r.exitCode).toBe(2);
   });
+
+  it("arrived with no brain section → exit 3, distinct from both 1 and 2", () => {
+    const r = toResult({ ...base, ok: false, stage: "brain", entries: 0, brain: null });
+    expect(r.ok).toBe(false);
+    expect(r.exitCode).toBe(3);
+  });
 });
 
 describe("policy-probe output", () => {
@@ -41,6 +47,13 @@ describe("policy-probe output", () => {
   it("behind clone prints the commit count, not just 'stale'", () => {
     const out = formatProbe({ ...base, ok: false, brain: { state: "behind", behind: 44, upstream: "origin/main" } });
     expect(out).toContain("44 commits BEHIND origin/main");
+  });
+
+  it("no brain section does NOT print as OK, and does not claim the inject never arrived", () => {
+    const out = formatProbe({ ...base, ok: false, stage: "brain", entries: 0, brain: null, reason: "carried NO brain INDEX section for 'kobo'" });
+    expect(out).toContain("carried NO brain INDEX");
+    expect(out).not.toContain("policy inject OK");
+    expect(out).not.toContain("did NOT reach");
   });
 
   it("unmeasurable freshness never renders as up to date", () => {

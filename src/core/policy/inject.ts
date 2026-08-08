@@ -18,6 +18,14 @@ import { scopeOfOracle } from "../worklog/company-scope";
 import { loadCompany, kbTagFor } from "../../vendor/mpr-plugins/company/company-helpers";
 import { readCompanyPolicy, readDeptPolicy, readBrainIndex, brainLearningsDir } from "./policy-store";
 
+/**
+ * Heading that opens the brain-INDEX section. Exported so probe.ts can anchor
+ * its entry count ON THE SECTION instead of grepping the whole inject — policy
+ * markdown contains `- \`x\`` bullets too, and counting those manufactured a
+ * "brain INDEX: N entries" for companies with no brain repo at all.
+ */
+export const BRAIN_SECTION_HEADING = "## Company brain — INDEX";
+
 export function buildPolicyInject(oracle: string): string {
   if (!isPolicyAttached(oracle)) return "";
 
@@ -56,7 +64,7 @@ export function buildPolicyInject(oracle: string): string {
   const brainIndex = readBrainIndex(company)?.trim();
   if (brainIndex) {
     sections.push(
-      `## Company brain — INDEX (อ่าน entry เต็มจาก ${brainLearningsDir(company)} เมื่อต้องใช้)\n\n${brainIndex}`,
+      `${BRAIN_SECTION_HEADING} (อ่าน entry เต็มจาก ${brainLearningsDir(company)} เมื่อต้องใช้)\n\n${brainIndex}`,
     );
   }
 

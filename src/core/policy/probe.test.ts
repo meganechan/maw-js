@@ -20,15 +20,25 @@ import {
   type PolicyProbeDeps,
   type BrainFreshness,
 } from "./probe";
+import { BRAIN_SECTION_HEADING } from "./inject";
 
 const INJECT_OK = [
   "## Department (company policy — active while attached)",
   "- Company: kobo",
   "",
-  "## Company brain — INDEX (อ่าน entry เต็มจาก /x/kobo-brain/ψ/memory/learnings เมื่อต้องใช้)",
+  `${BRAIN_SECTION_HEADING} (อ่าน entry เต็มจาก /x/kobo-brain/ψ/memory/learnings เมื่อต้องใช้)`,
   "",
   "- `alpha` — hook one",
   "- `beta` — hook two",
+].join("\n");
+
+/** Policy arrived, brain section did not — and the policy half uses the same bullet shape. */
+const INJECT_NO_BRAIN = [
+  "## Department (company policy — active while attached)",
+  "- Company: kobo",
+  "",
+  "# นโยบายบริษัท",
+  "- `sign-gate` — a policy bullet, not a brain entry",
 ].join("\n");
 
 function deps(over: Partial<PolicyProbeDeps> = {}): PolicyProbeDeps {
@@ -132,6 +142,25 @@ describe("probePolicyInject — arrival + brain staleness", () => {
     expect(stale.fix).toContain("pull --ff-only");
   });
 
+  it("inject arrives with NO brain section → NOT ok, stage 'brain', entries 0 (the false green this PR fixes)", async () => {
+    const r = await probePolicyInject(deps({ fetchInject: async () => ({ ok: true, inject: INJECT_NO_BRAIN }) }));
+    expect(r.entries).toBe(0);
+    expect(r.ok).toBe(false);
+    expect(r.stage).toBe("brain");
+    expect(r.reason).toContain("NO brain INDEX section");
+    expect(r.company).toBe("kobo");
+  });
+
+  it("a missing brain section short-circuits BEFORE the freshness check — nothing to compare", async () => {
+    let checked = 0;
+    const r = await probePolicyInject(deps({
+      fetchInject: async () => ({ ok: true, inject: INJECT_NO_BRAIN }),
+      brainFreshness: () => { checked++; return { state: "fresh", upstream: "origin/main" }; },
+    }));
+    expect(r.stage).toBe("brain");
+    expect(checked).toBe(0);
+  });
+
   it("freshness unmeasurable → stays ok but is reported as unknown, NEVER as fresh", async () => {
     const r = await probePolicyInject(deps({
       brainFreshness: () => ({ state: "unknown", reason: "git fetch failed (offline)" }),
@@ -204,12 +233,28 @@ describe("brainFreshnessAt", () => {
 });
 
 describe("countBrainEntries", () => {
-  it("counts INDEX entry lines the same way the field probe greps them", () => {
+  it("counts the INDEX entry lines inside the brain section", () => {
     expect(countBrainEntries(INJECT_OK)).toBe(2);
   });
 
-  it("ignores headings, prose and plain bullets", () => {
-    expect(countBrainEntries("# INDEX\n- plain bullet\ntext `x`\n- `real` — hook")).toBe(1);
+  it("ignores headings, prose and plain bullets inside the section", () => {
+    expect(countBrainEntries(`${BRAIN_SECTION_HEADING} (x)\n# INDEX\n- plain bullet\ntext \`x\`\n- \`real\` — hook`)).toBe(1);
+  });
+
+  it("does NOT count policy bullets that sit ABOVE the brain heading", () => {
+    const inject = [
+      "## Department (company policy — active while attached)",
+      "- `sign-gate` — policy prose that happens to use the same bullet shape",
+      `${BRAIN_SECTION_HEADING} (อ่าน entry เต็มจาก /x เมื่อต้องใช้)`,
+      "- `only-this-one` — hook",
+    ].join("\n");
+    expect(countBrainEntries(inject)).toBe(1);
+  });
+
+  it("no brain heading at all → 0, however many policy bullets there are", () => {
+    // The live shape this fixes: pgw's company.md carries one `- \`x\`` bullet, so a
+    // whole-inject grep reported "brain INDEX: 1 entries" for a company with no brain repo.
+    expect(countBrainEntries("## Company (policy)\n- `a` — x\n- `b` — y")).toBe(0);
   });
 
   it("empty inject → 0", () => {

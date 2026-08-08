@@ -51,7 +51,7 @@ function brainRoot(): string {
 }
 
 /** Where a company's brain repo lives (`<brainRoot>/<company>-brain`). */
-function brainDir(company: string): string {
+export function brainDir(company: string): string {
   return join(brainRoot(), `${company}-brain`);
 }
 

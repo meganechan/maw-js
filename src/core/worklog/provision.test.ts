@@ -44,15 +44,26 @@ describe("per-oracle hook provisioning", () => {
     expect(hooksStatusForOracle("ghost", { ghqRoot: ghq }).hasDir).toBe(false);
   });
 
-  it("updated → alreadyOk (idempotent); installs the full unified set incl. policy", () => {
+  it("updated → alreadyOk (idempotent); installs the full unified set", () => {
     mkRepo("alice");
     expect(provisionOracleHooks("alice", { ghqRoot: ghq })).toBe("updated");
     const st = hooksStatusForOracle("alice", { ghqRoot: ghq });
     expect(st.hasDir).toBe(true);
     expect(st.missing).toEqual([]);
-    expect(st.installed).toContain("company-policy.sh");
     expect(st.installed.length).toBeGreaterThanOrEqual(4);
     expect(provisionOracleHooks("alice", { ghqRoot: ghq })).toBe("alreadyOk");
+  });
+
+  // RETIRED — company-policy.sh is no longer generated or installed. This asserts the
+  // ABSENCE at both levels the old test asserted presence at: the status report AND the
+  // commands actually written to settings.json. Re-adding the HOOKS entry fails this.
+  it("does NOT install the retired company-policy hook", () => {
+    mkRepo("alice");
+    provisionOracleHooks("alice", { ghqRoot: ghq });
+    const st = hooksStatusForOracle("alice", { ghqRoot: ghq });
+    expect(st.installed).not.toContain("company-policy.sh");
+    expect(st.missing).not.toContain("company-policy.sh"); // retired, not "missing"
+    expect(allCommands(readSettings("alice")).some((c) => c.includes("company-policy"))).toBe(false);
   });
 
   // kobo-295 — auto-seat: provisionOracleHooks wires the SessionStart seat-resume hook
@@ -120,15 +131,37 @@ describe("per-oracle hook provisioning", () => {
     provisionOracleHooks("carol", { ghqRoot: ghq });
     let cmds = allCommands(readSettings("carol"));
     expect(cmds).toContain("/my/custom.sh");
-    expect(cmds.some((c) => c.includes("company-policy.sh"))).toBe(true);
+    expect(cmds.some((c) => c.includes("worklog-"))).toBe(true); // ours went in
 
     expect(pruneOracleHooks("carol", { ghqRoot: ghq })).toBe("pruned");
     cmds = allCommands(readSettings("carol"));
     expect(cmds).toContain("/my/custom.sh"); // foreign hook survives
-    expect(cmds.some((c) => c.includes("company-policy.sh"))).toBe(false);
     expect(cmds.some((c) => c.includes("worklog-"))).toBe(false);
 
     expect(pruneOracleHooks("carol", { ghqRoot: ghq })).toBe("nothing");
+  });
+
+  // Retiring company-policy.sh removed it from HOOKS — but prune strips BY iterating
+  // HOOKS, so without RETIRED_HOOK_FILES the ~20 settings.json files provisioned before
+  // the retirement would keep a line no maw verb could remove. This pins that
+  // `maw company hooks prune <oracle>` is still the cleanup path for them.
+  it("prune strips a LEGACY company-policy line left by an older install", () => {
+    const dir = mkRepo("dave");
+    writeFileSync(
+      join(dir, ".claude", "settings.json"),
+      JSON.stringify({
+        hooks: {
+          UserPromptSubmit: [
+            { matcher: "", hooks: [{ type: "command", command: "/home/u/.config/maw/hooks/company-policy.sh" }] },
+            { matcher: "", hooks: [{ type: "command", command: "/my/custom.sh" }] },
+          ],
+        },
+      }, null, 2),
+    );
+    expect(pruneOracleHooks("dave", { ghqRoot: ghq })).toBe("pruned");
+    const cmds = allCommands(readSettings("dave"));
+    expect(cmds.some((c) => c.includes("company-policy"))).toBe(false);
+    expect(cmds).toContain("/my/custom.sh"); // foreign hook still survives
   });
 
   it("prune skipped when repo dir absent", () => {

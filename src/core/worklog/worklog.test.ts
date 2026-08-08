@@ -502,9 +502,17 @@ describe("hook scripts stay in sync with embedded base64", () => {
   it("decoded base64 matches scripts/hooks/*.sh", async () => {
     const { hookScriptBody } = await import("./hook-setup");
     const root = join(import.meta.dir, "../../..");
-    for (const f of ["worklog-tool.sh", "worklog-convo.sh", "worklog-orient.sh", "company-policy.sh", "toilet-away.sh", "seat-back.sh", "maw-mcp-nudge.sh", "maw-statusline.sh"]) {
+    for (const f of ["worklog-tool.sh", "worklog-convo.sh", "worklog-orient.sh", "toilet-away.sh", "seat-back.sh", "maw-mcp-nudge.sh", "maw-statusline.sh"]) {
       const onDisk = readFileSync(join(root, "scripts/hooks", f), "utf-8");
       expect(hookScriptBody(f)).toBe(onDisk);
     }
+  });
+
+  // RETIRED — company-policy.sh used to be in the list above. It is no longer embedded,
+  // so it is no longer provisioned to ~/.config/maw/hooks by ensureWorklogHookScripts.
+  // Re-adding the HOOKS entry makes hookScriptBody return a body instead of throwing.
+  it("company-policy.sh is no longer an embedded hook", async () => {
+    const { hookScriptBody } = await import("./hook-setup");
+    expect(() => hookScriptBody("company-policy.sh")).toThrow(/unknown worklog hook/);
   });
 });

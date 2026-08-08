@@ -1,8 +1,14 @@
 #!/bin/bash
+# RETIRED — this hook is NOT wired. It was dropped from HOOKS[] in
+# src/core/worklog/hook-setup.ts, so `maw watch setup-hooks` no longer provisions it
+# and no base64 copy of this file is embedded anywhere. That also means the
+# byte-identity sync test in worklog.test.ts no longer covers this file: editing it
+# changes nothing and is checked by nothing. Kept as the source of record so the hook
+# can be revived by restoring the HOOKS entry — do not "fix" the missing sync test.
+#
 # Claude Code UserPromptSubmit hook → maw policy: inject company + dept policy
 # back into context, but ONLY while the oracle is attached (server decides;
 # detached → empty → nothing injected). Inject-only — no capture.
-# Provisioned by `maw watch setup-hooks`.
 
 MAW_PORT="${MAW_PORT:-3456}"
 BASE="http://localhost:${MAW_PORT}"

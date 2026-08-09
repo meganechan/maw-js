@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { annotatePane } from "../../src/commands/plugins/tmux/impl";
+import { annotatePane, paneAwayJudge } from "../../src/commands/plugins/tmux/impl";
 
 // Pure unit tests for the annotation logic used by `maw tmux ls` (#395).
 // No mocks — just deterministic inputs → deterministic outputs.
@@ -70,5 +70,47 @@ describe("annotatePane — #395 pure annotation logic", () => {
   test("empty fleet + empty team + claude → 'orphan' (can't verify not-fleet in vacuum)", () => {
     const p = { id: "%701", target: "any:0.0", command: "claude" };
     expect(annotatePane(p, new Set(), new Map())).toBe("orphan");
+  });
+});
+
+// kobo-868 — pure twin of isPaneAway (presence-away.ts) that also names the
+// deciding marker, feeding the AWAY column in `maw ls -v`. No mocks, no IO —
+// same style as annotatePane above.
+describe("paneAwayJudge — kobo-868 ls -v AWAY column", () => {
+  test("no events at all → away:false, judge:none (AC4)", () => {
+    expect(paneAwayJudge([], "%40")).toEqual({ away: false, judge: null });
+  });
+
+  test("newest marker is a paneless (ALL-PANES) away → away:true, judge has no paneId", () => {
+    const events = [{ kind: "away" as const, ts: 100 }];
+    const result = paneAwayJudge(events, "%40");
+    expect(result.away).toBe(true);
+    expect(result.judge).toEqual({ paneId: undefined, ts: 100, kind: "away" });
+  });
+
+  test("per-pane back clears an OWN away marker", () => {
+    const events = [
+      { kind: "away" as const, ts: 1, paneId: "%40" },
+      { kind: "back" as const, ts: 2, paneId: "%40" },
+    ];
+    expect(paneAwayJudge(events, "%40")).toEqual({
+      away: false,
+      judge: { paneId: "%40", ts: 2, kind: "back" },
+    });
+  });
+
+  test("per-pane back does NOT clear a paneless ALL-PANES away (the exact kobo-856 poison)", () => {
+    const events = [
+      { kind: "away" as const, ts: 1 }, // paneless — decides for every pane
+      { kind: "back" as const, ts: 2, paneId: "%373" }, // only clears %373
+    ];
+    expect(paneAwayJudge(events, "%40").away).toBe(true); // %40 still stuck
+    expect(paneAwayJudge(events, "%373").away).toBe(false); // %373's own back clears it
+  });
+
+  test("a marker with TMUX_PANE set (AC3 negative control) scopes normally, unaffected panes stay clear", () => {
+    const events = [{ kind: "away" as const, ts: 1, paneId: "%40" }];
+    expect(paneAwayJudge(events, "%40").away).toBe(true);
+    expect(paneAwayJudge(events, "%41").away).toBe(false);
   });
 });

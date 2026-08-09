@@ -51,10 +51,8 @@ writeFileSync(join(dir, "companies", "testco.json"), JSON.stringify({
   },
 }));
 mkdirSync(join(home, ".claude", "skills", "cell", "contracts"), { recursive: true });
-for (const role of ["worker", "reviewer"]) {
-  writeFileSync(join(home, ".claude", "skills", "cell", "contracts", `${role}.md`),
-    `# ${role} contract\ncompany={{COMPANY}} dept={{DEPT}}\n`);
-}
+writeFileSync(join(home, ".claude", "skills", "cell", "contracts", "worker.md"),
+  "# worker contract\ncompany={{COMPANY}} dept={{DEPT}}\n");
 for (const p of [repoA, repoB, wrapperRepo]) mkdirSync(p, { recursive: true });
 
 interface FakePane { id: string; window: string; identity: string }
@@ -87,13 +85,6 @@ mock.module("maw-js/sdk", () => ({
     if (cmd.includes("new-window")) {
       const sess = sessionOfTarget(cmd);
       const id = `%w${nextPane++}`;
-      (sessions[sess] ??= []).push({ id, window: "cell-workers", identity: "" });
-      return `${id}\n`;
-    }
-    if (cmd.includes("split-window")) {
-      const target = /-t '([^']+)'/.exec(cmd)?.[1] ?? "";
-      const sess = Object.keys(sessions).find((s) => sessions[s]!.some((p) => p.id === target)) ?? "";
-      const id = `%r${nextPane++}`;
       (sessions[sess] ??= []).push({ id, window: "cell-workers", identity: "" });
       return `${id}\n`;
     }
@@ -163,7 +154,7 @@ describe("one process, one roster pass, two separate cells (kobo-780, kobo-822)"
   test("each oracle's contracts land in ITS OWN repo — the second pass does not overwrite the first", async () => {
     const out = await spawnAll();
 
-    for (const f of ["worker-contract.md", "reviewer-contract.md"]) {
+    for (const f of ["worker-contract.md"]) {
       expect(existsSync(join(stateDirOf(repoA), f))).toBe(true);
       expect(existsSync(join(stateDirOf(repoB), f))).toBe(true);
     }
@@ -189,8 +180,8 @@ describe("one process, one roster pass, two separate cells (kobo-780, kobo-822)"
 
     const stamped = Object.values(sessions).flat().map((p) => p.identity).sort();
     expect(stamped).toEqual([
-      "patchwork:head", "patchwork:reviewer", "patchwork:worker",
-      "stitch:head", "stitch:reviewer", "stitch:worker",
+      "patchwork:head", "patchwork:worker",
+      "stitch:head", "stitch:worker",
     ].sort());
     expect(commands.some((c) => c.includes("@oracle_pane") && c.includes("eq3"))).toBe(false);
   });
@@ -198,8 +189,8 @@ describe("one process, one roster pass, two separate cells (kobo-780, kobo-822)"
   test("panes are created in each oracle's OWN session, not the caller's", async () => {
     await spawnAll();
 
-    expect(sessions.sessA!.map((p) => p.id)).toEqual(["%headA", "%w0", "%r1"]);
-    expect(sessions.sessB!.map((p) => p.id)).toEqual(["%headB", "%w2", "%r3"]);
+    expect(sessions.sessA!.map((p) => p.id)).toEqual(["%headA", "%w0"]);
+    expect(sessions.sessB!.map((p) => p.id)).toEqual(["%headB", "%w1"]);
     expect(commands.some((c) => c.includes("new-window") && c.includes("-t 'sessA:'"))).toBe(true);
     expect(commands.some((c) => c.includes("new-window") && c.includes("-t 'sessB:'"))).toBe(true);
   });
@@ -207,7 +198,7 @@ describe("one process, one roster pass, two separate cells (kobo-780, kobo-822)"
   test("each launch line cd's into that oracle's repo and exports that oracle's state dir", async () => {
     await spawnAll();
 
-    expect(creationCmds()).toHaveLength(4);
+    expect(creationCmds()).toHaveLength(2);
     for (const cmd of creationCmds()) {
       // the launch line is nested inside the tmux argument — read it as the
       // pane's shell will, not as the tmux command string

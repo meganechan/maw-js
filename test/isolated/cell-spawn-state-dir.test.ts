@@ -12,8 +12,8 @@
  * model. Since kobo-822 that `||` IS the whole model ladder: the old
  * capture-pane boot poll, kill-window and respawn are gone.
  *
- * kobo-822 moved these guarantees from the HEAD launch line to the worker and
- * reviewer ones. The head has no launch line any more — cell never starts it.
+ * kobo-822 moved these guarantees from the HEAD launch line to the worker
+ * one. The head has no launch line any more — cell never starts it.
  *
  * How they are tested: the line is RUN, by a real /bin/sh, with a fake `claude`
  * first on PATH. A `toContain` on the string cannot tell you whether the shell
@@ -49,10 +49,8 @@ mkdirSync(join(dir, "companies"), { recursive: true });
 writeFileSync(join(dir, "companies", "testco.json"),
   JSON.stringify({ name: "testco", teams: { core: { members: [{ oracle: "patchwork" }] } } }));
 mkdirSync(join(home, ".claude", "skills", "cell", "contracts"), { recursive: true });
-for (const role of ["worker", "reviewer"]) {
-  writeFileSync(join(home, ".claude", "skills", "cell", "contracts", `${role}.md`),
-    `# ${role} contract\ncompany={{COMPANY}} dept={{DEPT}} board={{BOARD}}\n`);
-}
+writeFileSync(join(home, ".claude", "skills", "cell", "contracts", "worker.md"),
+  "# worker contract\ncompany={{COMPANY}} dept={{DEPT}} board={{BOARD}}\n");
 mkdirSync(staleStateDir, { recursive: true });
 
 // Fake `claude`: reports the model it was asked for and echoes the system prompt
@@ -88,10 +86,6 @@ mock.module("maw-js/sdk", () => ({
     if (cmd.includes("new-window")) {
       paneRows.push("%worker|||⚒ worker|||cell-workers|||patchwork:worker|||/tmp");
       return "%worker\n";
-    }
-    if (cmd.includes("split-window")) {
-      paneRows.push("%reviewer|||🔎 reviewer|||cell-workers|||patchwork:reviewer|||/tmp");
-      return "%reviewer\n";
     }
     if (cmd.includes("list-panes")) return paneRows.join("\n") + "\n";
     // kobo-780 — the anchor. `dir` stands in for the oracle's own repo, which is
@@ -134,14 +128,13 @@ beforeEach(() => {
   process.env.TMUX_PANE = "%invoker";
 });
 
-/** the launch line as tmux receives it for a created pane, un-shell-escaped */
-async function launchLine(role: "worker" | "reviewer"): Promise<string> {
+/** the worker launch line as tmux receives it for a created pane, un-shell-escaped */
+async function launchLine(): Promise<string> {
   const out: string[] = [];
   await companyCellSpawn("testco", (line) => out.push(line), true);
-  const verb = role === "worker" ? "new-window" : "split-window";
-  const cmd = commands.find((c) => c.includes(verb)) ?? "";
+  const cmd = commands.find((c) => c.includes("new-window")) ?? "";
   const m = /-F '#\{pane_id\}' '(.*)'$/s.exec(cmd);
-  if (!m) throw new Error(`no ${role} launch line was passed to tmux: ${cmd}`);
+  if (!m) throw new Error(`no worker launch line was passed to tmux: ${cmd}`);
   return m[1]!.replaceAll("'\\''", "'");
 }
 
@@ -157,7 +150,7 @@ const promptOf = (stdout: string) => /<<<PROMPT\n([\s\S]*)\nPROMPT>>>/.exec(stdo
 
 describe("the state dir is resolved ONCE, from the anchor, never from env or cwd (kobo-765 B5, kobo-780)", () => {
   test("stale CREW_STATE_DIR is ignored; the pane boots on the contract spawn actually wrote", async () => {
-    const launch = await launchLine("worker");
+    const launch = await launchLine();
 
     // The writer ignored the stale export and this process's cwd...
     expect(existsSync(join(staleStateDir, "worker-contract.md"))).toBe(false);
@@ -176,13 +169,13 @@ describe("the state dir is resolved ONCE, from the anchor, never from env or cwd
   });
 
   test("the exported CREW_STATE_DIR (the seat/Stop hooks read it) is the resolved dir, not the inherited one", async () => {
-    const launch = await launchLine("worker");
+    const launch = await launchLine();
     expect(launch).toContain(`CREW_STATE_DIR='${stateDir}'`);
     expect(launch).not.toContain(staleStateDir);
   });
 
   test("NEGATIVE: contract empty → the pane is NOT started at all (no path to an empty system prompt)", async () => {
-    const launch = await launchLine("worker");
+    const launch = await launchLine();
     writeFileSync(join(stateDir, "worker-contract.md"), "");
 
     const stdout = runLaunch(launch);
@@ -191,23 +184,18 @@ describe("the state dir is resolved ONCE, from the anchor, never from env or cwd
   });
 
   test("NEGATIVE: contract missing → refused, not booted blank", async () => {
-    const launch = await launchLine("worker");
+    const launch = await launchLine();
     rmSync(join(stateDir, "worker-contract.md"));
 
     const stdout = runLaunch(launch);
     expect(stdout).not.toContain("BOOTED");
     expect(stdout).toContain("missing or empty");
   });
-
-  test("the reviewer gets its OWN contract, not the worker's", async () => {
-    const stdout = runLaunch(await launchLine("reviewer"));
-    expect(promptOf(stdout)).toContain("reviewer contract");
-  });
 });
 
 describe("the model ladder lives in the pane's own shell (kobo-765 B7, kobo-822)", () => {
   test("first model refuses → the fallback comes up in the same pane, on the same contract", async () => {
-    const launch = await launchLine("worker");
+    const launch = await launchLine();
     const stdout = runLaunch(launch, BRAIN_MODEL);
 
     expect(stdout).toContain("not available for your account");
@@ -216,7 +204,7 @@ describe("the model ladder lives in the pane's own shell (kobo-765 B7, kobo-822)
   });
 
   test("a boot failure does not take the pane's shell with it — no `exec` anywhere in the line", async () => {
-    const launch = await launchLine("worker");
+    const launch = await launchLine();
     expect(launch).not.toContain("exec ");
     // both models refuse: the chain still exits without killing anything, which
     // is what leaves a pane to inspect instead of a hole where one was

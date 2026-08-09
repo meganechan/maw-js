@@ -56,16 +56,13 @@ describe("crew-skills plugin standalone boundary", () => {
 });
 
 describe("crew-skills global asset contract", () => {
-  // The worker spawn contract is deadlock-critical (kobo-91): a worker with no
-  // Stop hook never signals idle. Global install only works if the settings +
-  // hook are addressed by $HOME-absolute paths, not cwd-relative ones.
-  test("worker settings points the Stop hook at a $HOME-absolute path", () => {
+  // kobo-859 — the worker Stop hook (idle-notify) is gone with the reviewer
+  // pane it signaled: worker settings carry no Stop hook any more.
+  test("worker settings carry no Stop hook (kobo-859 — idle-notify removed)", () => {
     const settings = readFileSync(join(assetsDir, "crew-worker-settings.json"), "utf8");
-    expect(settings).toContain("$HOME/.claude/hooks/crew-worker-stop.sh");
-    expect(settings).not.toContain('"bash .claude/hooks');
-    // still valid JSON with a Stop hook
+    expect(settings).not.toContain("crew-worker-stop.sh");
     const parsed = JSON.parse(settings);
-    expect(parsed.hooks.Stop[0].hooks[0].command).toContain("$HOME/.claude/hooks/crew-worker-stop.sh");
+    expect(parsed.hooks.Stop).toBeUndefined();
   });
 
   // kobo-196/268 — worker panes spawn with crew-worker-settings.json (not the repo's
@@ -111,24 +108,11 @@ describe("crew-skills global asset contract", () => {
   // kobo-174/200 card-gate hook + sample dropped with the task system (both the
   // CLI verb and the mcp__maw__maw_task tool are gone) — no replacement asserted.
 
-  // kobo-95/303 — a spawner that points CREW_STATE_DIR elsewhere needs the hook to
-  // honor it, or a coord trusting the state hint reads the wrong path. The crew/head
-  // spawners are gone; the hook keeps the contract (cell relies on it).
-  test("Stop hook honors CREW_STATE_DIR for the state hint", () => {
-    const hook = readFileSync(join(assetsDir, "hooks/crew-worker-stop.sh"), "utf8");
-    expect(hook).toContain("${CREW_STATE_DIR:-ψ/active/crew}/$CREW_ROLE.md");
-    // no lingering hardcoded crew path in the hint
-    expect(hook).not.toContain("state: ψ/active/crew/$CREW_ROLE.md");
-  });
-
-  // kobo-356's next-ready queue attachment was removed with the task system
-  // (the CLI verb no longer exists) — no replacement asserted here.
-
-  test("Stop hook honors per-pane idle_notify override before legacy coord fallback", () => {
-    const hook = readFileSync(join(assetsDir, "hooks/crew-worker-stop.sh"), "utf8");
-    expect(hook).toContain("@idle_notify_pane");
-    expect(hook).toContain('TARGET_PANE="$CREW_COORD_PANE"');
-    expect(hook).toContain('tmux display-message -t "$TARGET_PANE"');
+  // kobo-859 — crew-worker-stop.sh (the idle-notify Stop hook) is gone with the
+  // reviewer pane it signaled: no asset, no sync item.
+  test("crew-worker-stop.sh ships neither as an asset nor a sync item (kobo-859)", () => {
+    expect(SYNC_ITEMS.find((i) => i.dest === "hooks/crew-worker-stop.sh")).toBeUndefined();
+    expect(existsSync(join(assetsDir, "hooks/crew-worker-stop.sh"))).toBe(false);
   });
 
   // /cell ships; /warroom, /worker, /crew and /head are all hard-removed — no sync
@@ -139,7 +123,6 @@ describe("crew-skills global asset contract", () => {
     expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/SKILL.md")).toBeDefined();
     expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/contracts/head.md")).toBeDefined();
     expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/contracts/worker.md")).toBeDefined();
-    expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/contracts/reviewer.md")).toBeDefined();
     expect(existsSync(join(assetsDir, "skills/cell/SKILL.md"))).toBe(true);
     expect(existsSync(join(assetsDir, "skills/cell/contracts/head.md"))).toBe(true);
     for (const gone of ["warroom", "worker", "crew", "head"]) {
@@ -151,12 +134,19 @@ describe("crew-skills global asset contract", () => {
     expect(SYNC_ITEMS.filter((i) => /^skills\/(crew|head)\//.test(i.dest))).toEqual([]);
   });
 
+  // kobo-859 — the reviewer pane (and its contract) is gone; nothing may re-add
+  // this dest without the asset it would sync from.
+  test("the cell reviewer contract ships neither as an asset nor a sync item (kobo-859)", () => {
+    expect(SYNC_ITEMS.find((i) => i.dest === "skills/cell/contracts/reviewer.md")).toBeUndefined();
+    expect(existsSync(join(assetsDir, "skills/cell/contracts/reviewer.md"))).toBe(false);
+  });
+
   /**
    * kobo-822 — the doc is the procedure an operator follows, so it fails the same
    * way the code would: a SKILL.md still describing `self-spawn` and head adoption
    * teaches a flow that no longer exists, and the reader has no way to tell.
    */
-  test("/cell skill documents the add-on design: head untouched, worker+reviewer added from outside", () => {
+  test("/cell skill documents the add-on design: head untouched, worker added from outside", () => {
     const skill = readFileSync(join(assetsDir, "skills/cell/SKILL.md"), "utf8");
     expect(skill).toContain("name: cell");
     expect(skill).toContain("maw company cell spawn <company>");
@@ -170,7 +160,9 @@ describe("crew-skills global asset contract", () => {
     expect(skill).toContain("nothing routes through the head (kobo-771)");
 
     // kobo-764 — the doc must state the selector, not just "cell-owned panes"
-    expect(skill).toContain("`@oracle_pane` identity is `{that oracle}:worker` or `{that oracle}:reviewer`");
+    expect(skill).toContain("`@oracle_pane` identity is `{that oracle}:worker`");
+    // kobo-859 — reviewer pane removed; the skill must not still describe one
+    expect(skill).not.toContain("{that oracle}:reviewer");
     // kobo-782 — the duplicate-head rule is guidance, never an action
     expect(skill).toContain("**lowest pane id wins**");
     expect(skill).toContain("left completely alone");
@@ -187,7 +179,6 @@ describe("crew-skills global asset contract", () => {
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/head.md"), "utf8")).toContain("spawn/supervise a background implementation agent");
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/worker.md"), "utf8")).toContain("Act as execution supervisor by default");
     expect(readFileSync(join(assetsDir, "skills/cell/contracts/worker.md"), "utf8")).toContain("Do not review your own work");
-    expect(readFileSync(join(assetsDir, "skills/cell/contracts/reviewer.md"), "utf8")).toContain("Do not implement fixes yourself");
   });
 
   // kobo-343 — /teardown = crew lifecycle close (spin↔teardown). Safety-critical pane killer:
@@ -218,15 +209,6 @@ describe("crew-skills global asset contract", () => {
     expect(skill).toContain("kill-pane");
   });
 
-  // kobo-345/347/91 — deadlock-critical: the Stop-hook glob must cover BOTH a bare
-  // `worker` and numbered `worker-N` panes, or a worker never fires its idle signal.
-  // `worker-*` alone would miss the bare base worker. The crew SKILL prose that had
-  // to match this glob is gone; the hook is what cell actually runs, so it keeps the pin.
-  test("Stop-hook role glob covers bare worker AND worker-N (kobo-345/347)", () => {
-    const stopHook = readFileSync(join(assetsDir, "hooks/crew-worker-stop.sh"), "utf8");
-    expect(stopHook).toContain("worker*|reviewer");
-    expect(stopHook).not.toContain("worker-*|reviewer");
-  });
 });
 
 describe("crew-skills sync", () => {
@@ -239,7 +221,7 @@ describe("crew-skills sync", () => {
     for (const item of SYNC_ITEMS) {
       expect(existsSync(join(home, ".claude", item.dest))).toBe(true);
     }
-    const hookMode = statSync(join(home, ".claude/hooks/crew-worker-stop.sh")).mode & 0o111;
+    const hookMode = statSync(join(home, ".claude/hooks/seat-resume.sh")).mode & 0o111;
     expect(hookMode).not.toBe(0); // some exec bit set
 
     // installed content matches canonical assets

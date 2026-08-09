@@ -1,17 +1,20 @@
 /**
- * crew-skills sync — install the canonical /crew + /head skills and the
- * worker Stop hook into a home `.claude` tree.
+ * crew-skills sync — install the canonical /cell + /teardown skills into a
+ * home `.claude` tree.
  *
  * One canonical copy lives in this plugin's assets/. Installing globally into
- * ~/.claude/skills + ~/.claude/hooks means every oracle picks up /crew +
- * /head (and the worker Stop hook) from the maw upgrade — no per-oracle
- * copy to drift. The worker settings + hook use $HOME-absolute paths so the
- * spawn contract works from any oracle's cwd.
+ * ~/.claude/skills + ~/.claude/hooks means every oracle picks up its skills
+ * from the maw upgrade — no per-oracle copy to drift. The worker settings +
+ * hooks use $HOME-absolute paths so the spawn contract works from any
+ * oracle's cwd.
  *
  * kobo-303 — /warroom was hard-removed (migrated → /head 3-tier). The
  * seat-resume.sh hook KEEPS its warroom-dir (ψ/active/warroom) support so any
  * still-running warroom pane survives the skill-file removal (its contract is
  * baked via --append-system-prompt, re-seat reads state files, not the skill).
+ *
+ * kobo-859 — the worker Stop hook (crew-worker-stop.sh, the idle-notify
+ * chain) is gone: it existed to signal a reviewer pane that no longer exists.
  *
  * Pure node:fs so the standalone boundary stays trivial to assert.
  */
@@ -48,12 +51,14 @@ export const SYNC_ITEMS: SyncItem[] = [
   { src: "skills/cell/SKILL.md", dest: "skills/cell/SKILL.md" },
   { src: "skills/cell/contracts/head.md", dest: "skills/cell/contracts/head.md" },
   { src: "skills/cell/contracts/worker.md", dest: "skills/cell/contracts/worker.md" },
-  { src: "skills/cell/contracts/reviewer.md", dest: "skills/cell/contracts/reviewer.md" },
-  // crew + head skills dropped with their cell topologies — the kobo-566 prune
-  // removes the installed copies on the next sync (intended).
+  // crew + head skills dropped with their cell topologies, and the reviewer
+  // contract with the reviewer pane (kobo-859) — the kobo-566 prune removes
+  // the installed copies on the next sync (intended).
   { src: "skills/teardown/SKILL.md", dest: "skills/teardown/SKILL.md" }, // kobo-343 — /teardown lifecycle close (spin↔teardown); safety-critical pane killer
   // kobo-317 — /worker skill removed: worker is no longer a self-defined standalone role, only a /crew-spawned in-cell pane (crew §4 inline contract).
-  { src: "hooks/crew-worker-stop.sh", dest: "hooks/crew-worker-stop.sh", exec: true },
+  // kobo-859 — crew-worker-stop.sh (the idle-notify Stop hook) removed with the
+  // reviewer pane it was signaling to; the kobo-566 prune removes the installed
+  // copy on the next sync.
   // kobo-174/200 card-gate hook + sample dropped with the task system — the
   // kobo-566 prune removes the installed copies on the next sync (intended).
   { src: "hooks/seat-resume.sh", dest: "hooks/seat-resume.sh", exec: true }, // kobo-196 — auto-seat on SessionStart:clear (self-gates to warroom repos; wired into the oracle REPO's settings by ensureSeatResumeHook, never the user's global ~/.claude)

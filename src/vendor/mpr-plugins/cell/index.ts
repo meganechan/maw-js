@@ -1,13 +1,15 @@
 /**
- * maw company cell — the add-on that gives a RUNNING oracle its worker + reviewer.
+ * maw company cell — the add-on that gives a RUNNING oracle its worker pane.
  *
  *   maw company cell spawn <company>
  *   maw company cell down  <company> [--force]
  *
- * `spawn` adds a worker and a reviewer pane beside each roster oracle's own pane
- * and stamps `@oracle_pane` on all three; `down` removes those two. The oracle's
- * native pane is the head and is never adopted, renamed, relaunched or killed.
- * There is no `self-spawn`: nothing is injected into a pane any more.
+ * `spawn` adds a worker pane beside each roster oracle's own pane and stamps
+ * `@oracle_pane` on both; `down` removes the worker. The oracle's native pane
+ * is the head and is never adopted, renamed, relaunched or killed. There is
+ * no `self-spawn`: nothing is injected into a pane any more. (kobo-859: cell
+ * used to also add a reviewer pane — removed, review-requests already land
+ * on the worker pane.)
  */
 import { companyCellDown, companyCellSpawn, parseCellCompanyArg, type CellSpawnResult } from "./spawn";
 
@@ -32,7 +34,7 @@ export async function runCell(
   if (subcmd === "self-spawn") {
     return {
       ok: false,
-      error: "`self-spawn` was removed: cell no longer types anything into a pane. Run `maw company cell spawn <company>` from anywhere — it adds the worker/reviewer panes from outside and leaves the oracle's own pane alone.",
+      error: "`self-spawn` was removed: cell no longer types anything into a pane. Run `maw company cell spawn <company>` from anywhere — it adds the worker pane from outside and leaves the oracle's own pane alone.",
     };
   }
 

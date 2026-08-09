@@ -33,7 +33,7 @@ writeFileSync(join(dir, "companies", "testco.json"),
 /** where the head pane's shell is — down reads cell state relative to THAT, not to itself */
 const headCwd = join(dir, "headcwd");
 const stateDir = join(headCwd, "ψ", "active", "cell");
-const STATE_FILES = ["head.md", "worker.md", "reviewer.md", "head-contract.md", "worker-contract.md", "reviewer-contract.md"];
+const STATE_FILES = ["head.md", "worker.md", "head-contract.md", "worker-contract.md"];
 
 interface FakePane { id: string; role: string; window: string; identity: string; path: string }
 
@@ -96,7 +96,6 @@ function mixedSession(): void {
   panes = [
     { id: "%a-head", role: "👤 head", window: "cell-head", identity: "patchwork:head", path: headCwd },
     { id: "%a-worker", role: "⚒ worker", window: "cell-workers", identity: "patchwork:worker", path: headCwd },
-    { id: "%a-reviewer", role: "🔎 reviewer", window: "cell-workers", identity: "patchwork:reviewer", path: headCwd },
     { id: "%human", role: "⚒ worker", window: "cell-workers", identity: "", path: headCwd },
     { id: "%b-head", role: "👤 head", window: "cell-head", identity: "stitch:head", path: headCwd },
     { id: "%b-worker", role: "⚒ worker", window: "cell-workers", identity: "stitch:worker", path: headCwd },
@@ -125,10 +124,10 @@ async function down(verbose = true): Promise<string[]> {
 const alive = () => panes.map((p) => p.id).sort();
 
 describe("cell down selects panes by @oracle_pane identity (kobo-764)", () => {
-  test("mixed session — down A kills ONLY A's worker+reviewer; B's cell and the human pane survive", async () => {
+  test("mixed session — down A kills ONLY A's worker; B's cell and the human pane survive", async () => {
     const out = await down();
 
-    expect(killAttempts.sort()).toEqual(["%a-reviewer", "%a-worker"]);
+    expect(killAttempts).toEqual(["%a-worker"]);
     expect(alive()).toEqual(["%a-head", "%b-head", "%b-worker", "%human"]);
     expect(out.at(-1)).toContain("1 torn, 0 partial, 0 skipped, 0 refused");
   });
@@ -154,7 +153,7 @@ describe("cell down selects panes by @oracle_pane identity (kobo-764)", () => {
     process.env.TMUX_PANE = "%a-worker";
     const out = await down();
 
-    expect(killAttempts.sort()).toEqual(["%a-reviewer", "%a-worker"]);
+    expect(killAttempts).toEqual(["%a-worker"]);
     expect(panes.some((p) => p.id === "%a-worker")).toBe(false);
     expect(out.at(-1)).toContain("1 torn, 0 partial");
   });
@@ -169,7 +168,7 @@ describe("cell down selects panes by @oracle_pane identity (kobo-764)", () => {
     panes = panes.filter((p) => p.identity.startsWith("patchwork:"));
     const out = await down(false);
 
-    expect(killAttempts.sort()).toEqual(["%a-reviewer", "%a-worker"]);
+    expect(killAttempts).toEqual(["%a-worker"]);
     expect(alive()).toEqual(["%a-head"]);
     expect(out.some((l) => l.includes("%a-head") && l.includes("ALIVE"))).toBe(true);
   });
@@ -216,11 +215,11 @@ describe("cell down does not touch the head (kobo-822)", () => {
 
 describe("cell down counters report what actually happened (kobo-764)", () => {
   test("kill that tmux refuses → NOT counted killed, summary says partial", async () => {
-    killThrows.add("%a-reviewer");
+    killThrows.add("%a-worker");
     const out = await down();
 
     expect(out.at(-1)).toContain("0 torn, 1 partial");
-    expect(out.some((l) => l.includes("PARTIAL") && l.includes("killed 1/2") && l.includes("%a-reviewer"))).toBe(true);
+    expect(out.some((l) => l.includes("PARTIAL") && l.includes("killed 0/1") && l.includes("%a-worker"))).toBe(true);
   });
 
   test("kill returns cleanly but the pane is still there → still a failure (killed means gone)", async () => {
@@ -240,7 +239,7 @@ describe("cell down counters report what actually happened (kobo-764)", () => {
   });
 
   test("nothing left to kill → idempotent: counted torn, not partial, head untouched", async () => {
-    panes = panes.filter((p) => !["%a-worker", "%a-reviewer"].includes(p.id));
+    panes = panes.filter((p) => p.id !== "%a-worker");
     const out = await down();
 
     expect(killAttempts).toEqual([]);

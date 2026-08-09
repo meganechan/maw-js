@@ -56,6 +56,8 @@ Event มี `paneId` เหมือนเดิม ทางปกติ (oper
 
 Helper ที่ทำหน้าที่นี้ (`paneAwayJudge` ใน `tmux/impl.ts`) เป็น **twin แบบอ่านอย่างเดียวของ `isPaneAway`** — ลอกลูป newest-wins เดียวกันเป๊ะแต่คืนค่า marker ที่ตัดสินด้วย ไม่ได้ export เพิ่มจาก `presence-away.ts` เพราะไฟล์นั้นอยู่นอกขอบเขตใบนี้ (forbidden) — จึงแยกเป็นตัวอ่านสำหรับ display ต่างหาก ไม่ผูกกับ read-path ที่ comm-send ใช้จริง (การเปลี่ยน twin นี้ในอนาคตจะไม่กระทบ delivery gate).
 
+`paneAwayJudge` เองไม่มี IO (pure, เทสได้ตรงๆ) — ตัว IO wrapper (`paneAwayJudgeForRow`) โหลด `core/worklog/store`/`presence-away` ด้วย **dynamic `import()`** แทน static import ที่หัวไฟล์ เพราะ `tmux/impl.ts` ถูก ~15 ไฟล์ isolated-coverage-test mock `"fs"` แบบแคบ (แค่ `existsSync`/`readdirSync`/`readFileSync`) — static import จะดึง `appendFileSync`/`mkdirSync` เข้ามาตอนโหลดโมดูล พังทุกไฟล์ที่ mock แบบนี้ทันทีไม่ว่าจะเรียก AWAY column จริงหรือไม่ (เจอจริงตอน CI: `tmux-impl-extra-coverage.test.ts` และ `tmux-impl-plugin-second-pass-coverage.test.ts` พังด้วย `SyntaxError: Export named 'appendFileSync' not found` ก่อนแก้เป็น dynamic import + wrap try/catch fail-soft).
+
 ใช้ `ls -v` ที่มีอยู่แล้ว (ไม่มีคำสั่ง/flag ใหม่) ตามที่ forbidden ระบุ.
 
 ## 4. out of scope (ตามใบ)

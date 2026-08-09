@@ -9,8 +9,14 @@ import { scanWorktrees } from "../../../core/fleet/worktrees-scan";
 import { checkDestructive, isClaudeLikePane, isFleetOrViewSession } from "./safety";
 import { checkPaneContextLimit, isLikelyAgentPaneCommand } from "../../shared/context-limit";
 import { isInfrastructureChannelSessionName } from "../../../core/matcher/channel-session";
-import { companyOfOracleLight } from "../../../core/worklog/presence-away";
-import { readWorklog } from "../../../core/worklog/store";
+// kobo-868 — worklog/presence-away are DYNAMICALLY imported in paneAwayJudgeForRow
+// below, not statically here. tmux/impl.ts is imported by ~15 isolated coverage
+// tests that mock() a narrow "fs" (existsSync/readdirSync/readFileSync only) — a
+// static top-level import would drag in appendFileSync/mkdirSync at MODULE LOAD
+// time and break every one of those mocks before a single test runs, whether or
+// not that test ever exercises the away column (see project_maw_widely_mocked_
+// module_link_errors). A dynamic import scopes the risk to only the code path
+// that actually renders the AWAY column, and is wrapped in try/catch there.
 import type { WorklogEntry } from "../../../core/worklog/types";
 export {
   PANE_TARGET_FORMAT,
@@ -354,13 +360,24 @@ export function paneAwayJudge(
   return { away: false, judge: null };
 }
 
-/** IO wrapper around paneAwayJudge for one rendered pane row. */
-function paneAwayJudgeForRow(session: string, tmuxPaneId: string): PaneAwayJudge {
+/** IO wrapper around paneAwayJudge for one rendered pane row. Dynamically
+ *  imports the worklog reader (see the top-of-file note) and fails soft —
+ *  the AWAY column is a display convenience, never worth crashing `ls -v`
+ *  over, so any load/read error just renders as "not away" for that row. */
+async function paneAwayJudgeForRow(session: string, tmuxPaneId: string): Promise<PaneAwayJudge> {
   const oracle = oracleNameFromSession(session);
   if (!oracle) return { away: false, judge: null };
-  const company = companyOfOracleLight(oracle) ?? undefined;
-  const events = readWorklog(company, { oracle });
-  return paneAwayJudge(events, tmuxPaneId);
+  try {
+    const [{ companyOfOracleLight }, { readWorklog }] = await Promise.all([
+      import("../../../core/worklog/presence-away"),
+      import("../../../core/worklog/store"),
+    ]);
+    const company = companyOfOracleLight(oracle) ?? undefined;
+    const events = readWorklog(company, { oracle });
+    return paneAwayJudge(events, tmuxPaneId);
+  } catch {
+    return { away: false, judge: null };
+  }
 }
 
 /** `AWAY <marker> <when>` for the ls -v row, or "" when not away. Marker names
@@ -889,7 +906,7 @@ export async function cmdTmuxLs(opts: TmuxLsOpts = {}): Promise<void> {
     const annPad = pad(annotation, 30);
     const annRendered = annColored ? annColored + annPad.slice(annotation.length) : annPad;
     const created = opts.recent ? `${pad(formatSessionCreated(p.sessionCreated), createdWidth)} ` : "";
-    const awayText = awayCellText(paneAwayJudgeForRow(p.session, p.id));
+    const awayText = awayCellText(await paneAwayJudgeForRow(p.session, p.id));
     const awayPad = pad(awayText, AWAY_WIDTH);
     const awayRendered = awayText ? `\x1b[31m${awayPad}\x1b[0m` : awayPad;
     console.log(`  ${dot} ${pad(p.target, targetWidth)} ${pad(p.command || "", 10)} ${pad(age, 6)} ${created}${awayRendered} ${annRendered} \x1b[90m${(p.title || "").slice(0, 50)}\x1b[0m`);

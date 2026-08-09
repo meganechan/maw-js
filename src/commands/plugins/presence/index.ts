@@ -47,16 +47,34 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
     return { ok: false, error: "usage: maw presence <away|back>", output: "" };
   }
 
+  // kobo-868 — refuse instead of writing a pane-less marker. A paneless `away`
+  // reads (presence-away.ts's deliberate oracle-level fallback) as covering
+  // EVERY pane of the oracle, but `back` always carries a paneId and can only
+  // clear its own pane — so one paneless away = the whole oracle stuck away
+  // forever, un-clearable by any normal `back`. Applies to both away and back
+  // so the two can never drift out of the same rule (see docs/presence-pane-identity.md).
+  // Deliberately NOT falling back to a tmux query for our own pane id — an
+  // empty/wrong target silently resolves to the CALLER's active pane
+  // (core/pane-identity.ts), which would mislabel a different, innocent pane.
+  const paneId = process.env.TMUX_PANE?.trim() || undefined;
+  if (!paneId) {
+    const reason =
+      `refusing to write presence ${sub}: TMUX_PANE is not set, so this process cannot prove which pane it is.\n` +
+      `  A presence marker with no pane id would silently cover every pane of this oracle (see docs/presence-pane-identity.md).\n` +
+      `  Fix: run 'maw presence ${sub}' from inside the tmux pane it applies to — TMUX_PANE is set by tmux automatically.`;
+    write(`\x1b[31m✗ presence ${sub} refused\x1b[0m — TMUX_PANE not set, nothing written (see docs/presence-pane-identity.md)`);
+    return { ok: false, error: reason, output: "" };
+  }
+
   const oracle = resolveOracle();
   const company = companyOfOracleLight(oracle) ?? undefined;
-  const paneId = process.env.TMUX_PANE || undefined;
   const now = Date.now();
   appendWorklog({
     ts: now,
     iso: new Date(now).toISOString(),
     oracle,
     company,
-    ...(paneId ? { paneId } : {}),
+    paneId,
     // back → kind:"back" (NOT idle): the away gate skips transparent idle turn-ends,
     // so a return must be a distinct kind or it would be skipped and away would stick (kobo-120).
     kind: sub === "away" ? "away" : "back",

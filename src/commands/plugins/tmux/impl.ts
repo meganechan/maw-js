@@ -9,6 +9,15 @@ import { scanWorktrees } from "../../../core/fleet/worktrees-scan";
 import { checkDestructive, isClaudeLikePane, isFleetOrViewSession } from "./safety";
 import { checkPaneContextLimit, isLikelyAgentPaneCommand } from "../../shared/context-limit";
 import { isInfrastructureChannelSessionName } from "../../../core/matcher/channel-session";
+// kobo-868 — worklog/presence-away are DYNAMICALLY imported in paneAwayJudgeForRow
+// below, not statically here. tmux/impl.ts is imported by ~15 isolated coverage
+// tests that mock() a narrow "fs" (existsSync/readdirSync/readFileSync only) — a
+// static top-level import would drag in appendFileSync/mkdirSync at MODULE LOAD
+// time and break every one of those mocks before a single test runs, whether or
+// not that test ever exercises the away column (see project_maw_widely_mocked_
+// module_link_errors). A dynamic import scopes the risk to only the code path
+// that actually renders the AWAY column, and is wrapped in try/catch there.
+import type { WorklogEntry } from "../../../core/worklog/types";
 export {
   PANE_TARGET_FORMAT,
   paneTargetCandidatesFromListPanesOutput,
@@ -316,6 +325,69 @@ function oracleNameForPane(session: string, target: string, configured?: string)
   const fallback = configured || session.replace(/^\d+-/, "");
   if (!fallback) return null;
   return fallback.endsWith("-oracle") ? fallback : `${fallback}-oracle`;
+}
+
+/** Which pane a `maw presence` marker was written for, and its oracle — the
+ *  same "session name minus numeric prefix" resolution the writer falls back
+ *  to when CLAUDE_AGENT_NAME is unset (presence/index.ts's resolveOracle). */
+function oracleNameFromSession(session: string): string {
+  return session.trim().replace(/^[0-9]*-/, "") || session.trim();
+}
+
+/** The `away`/`back` marker that decides a pane's presence, for `maw ls -v`'s
+ *  AWAY column (kobo-868). A pure, testable twin of `isPaneAway`'s newest-wins
+ *  loop (core/worklog/presence-away.ts) that ALSO names the deciding marker —
+ *  presence-away.ts itself is out of scope for this card, so this is kept as
+ *  a separate, display-only reader rather than an added export there. */
+export interface PaneAwayJudge {
+  away: boolean;
+  /** null when nothing decided it (no away/back marker at all → away:false). */
+  judge: { paneId?: string; ts: number; kind: "away" | "back" } | null;
+}
+
+export function paneAwayJudge(
+  events: Pick<WorklogEntry, "paneId" | "ts" | "kind">[],
+  paneId: string | null | undefined,
+): PaneAwayJudge {
+  const pid = (paneId ?? "").trim();
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (pid && e.paneId && e.paneId !== pid) continue;
+    if (e.kind === "away" || e.kind === "back") {
+      return { away: e.kind === "away", judge: { paneId: e.paneId, ts: e.ts, kind: e.kind } };
+    }
+  }
+  return { away: false, judge: null };
+}
+
+/** IO wrapper around paneAwayJudge for one rendered pane row. Dynamically
+ *  imports the worklog reader (see the top-of-file note) and fails soft —
+ *  the AWAY column is a display convenience, never worth crashing `ls -v`
+ *  over, so any load/read error just renders as "not away" for that row. */
+async function paneAwayJudgeForRow(session: string, tmuxPaneId: string): Promise<PaneAwayJudge> {
+  const oracle = oracleNameFromSession(session);
+  if (!oracle) return { away: false, judge: null };
+  try {
+    const [{ companyOfOracleLight }, { readWorklog }] = await Promise.all([
+      import("../../../core/worklog/presence-away"),
+      import("../../../core/worklog/store"),
+    ]);
+    const company = companyOfOracleLight(oracle) ?? undefined;
+    const events = readWorklog(company, { oracle });
+    return paneAwayJudge(events, tmuxPaneId);
+  } catch {
+    return { away: false, judge: null };
+  }
+}
+
+/** `AWAY <marker> <when>` for the ls -v row, or "" when not away. Marker names
+ *  the pane that decided it, or ALL-PANES for a paneless (oracle-level)
+ *  marker — the exact poison shape kobo-868 fixes at the write side. */
+function awayCellText(j: PaneAwayJudge): string {
+  if (!j.away) return "";
+  const marker = j.judge?.paneId ?? "ALL-PANES";
+  const when = j.judge ? new Date(j.judge.ts).toISOString().slice(0, 16).replace("T", " ") : "";
+  return `AWAY ${marker} ${when}`.trimEnd();
 }
 
 function repoPartsFromRemote(remote: string): { org: string | null; repo: string | null } {
@@ -817,10 +889,11 @@ export async function cmdTmuxLs(opts: TmuxLsOpts = {}): Promise<void> {
   const targetWidth = Math.max(28, ...scope.map(p => p.target.length));
 
   const createdWidth = opts.recent ? 20 : 0;
+  const AWAY_WIDTH = 26; // "AWAY %373 2026-08-03 23:03" — kobo-868
   console.log();
   console.log(opts.recent
-    ? `  \x1b[36;1m  ${pad("TARGET", targetWidth)} ${pad("CMD", 10)} ${pad("AGE", 6)} ${pad("CREATED", createdWidth)} ${pad("ANNOTATION", 30)} TITLE\x1b[0m`
-    : `  \x1b[36;1m  ${pad("TARGET", targetWidth)} ${pad("CMD", 10)} ${pad("AGE", 6)} ${pad("ANNOTATION", 30)} TITLE\x1b[0m`);
+    ? `  \x1b[36;1m  ${pad("TARGET", targetWidth)} ${pad("CMD", 10)} ${pad("AGE", 6)} ${pad("CREATED", createdWidth)} ${pad("AWAY", AWAY_WIDTH)} ${pad("ANNOTATION", 30)} TITLE\x1b[0m`
+    : `  \x1b[36;1m  ${pad("TARGET", targetWidth)} ${pad("CMD", 10)} ${pad("AGE", 6)} ${pad("AWAY", AWAY_WIDTH)} ${pad("ANNOTATION", 30)} TITLE\x1b[0m`);
   for (const p of scope) {
     const dot = STATUS_DOT[p.status];
     const age = formatAge(p.lastActivitySec);
@@ -833,7 +906,10 @@ export async function cmdTmuxLs(opts: TmuxLsOpts = {}): Promise<void> {
     const annPad = pad(annotation, 30);
     const annRendered = annColored ? annColored + annPad.slice(annotation.length) : annPad;
     const created = opts.recent ? `${pad(formatSessionCreated(p.sessionCreated), createdWidth)} ` : "";
-    console.log(`  ${dot} ${pad(p.target, targetWidth)} ${pad(p.command || "", 10)} ${pad(age, 6)} ${created}${annRendered} \x1b[90m${(p.title || "").slice(0, 50)}\x1b[0m`);
+    const awayText = awayCellText(await paneAwayJudgeForRow(p.session, p.id));
+    const awayPad = pad(awayText, AWAY_WIDTH);
+    const awayRendered = awayText ? `\x1b[31m${awayPad}\x1b[0m` : awayPad;
+    console.log(`  ${dot} ${pad(p.target, targetWidth)} ${pad(p.command || "", 10)} ${pad(age, 6)} ${created}${awayRendered} ${annRendered} \x1b[90m${(p.title || "").slice(0, 50)}\x1b[0m`);
   }
   console.log();
 }

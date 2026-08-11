@@ -3,7 +3,8 @@ import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { isPaneAway } from "../src/core/worklog/presence-away";
-import { appendWorklog, flushWorklog } from "../src/core/worklog/store";
+import { appendWorklog, flushWorklog, readWorklog } from "../src/core/worklog/store";
+import presenceHandler from "../src/commands/plugins/presence/index";
 
 // mawjs-3 / kobo-120 — away is derived from the worklog (newest-wins per pane), no new store.
 describe("isPaneAway (presence gate read side)", () => {
@@ -102,5 +103,64 @@ describe("isPaneAway (presence gate read side)", () => {
   it("empty / whitespace oracle → not away (no crash)", () => {
     expect(isPaneAway("", undefined)).toBe(false);
     expect(isPaneAway(null, undefined)).toBe(false);
+  });
+});
+
+// kobo-868 — the WRITE side that produced the sticky-forever poison: `maw presence
+// away/back` writing a paneId-less event when TMUX_PANE is unset. Fix is a refusal at
+// the writer, not the reader above (presence-away.ts is out of scope for this card).
+describe("presence away/back writer guard (kobo-868)", () => {
+  const originalDataDir = process.env.MAW_DATA_DIR;
+  const originalTmuxPane = process.env.TMUX_PANE;
+  const originalAgentName = process.env.CLAUDE_AGENT_NAME;
+  afterAll(() => {
+    if (originalDataDir === undefined) delete process.env.MAW_DATA_DIR;
+    else process.env.MAW_DATA_DIR = originalDataDir;
+    if (originalTmuxPane === undefined) delete process.env.TMUX_PANE;
+    else process.env.TMUX_PANE = originalTmuxPane;
+    if (originalAgentName === undefined) delete process.env.CLAUDE_AGENT_NAME;
+    else process.env.CLAUDE_AGENT_NAME = originalAgentName;
+  });
+
+  beforeEach(() => {
+    process.env.MAW_DATA_DIR = mkdtempSync(join(tmpdir(), "presence-writer-test-"));
+    process.env.CLAUDE_AGENT_NAME = "zzwriter";
+    delete process.env.TMUX_PANE;
+  });
+
+  const rowCount = () => readWorklog(null, { oracle: "zzwriter" }).length;
+
+  it("no TMUX_PANE → 'away' refuses: ok:false, zero rows written (AC1)", async () => {
+    const before = rowCount();
+    const result = await presenceHandler({ source: "cli", args: ["away"] });
+    expect(result.ok).toBe(false);
+    expect(rowCount()).toBe(before);
+  });
+
+  it("no TMUX_PANE → 'back' refuses too, same rule (AC2)", async () => {
+    const before = rowCount();
+    const result = await presenceHandler({ source: "cli", args: ["back"] });
+    expect(result.ok).toBe(false);
+    expect(rowCount()).toBe(before);
+  });
+
+  it("TMUX_PANE set → 'away' still writes normally with paneId (AC3, negative control)", async () => {
+    process.env.TMUX_PANE = "%999";
+    const before = rowCount();
+    const result = await presenceHandler({ source: "cli", args: ["away"] });
+    expect(result.ok).toBe(true);
+    const events = readWorklog(null, { oracle: "zzwriter" });
+    expect(events.length).toBe(before + 1);
+    expect(events[events.length - 1]?.paneId).toBe("%999");
+  });
+
+  it("TMUX_PANE set → 'back' still writes normally with paneId (AC3, negative control)", async () => {
+    process.env.TMUX_PANE = "%999";
+    const before = rowCount();
+    const result = await presenceHandler({ source: "cli", args: ["back"] });
+    expect(result.ok).toBe(true);
+    const events = readWorklog(null, { oracle: "zzwriter" });
+    expect(events.length).toBe(before + 1);
+    expect(events[events.length - 1]?.paneId).toBe("%999");
   });
 });

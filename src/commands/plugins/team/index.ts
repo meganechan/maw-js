@@ -330,7 +330,15 @@ export default async function handler(ctx: InvokeContext): Promise<InvokeResult>
         return { ok: false, error: "not in tmux" };
       }
       const myPane = process.env.TMUX_PANE;
-      const paneList = (await hostExec("tmux list-panes -F '#{pane_id}'")).split("\n").filter(Boolean);
+      // tmux-selfcheck-footgun: an unscoped list-panes enumerates the
+      // session's CURRENT WINDOW, not the caller's. When those differ this killed
+      // every pane of whatever window the human was looking at — and `myPane` is
+      // not in that list, so the skip below never fired to protect anything.
+      if (!myPane) {
+        logs.push("\x1b[33m⚠\x1b[0m close: TMUX_PANE unset — refusing to guess which window to close");
+        return { ok: false, error: "TMUX_PANE unset" };
+      }
+      const paneList = (await hostExec(`tmux list-panes -t '${myPane}' -F '#{pane_id}'`)).split("\n").filter(Boolean);
       if (paneList.length <= 1) {
         console.log("\x1b[90mno split panes to close\x1b[0m");
         return { ok: true };

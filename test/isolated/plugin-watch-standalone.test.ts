@@ -31,4 +31,52 @@ describe("watch plugin Room retirement", () => {
     expect(serve).not.toContain("registerRoomListener");
     expect(plugin).not.toContain("/api/room");
   });
+
+  /**
+   * The capture outage of 2026-08-02 → 2026-08-07.
+   *
+   * A lifecycle hook is loaded with a runtime `import()` of an absolute path
+   * (plugin/lifecycle.ts). Under a compiled bundle that import is not bundled, so
+   * the hook evaluates a SECOND copy of every module it imports — including
+   * `api/feed`. `serve()` therefore added its capture listeners to a Set the
+   * server never pushed to. Nothing was red: the plugin's own routes answered 200
+   * throughout, because `ctx.http` arrives as a live object rather than an import.
+   *
+   * The contract this pins is "register into the Set you are HANDED", which is the
+   * only part a test can see without building a bundle. Asserted behaviourally —
+   * grepping for `ctx.feedListeners` would pass on a file that reads the field and
+   * then registers into the import anyway, which is exactly the bug.
+   */
+  test("serve registers capture into the Set it is handed, not the one it imported", async () => {
+    const { serve } = await import("../../src/vendor/mpr-plugins/watch/serve");
+    const { feedListeners: moduleGlobal } = await import("../../src/api/feed");
+    // No `http`/`ws`: serve() reaches every route through `ctx.http?.`, so a minimal
+    // context exercises the capture wiring without standing up a server.
+    const ctx = (listeners: Set<(event: any) => void>) =>
+      ({ phase: "serve", plugin: { name: "watch", dir: "." }, feedListeners: listeners }) as any;
+
+    // First serve of this process: the capture listener lands in the handed Set.
+    // This was 2 until the Room subsystem was removed — worklog and room were
+    // registered together and went dark together. Worklog is now the only one.
+    const first = new Set<(event: any) => void>();
+    serve(ctx(first));
+    expect(first.size).toBe(1);
+
+    // A DIFFERENT Set still gets the worklog listener. The old guard was a
+    // module-global boolean, idempotent in the wrong dimension: the first Set won
+    // permanently, so a later call carrying the host's real Set was skipped and the
+    // wiring fix would have been a silent no-op. Per-Set keys fix that — under the
+    // old boolean guard this Set would be empty, so this assertion is what carries
+    // the contract now that there is only one listener to count.
+    const second = new Set<(event: any) => void>();
+    serve(ctx(second));
+    expect(second.size).toBe(1);
+
+    // Same Set twice is still a no-op — the reload promise the boolean was there for.
+    serve(ctx(first));
+    expect(first.size).toBe(1);
+
+    // And the module-global Set — the wrong one under a bundle — is never touched.
+    expect(moduleGlobal.size).toBe(0);
+  });
 });

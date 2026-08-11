@@ -38,6 +38,16 @@ let tmuxFailures = new Map<string, SpawnSyncResult>();
 let spawnSyncCalls: Array<{ cmd: string; args: string[]; opts: unknown }> = [];
 let logs: string[] = [];
 
+// tmux-selfcheck-footgun: currentWindowInfo() now requires TMUX_PANE and passes
+// it as -t on the #S/#W display-message calls (throws otherwise). Pin a fake
+// pane and require it on those calls too — not just set the env — so a
+// regression that drops -t breaks this suite instead of silently resolving
+// the mocked "current" session/window by luck (this file's real bug: it never
+// pinned TMUX_PANE at all, so it only passed locally off the dev shell's ambient
+// value and died in CI where it's unset).
+const SELF_PANE = "%park-707";
+let savedTmuxPane: string | undefined;
+
 const original = {
   log: console.log,
 };
@@ -61,9 +71,17 @@ function mockSpawnSync(cmd: string, args: string[] = [], opts: unknown = {}): Sp
     if (failure) return failure;
 
     if (subcommand === "display-message" && args.includes("#S")) {
+      const tIndex = args.indexOf("-t");
+      if (tIndex < 0 || args[tIndex + 1] !== SELF_PANE) {
+        return { status: 1, stdout: "", stderr: `expected -t ${SELF_PANE}, got: ${args.join(" ")}` };
+      }
       return { status: 0, stdout: `${sessionName}\n`, stderr: "" };
     }
     if (subcommand === "display-message" && args.includes("#W")) {
+      const tIndex = args.indexOf("-t");
+      if (tIndex < 0 || args[tIndex + 1] !== SELF_PANE) {
+        return { status: 1, stdout: "", stderr: `expected -t ${SELF_PANE}, got: ${args.join(" ")}` };
+      }
       return { status: 0, stdout: `${currentWindow}\n`, stderr: "" };
     }
     if (subcommand === "display-message" && args.includes("#{pane_current_path}")) {
@@ -128,6 +146,8 @@ beforeEach(() => {
   console.log = (...args: unknown[]) => {
     logs.push(args.map(String).join(" "));
   };
+  savedTmuxPane = process.env.TMUX_PANE;
+  process.env.TMUX_PANE = SELF_PANE;
 });
 
 afterEach(() => {
@@ -135,6 +155,8 @@ afterEach(() => {
   for (const window of windows) {
     rmSync(window.cwd, { recursive: true, force: true });
   }
+  if (savedTmuxPane === undefined) delete process.env.TMUX_PANE;
+  else process.env.TMUX_PANE = savedTmuxPane;
 });
 
 process.on("exit", () => {

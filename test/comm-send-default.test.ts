@@ -25,18 +25,22 @@ describe("peerLocalOverrideHint — federation-vs-local guard (eq3-005)", () => 
 });
 
 describe("resolveOraclePane — default coverage seams", () => {
-  test("honors pane-specific targets without consulting tmux", async () => {
+  test("honors pane-specific targets — D-E still consults tmux once, for the worker-pane identity check", async () => {
     let called = false;
 
+    // D-E: an already pane-specific target skips the multi-pane list-panes
+    // resolution, but the worker-pane guard still needs THIS pane's identity
+    // — a tmux error there reads as "unknown, not gated" (never propagates),
+    // so resolution still succeeds even though the lookup failed.
     const out = await resolveOraclePane("54-mawjs:mawjs-oracle.2", {
       tmuxRun: async () => {
         called = true;
-        throw new Error("should not run tmux for pane-specific targets");
+        throw new Error("tmux not running");
       },
     });
 
     expect(out).toBe("54-mawjs:mawjs-oracle.2");
-    expect(called).toBe(false);
+    expect(called).toBe(true);
   });
 
   test("leaves single-pane windows unchanged", async () => {

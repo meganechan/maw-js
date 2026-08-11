@@ -176,7 +176,9 @@ beforeEach(() => {
   hostFailures = [];
   lockEntries = 0;
   originalTmuxPane = process.env.TMUX_PANE;
-  delete process.env.TMUX_PANE;
+  // tmux-selfcheck-footgun: getWindowTarget() identifies the caller's window by
+  // $TMUX_PANE now — bare, it returned the session's current window.
+  process.env.TMUX_PANE = "%leader";
   loaderGlobals().__mawLoaderEvents = [];
   loaderGlobals().__mawLoaderTeardowns = [];
   errorSpy = spyOn(console, "error").mockImplementation(() => {});
@@ -264,7 +266,7 @@ describe("tmux layout-manager focused branch coverage", () => {
     expect(lockEntries).toBe(1);
     expect(hostCommands[0]).toContain("tmux split-window -t '%leader' -h -P -F '#{pane_id}'");
     expect(hostCommands[0]).toContain("'echo teammate; printf \"\\e[?1049l\"; clear; exec zsh -li'");
-    expect(hostCommands).toContain("tmux display-message -p '#{window_id}'");
+    expect(hostCommands).toContain("tmux display-message -p -t '%leader' '#{window_id}'");
     expect(hostCommands).toContain("tmux list-panes -t '@42' -F '#{pane_id}'");
     expect(hostCommands).toContain("tmux select-layout -t '@42' main-vertical");
     expect(hostCommands).toContain("tmux resize-pane -t '%leader' -x 30%");

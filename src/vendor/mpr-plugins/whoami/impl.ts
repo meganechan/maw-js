@@ -13,17 +13,25 @@ export async function cmdWhoami(argv: string[] = []): Promise<void> {
   if (!process.env.TMUX) {
     throw new UserError("maw whoami requires an active tmux session — run 'maw wake <oracle>' or attach to tmux first");
   }
+  // tmux-selfcheck-footgun: -t $TMUX_PANE. This verb's whole job is "which pane
+  // am I", and bare it answered for the ACTIVE PANE of this session's current
+  // window — a neighbour, whenever this pane is not the active one. Every field below (pane id, pane title, window) was
+  // then copied into other verbs as a target.
+  const self = process.env.TMUX_PANE;
+  if (!self) {
+    throw new UserError("maw whoami: TMUX_PANE is unset, so this process cannot identify its own pane — refusing to report another pane's address");
+  }
   const short = argv.includes("--short") || argv.includes("-s");
   const json = argv.includes("--json");
 
   if (short) {
-    const raw = await hostExec(`tmux display-message -p '#S'`);
+    const raw = await hostExec(`tmux display-message -p -t '${self}' '#S'`);
     console.log(raw.trim());
     return;
   }
 
   // #{session_name}\t#{window_name}\t#{window_id}\t#{pane_title}\t#{pane_id}
-  const raw = await hostExec(`tmux display-message -p '#S\t#W\t#{window_id}\t#{pane_title}\t#{pane_id}'`);
+  const raw = await hostExec(`tmux display-message -p -t '${self}' '#S\t#W\t#{window_id}\t#{pane_title}\t#{pane_id}'`);
   const [session, window, windowId, paneTitle, paneId] = raw.trim().split("\t");
 
   if (json) {

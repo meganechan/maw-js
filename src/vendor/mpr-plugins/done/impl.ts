@@ -182,8 +182,13 @@ function leadWindow(session: DoneSession): DoneWindow | null {
 }
 
 async function currentTmuxIdentity(): Promise<{ sessionName: string; windowIndex: number } | null> {
+  // tmux-selfcheck-footgun: -t $TMUX_PANE. This identity feeds the lead-window
+  // GUARD, so a bare read let a caller inherit the session's current window and
+  // pass a check it should have failed. Unknown pane → null (non-lead).
+  const self = process.env.TMUX_PANE;
+  if (!self) return null;
   try {
-    const raw = (await tmux.run("display-message", "-p", "#{session_name}\t#{window_index}")).trim();
+    const raw = (await tmux.run("display-message", "-p", "-t", self, "#{session_name}\t#{window_index}")).trim();
     const [sessionName, indexRaw] = raw.split("\t");
     const windowIndex = Number(indexRaw);
     if (sessionName && Number.isInteger(windowIndex)) return { sessionName, windowIndex };

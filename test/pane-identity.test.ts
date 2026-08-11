@@ -9,11 +9,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   ORACLE_PANE_OPTION,
+  conflictingIdentityError,
   duplicateIdentityWarning,
   paneIdentity,
   parsePaneIdentity,
   pickIdentifiedPane,
   readTargetPanes,
+  routeOracleByIdentity,
   scanIdentifiedPanes,
   stampPaneIdentity,
 } from "../src/core/pane-identity";
@@ -183,6 +185,102 @@ describe("duplicateIdentityWarning (kobo-782)", () => {
   test("guidance only — it never proposes killing a live pane", () => {
     const w = duplicateIdentityWarning("mawjs", "head", winner, [loser]);
     expect(w).not.toContain("kill");
+  });
+});
+
+/**
+ * kobo-830 — resolving an oracle to its pane by the STAMP.
+ *
+ * The live failure this fixture reproduces (measured 2026-08-05): three oracles
+ * sat in windows a torn-down cell had renamed to `cell-head`, so every
+ * name-based resolver missed them and `maw hey utils-pm` answered "offline"
+ * while the agent was running. The stamp was on the pane the whole time.
+ */
+describe("routeOracleByIdentity (kobo-830)", () => {
+  const heyRun = (lines: string[]) => async () => lines.join("\n");
+
+  test("a live oracle in a window renamed `cell-head` is still found by its own name", async () => {
+    const routed = await routeOracleByIdentity("utils-pm", "head", heyRun([
+      paneLine("%39", "utils-pm:head", "cell-head", "14-utils-pm", 0),
+      paneLine("%41", "", "cell-workers", "14-utils-pm", 1),
+    ]));
+    expect(routed.via).toBe("identity");
+    expect(routed.via === "identity" && routed.pane.paneId).toBe("%39");
+  });
+
+  test("the window name is decoration — rename it to anything and delivery still resolves", async () => {
+    for (const windowName of ["cell-head", "utils-pm-oracle", "banana", ""]) {
+      const routed = await routeOracleByIdentity("utils-pm", "head", heyRun([
+        paneLine("%39", "utils-pm:head", windowName, "14-utils-pm", 0),
+      ]));
+      expect(routed.via === "identity" && routed.pane.paneId).toBe("%39");
+    }
+  });
+
+  test("the same oracle under every name form it is addressed by", async () => {
+    const run = heyRun([paneLine("%39", "utils-pm:head", "cell-head", "14-utils-pm", 0)]);
+    for (const query of ["utils-pm", "utils-pm-oracle", "14-utils-pm", "UTILS-PM", " utils-pm "]) {
+      expect((await routeOracleByIdentity(query, "head", run)).via).toBe("identity");
+    }
+  });
+
+  /**
+   * The load-bearing guard. Two panes claim `worker1:head` today (a wake that
+   * could not find the renamed window built a second head beside the first).
+   * Both are live agents; picking either delivers someone's work to the wrong
+   * pane with a success message on top of it.
+   */
+  test("two panes claiming one identity → REFUSE, and name both — never pick", async () => {
+    const routed = await routeOracleByIdentity("worker1", "head", heyRun([
+      paneLine("%88", "worker1:head", "cell-head", "23-worker1", 0),
+      paneLine("%91", "worker1:head", "worker1-oracle", "23-worker1", 2),
+    ]));
+    expect(routed.via).toBe("conflict");
+    expect(routed.via === "conflict" && routed.candidates.map((p) => p.paneId)).toEqual(["%88", "%91"]);
+    expect(routed).not.toHaveProperty("pane");
+  });
+
+  test("nobody claims the name → `none`, so the caller keeps its legacy name resolution", async () => {
+    expect((await routeOracleByIdentity("utils-pm", "head", heyRun([
+      paneLine("%12", "mawjs:head", "mawjs-oracle", "54-mawjs", 0),
+      paneLine("%40", "", "a-human-split", "54-mawjs", 1),
+    ]))).via).toBe("none");
+  });
+
+  test("a worker pane does not answer for its oracle's head", async () => {
+    expect((await routeOracleByIdentity("mawjs", "head", heyRun([
+      paneLine("%13", "mawjs:worker", "cell-workers", "54-mawjs", 1),
+    ]))).via).toBe("none");
+  });
+
+  test("a blank query never matches a blank-ish stamp", async () => {
+    expect((await routeOracleByIdentity("  ", "head", heyRun([paneLine("%1", "x:head")]))).via).toBe("none");
+  });
+
+  test("a tmux error is no evidence — fall back, never throw", async () => {
+    expect((await routeOracleByIdentity("utils-pm", "head", async () => { throw new Error("no server"); })).via).toBe("none");
+  });
+});
+
+describe("conflictingIdentityError (kobo-830)", () => {
+  const candidates = [
+    { paneId: "%88", session: "23-worker1", windowIndex: "0", windowName: "cell-head", oracle: "worker1", role: "head" },
+    { paneId: "%91", session: "23-worker1", windowIndex: "2", windowName: "worker1-oracle", oracle: "worker1", role: "head" },
+  ];
+
+  test("names both claimants, refuses to guess, and hands over the exact clear command", () => {
+    const msg = conflictingIdentityError("worker1", "head", candidates);
+    expect(msg).toContain("2 panes claim @oracle_pane=worker1:head");
+    expect(msg).toContain("%88 (23-worker1:cell-head)");
+    expect(msg).toContain("%91 (23-worker1:worker1-oracle)");
+    expect(msg).toContain("Refusing to guess");
+    expect(msg).toContain("tmux set-option -pu -t %91 @oracle_pane");
+  });
+
+  test("asks the oracle rather than proposing to kill a live pane", () => {
+    const msg = conflictingIdentityError("worker1", "head", candidates);
+    expect(msg).toContain("Ask worker1");
+    expect(msg).not.toContain("kill");
   });
 });
 

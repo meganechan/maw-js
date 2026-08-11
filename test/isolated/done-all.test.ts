@@ -129,6 +129,10 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  // tmux-selfcheck-footgun: these paths identify themselves by $TMUX_PANE now —
+  // bare tmux queries answered for the session's current window's ACTIVE pane.
+  process.env.TMUX_PANE = "%350";
+
   sessions = [
     {
       name: "work",
@@ -219,7 +223,7 @@ describe("cmdDoneAll", () => {
     expect(tmuxCommands).toContain("kill 139-mawjs:mawjs-codex-1");
 
     await expect(cmdDone("mawjs-oracle", { force: true })).rejects.toThrow("refusing to done lead window");
-    expect(tmuxCommands).toContain("run display-message -p #{session_name}\t#{window_index}");
+    expect(tmuxCommands).toContain("run display-message -p -t %350 #{session_name}\t#{window_index}");
   });
 
   test("allows done lead window when current tmux identity is unavailable (subshell case)", async () => {
@@ -246,7 +250,7 @@ describe("cmdDoneAll", () => {
 
     await expect(cmdDone("mawjs-oracle", { force: true })).resolves.toBeUndefined();
     expect(tmuxCommands).toContain("kill 139-mawjs:mawjs-oracle");
-    expect(tmuxCommands).toContain("run display-message -p #{session_name}\t#{window_index}");
+    expect(tmuxCommands).toContain("run display-message -p -t %350 #{session_name}\t#{window_index}");
   });
 
   test("--force skips auto-save and kills only current-session non-lead windows", async () => {

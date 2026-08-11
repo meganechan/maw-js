@@ -27,7 +27,13 @@ export async function cmdSoulSync(target?: string, opts?: { from?: boolean; cwd?
   let cwd = opts?.cwd || "";
   if (!cwd) {
     try {
-      cwd = (await hostExec("tmux display-message -p '#{pane_current_path}'")).trim();
+      // tmux-selfcheck-footgun: -t $TMUX_PANE. A bare display-message answers for
+      // the ACTIVE PANE of this session's current
+      // window, which is this process's pane only by luck. No pane id → take the cwd fallback below rather
+      // than another pane's path.
+      const self = process.env.TMUX_PANE ?? "";
+      if (!self) throw new Error("TMUX_PANE unset");
+      cwd = (await hostExec(`tmux display-message -p -t '${self}' '#{pane_current_path}'`)).trim();
     } catch {
       cwd = process.cwd();
     }
@@ -102,7 +108,13 @@ export async function cmdSoulSyncProject(opts?: { cwd?: string }): Promise<Proje
   let cwd = opts?.cwd || "";
   if (!cwd) {
     try {
-      cwd = (await hostExec("tmux display-message -p '#{pane_current_path}'")).trim();
+      // tmux-selfcheck-footgun: -t $TMUX_PANE. A bare display-message answers for
+      // the ACTIVE PANE of this session's current
+      // window, which is this process's pane only by luck. No pane id → take the cwd fallback below rather
+      // than another pane's path.
+      const self = process.env.TMUX_PANE ?? "";
+      if (!self) throw new Error("TMUX_PANE unset");
+      cwd = (await hostExec(`tmux display-message -p -t '${self}' '#{pane_current_path}'`)).trim();
     } catch {
       cwd = process.cwd();
     }

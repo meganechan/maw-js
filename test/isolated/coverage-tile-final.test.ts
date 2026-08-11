@@ -34,7 +34,9 @@ describe("tile swap final branch coverage", () => {
   beforeEach(() => {
     commands = [];
     paneRows = "0|||%top|||top-title|||0\n1|||%mid|||mid-title|||10\n2|||%bottom|||bottom-title|||20\n";
-    delete process.env.TMUX_PANE;
+    // tmux-selfcheck-footgun: tile resolves its window from $TMUX_PANE now and
+    // refuses without one, so these swap branches need a pane to run at all.
+    process.env.TMUX_PANE = "%mid";
     logSpy = spyOn(console, "log").mockImplementation(() => {});
   });
 

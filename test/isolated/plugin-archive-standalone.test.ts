@@ -37,7 +37,7 @@ mock.module(import.meta.resolve("../../src/sdk/index.ts"), () => ({ ...realSdk, 
 
 const { default: archiveHandler, command } = await import("../../src/vendor/mpr-plugins/archive/index.ts?plugin-archive-standalone");
 const { cmdArchive } = await import("../../src/vendor/mpr-plugins/archive/impl.ts?plugin-archive-standalone");
-const { resolveOraclePath, resolveProjectSlug } = await import("../../src/vendor/mpr-plugins/archive/internal/soul-sync-impl.ts?plugin-archive-standalone");
+const { resolveOraclePath, resolveProjectSlug, cmdSoulSync, cmdSoulSyncProject } = await import("../../src/vendor/mpr-plugins/archive/internal/soul-sync-impl.ts?plugin-archive-standalone");
 
 function walkSources(dir: string): string[] {
   const out: string[] = [];
@@ -144,5 +144,46 @@ describe("archive plugin standalone boundary", () => {
     await expect(resolveOraclePath("neo-oracle")).resolves.toBe(join(ghqRoot, "github.com", "Soul-Brews-Studio", "neo-oracle"));
 
     expect(resolveProjectSlug(join(ghqRoot, "github.com", "Soul-Brews-Studio", "maw-js", "agents", "1-codex"), ghqRoot)).toBe("Soul-Brews-Studio/maw-js");
+  });
+});
+
+/**
+ * tmux-selfcheck-footgun refresh: archive vendors its own copy of soul-sync, and
+ * that copy detects the oracle to sync FROM the pane's cwd. A bare tmux query
+ * resolves $TMUX -> session -> the session's CURRENT WINDOW -> that window's
+ * ACTIVE PANE, so a non-active pane read a neighbour's repo as its own source.
+ */
+describe("archive plugin: vendored soul-sync names its pane (tmux-selfcheck-footgun)", () => {
+  test("both cwd detections target $TMUX_PANE, with no bare fallback", () => {
+    const src = readFileSync(join(root, "src/vendor/mpr-plugins/archive/internal/soul-sync-impl.ts"), "utf8");
+    const targeted = src.match(/display-message -p -t '\$\{self\}' '#\{pane_current_path\}'/g) ?? [];
+    expect(targeted).toHaveLength(2);
+    expect(src).not.toContain("display-message -p '#{pane_current_path}'");
+    expect(src).toContain('throw new Error("TMUX_PANE unset")');
+  });
+});
+
+describe("archive plugin: vendored soul-sync self-check hits the caller's pane at runtime", () => {
+  const originalTmuxPane = process.env.TMUX_PANE;
+
+  afterEach(() => {
+    if (originalTmuxPane === undefined) delete process.env.TMUX_PANE;
+    else process.env.TMUX_PANE = originalTmuxPane;
+  });
+
+  test("cmdSoulSync's tmux self-check hostExec call carries -t '<pane>'", async () => {
+    process.env.TMUX_PANE = "%701";
+    await cmdSoulSync();
+    const selfCheck = hostExecCalls.find((cmd) => cmd.includes("display-message"));
+    expect(selfCheck).toBeDefined();
+    expect(selfCheck).toContain("-t '%701'");
+  });
+
+  test("cmdSoulSyncProject's tmux self-check hostExec call carries -t '<pane>'", async () => {
+    process.env.TMUX_PANE = "%702";
+    await cmdSoulSyncProject();
+    const selfCheck = hostExecCalls.find((cmd) => cmd.includes("display-message"));
+    expect(selfCheck).toBeDefined();
+    expect(selfCheck).toContain("-t '%702'");
   });
 });

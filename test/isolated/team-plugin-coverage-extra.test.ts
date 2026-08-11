@@ -424,7 +424,9 @@ describe("src/commands/plugins/team/index extra branch coverage", () => {
     commandHostExecQueue = ["%0"];
     const single = await teamHandler({ source: "cli", args: ["close"] });
     expect(single.ok).toBe(true);
-    expect(commandCalls.hostExec).toEqual([["tmux list-panes -F '#{pane_id}'"]]);
+    // tmux-selfcheck-footgun: scoped to the caller's own pane (was unscoped —
+    // the session's current window).
+    expect(commandCalls.hostExec).toEqual([["tmux list-panes -t '%0' -F '#{pane_id}'"]]);
 
     resetCallRecord(commandCalls);
     process.env.TMUX = "/tmp/tmux";
@@ -434,7 +436,7 @@ describe("src/commands/plugins/team/index extra branch coverage", () => {
 
     expect(multi.ok).toBe(true);
     expect(commandCalls.hostExec).toEqual([
-      ["tmux list-panes -F '#{pane_id}'"],
+      ["tmux list-panes -t '%0' -F '#{pane_id}'"],
       ["tmux kill-pane -t '%1'"],
       ["tmux kill-pane -t '%2'"],
     ]);

@@ -755,7 +755,11 @@ describe("cmdSend — delivery branch coverage", () => {
     expect(sleepCalls).not.toContain(500);
     // Never inject — the half-typed `git status` must survive untouched.
     expect(sendKeysCalls).toEqual([]);
-    expect(logs.join("\n")).toContain("operator input mid-edit");
+    // kobo-835 — the receipt now names what was on screen instead of "operator
+    // input mid-edit", and says which of the two symptoms this is.
+    const out = logs.join("\n");
+    expect(out).toContain("unsent line sitting in its input box");
+    expect(out).toContain("re-sending will not help");
   });
 
   test("--inbox queues to receiver inbox when the pane is busy", async () => {
@@ -1134,7 +1138,13 @@ describe("cmdSend — bare-name, wake, and safety gates", () => {
     expect(receiverWrites).toHaveLength(0);
     expect(ghqFindCalls).toEqual(["/renamed-oracle", "/renamed"]);
     expect(fleetLoadCalls).toBe(1);
-    expect(tmuxRunCalls).toEqual([["display-message", "-p", "#S"]]);
+    // kobo-830 — the bare path now also asks tmux WHICH PANE CLAIMS THIS NAME
+    // (`@oracle_pane`) before it trusts window names. Still hermetic in the sense
+    // this test guards: two read-only tmux queries, no ghq/fleet/network surprises.
+    expect(tmuxRunCalls).toEqual([
+      ["display-message", "-p", "#S"],
+      ["list-panes", "-a", "-F", "#{pane_id}|||#{session_name}|||#{window_index}|||#{window_name}|||#{@oracle_pane}"],
+    ]);
     expect(curlFetchCalls).toEqual([]);
   });
 

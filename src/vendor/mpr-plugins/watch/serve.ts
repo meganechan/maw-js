@@ -21,8 +21,16 @@ import { companyVersion } from "../../../views/company";
 import { feedListeners } from "../../../api/feed";
 
 export function serve(ctx: PluginLifecycleContext): { ok: true } {
+  // The HOST's Set, not the one this module imported. This hook is loaded with a
+  // runtime import() of an absolute path, so under a compiled bundle the import
+  // below evaluates a SECOND copy of api/feed — adding to it registers into a Set
+  // the server never pushes to. The routes kept working the whole time because
+  // ctx.http is a live object, which is what made the outage silent. The import
+  // stays as the fallback for callers that build a context without it (tests, and
+  // any host that has not been updated).
+  const listeners = ctx.feedListeners ?? feedListeners;
   // capture (idempotent across reloads)
-  registerWorklogListener(feedListeners);
+  registerWorklogListener(listeners);
   // read/inject route
   ctx.http?.route("GET", "/api/worklog", (request: Request) => handleWorklogRequest(request));
   // company-ui timeline feed (behind auth — see PROTECTED "/worklog/feed")

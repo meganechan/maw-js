@@ -1333,11 +1333,15 @@ export interface CmdSendOptions {
   /**
    * kobo-306 — when the target pane is AWAY, queue the message for auto-delivery
    * on return (via the dispatch bridge) instead of parking it to a silent inbox.
-   * Scoped opt-in for the room nudge (route.ts roomNudgeArgs): a brainstorm turn
-   * must reach an away lead the moment they /seat back, not sit unseen in the
-   * inbox (kobo-305). Default (unset) preserves the deliberate away≠busy park —
-   * a plain hey to an away oracle is NOT auto-delivered (could overtype a
-   * /clear'ing pane, kobo-288). Only the room channel opts in.
+   * Opt-in per call, exposed as `maw hey --queue-on-away`. Default (unset)
+   * preserves the deliberate away≠busy park — a plain hey to an away oracle is
+   * NOT auto-delivered (could overtype a /clear'ing pane, kobo-288).
+   *
+   * The original opt-in caller was the Room brainstorm nudge, removed with the
+   * Room subsystem (2026-08). The flag itself is NOT room-specific: it is a
+   * general "must reach them the moment they /seat back" delivery mode, still
+   * reachable from the CLI and covered by test/comm-send-durable-inbox.test.ts.
+   * Do not delete it as room residue.
    */
   queueOnAway?: boolean;
   /**
@@ -1930,12 +1934,12 @@ export async function cmdSend(
     // trailing -oracle. This is the oracle whose worklog carries the away/back events.
     const awayOracle = extractPaneOracle(query).replace(/-oracle$/i, "");
     if (isPaneAway(awayOracle, targetPaneId)) {
-      // kobo-306 — the room nudge opts in (--queue-on-away): an away lead must still
-      // learn of a new brainstorm turn, auto-delivered when they /seat back. Queue it
-      // on the dispatch bridge (like the busy path) so DispatchEngine delivers on the
-      // next busy→ready transition after return — instead of parking to a silent (and,
-      // per kobo-305, sometimes failing) inbox. Scoped: only this flag changes the away
-      // path; a plain hey to an away oracle still parks (away≠busy, kobo-288 unchanged).
+      // kobo-306 — callers opting in with --queue-on-away: the target must still learn
+      // of the message, auto-delivered when they /seat back. Queue it on the dispatch
+      // bridge (like the busy path) so DispatchEngine delivers on the next busy→ready
+      // transition after return — instead of parking to a silent (and, per kobo-305,
+      // sometimes failing) inbox. Scoped: only this flag changes the away path; a plain
+      // hey to an away oracle still parks (away≠busy, kobo-288 unchanged).
       if (opts.queueOnAway) {
         queueForDispatch({ from: `${config.node ?? "local"}:${senderName}`, to: query, target, message: outboundMessage });
         const inbox = await writeReceiverInbox(target);

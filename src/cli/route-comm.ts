@@ -87,7 +87,7 @@ export async function routeComm(cmd: string, args: string[]): Promise<boolean> {
     let approve = false;
     let trust = false;
     let noVerifySubmit = false;
-    let queueOnAway = false; // kobo-306 — room nudge: queue for /seat-return delivery if away
+    let queueOnAway = false; // kobo-306 — queue for /seat-return delivery if away (opt-in, not room-specific)
     let verbose = false; // kobo-368 — compact-ack sweep: --verbose/--full reproduce the pre-368 full echo
     let from: string | undefined;
     let channel: string | undefined;

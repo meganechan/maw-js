@@ -15,7 +15,7 @@ export default definePlugin({
     "serve": {
       "script": "./serve.ts",
       "handler": "serve",
-      "ensures": ["http:route:/api/worklog", "http:route:/api/worklog/feed", "http:route:/api/room/send", "http:route:/api/room/open", "http:route:/api/room/close", "http:route:/api/room/reopen", "http:route:/api/room/thread", "http:route:/api/room/merge", "http:route:/api/room/activity", "http:route:/api/room/reply", "http:route:/api/room/invite", "http:route:/api/rooms", "http:route:/api/state", "http:route:/api/roster", "http:route:/api/presence", "http:route:/api/policy", "http:route:/api/version"],
+      "ensures": ["http:route:/api/worklog", "http:route:/api/worklog/feed", "http:route:/api/state", "http:route:/api/roster", "http:route:/api/presence", "http:route:/api/policy", "http:route:/api/version"],
       "policy": "best-effort"
     }
   },

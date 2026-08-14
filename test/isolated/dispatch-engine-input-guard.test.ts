@@ -144,24 +144,29 @@ describe("stall notify — last-resort, never overtype", () => {
 describe("stall notify → sender (eq3-004)", () => {
   const SENDER = "sess:sender.0";
 
-  test("menu-immediate: a permission modal pings the sender at once, no threshold wait", async () => {
+  test("menu-immediate: an open menu pings the sender at once, no threshold wait", async () => {
     enqueue("m1"); // from "node:sender"
     const { engine, sendKeysCalls, setIdle } = makeEngine({
       stallThresholdMs: 180_000,              // far away — proves we did NOT wait it out
-      detectMenu: async (t) => t === TARGET,  // recipient pane shows a modal
+      detectMenu: async (t) => t === TARGET,  // recipient pane shows a menu
       resolveSenderTarget: async () => ({ oracle: "sender", target: SENDER }),
     });
-    setIdle(false, TARGET);                   // the modal row reads as "typing" → never overtype it
+    setIdle(false, TARGET);                   // the menu row reads as "typing" → never overtype it
 
     await engine.runSweepOnce();
 
-    // Recipient never overtyped while the modal is up.
+    // Recipient never overtyped while the menu is up.
     expect(sendKeysCalls.find(c => c.target === TARGET)).toBeUndefined();
     // Sender pinged immediately, with the menu reason.
     const ping = sendKeysCalls.find(c => c.target === SENDER);
     expect(ping).toBeDefined();
     expect(ping!.text).toContain("deliver ไม่ได้");
-    expect(ping!.text).toContain("permission prompt");
+    expect(ping!.text).toContain("menu");
+    // kobo-941 — this used to assert "permission prompt". `detectMenu` fires on
+    // every Claude Code menu, so the sender must never be sent looking for a
+    // permission dialog. dispatch-engine-menu-label.test.ts pins the same rule
+    // against the real detector; this line keeps the stub path honest too.
+    expect(ping!.text.toLowerCase()).not.toContain("permission");
 
     // One-shot — a second sweep does not re-ping.
     await engine.runSweepOnce();

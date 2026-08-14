@@ -19,7 +19,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import {
   checkPaneIdle,
-  detectPermissionMenu,
+  detectOpenMenu,
   isSafeToInject,
   SEND_GATE_SNAPSHOT_LINES,
 } from "../src/commands/shared/comm-send";
@@ -30,7 +30,7 @@ const probe = (file: string) =>
     captureFn: async () => readFileSync(join(FX, file), "utf8"),
   });
 const probeMenu = (content: string) =>
-  detectPermissionMenu("pane:0.0", undefined, { captureFn: async () => content });
+  detectOpenMenu("pane:0.0", undefined, { captureFn: async () => content });
 const probeMenuFile = (file: string) => probeMenu(readFileSync(join(FX, file), "utf8"));
 
 describe("checkPaneIdle — real Claude Code pane captures (#eq3-003b/003c)", () => {
@@ -73,7 +73,7 @@ describe("checkPaneIdle — real Claude Code pane captures (#eq3-003b/003c)", ()
   });
 });
 
-describe("detectPermissionMenu — modal recognition (eq3-004)", () => {
+describe("detectOpenMenu — modal recognition (eq3-004)", () => {
   test("real Claude Code permission menu is detected (numbered cursor + Esc-to-cancel footer)", async () => {
     expect(await probeMenuFile("claude-permission-menu.txt")).toBe(true);
   });
@@ -109,7 +109,7 @@ describe("detectPermissionMenu — modal recognition (eq3-004)", () => {
  * claude-permission-menu.txt) with only the selected row's styling swapped
  * from colour to reverse. If Claude Code ever renders this way, checkPaneIdle
  * alone reads the pane as idle (proven below); isSafeToInject does not,
- * because detectPermissionMenu strips only ANSI codes, never a whole
+ * because detectOpenMenu strips only ANSI codes, never a whole
  * attribute span, so its signal survives regardless of which way the row is
  * styled.
  */
@@ -131,8 +131,8 @@ describe("kobo-508 — permission-menu row drawn in reverse instead of colour (h
     expect(r.idle).toBe(true);
   });
 
-  test("detectPermissionMenu still catches it — its strip never deletes the row", async () => {
-    expect(await detectPermissionMenu("pane:0.0", undefined, { captureFn })).toBe(true);
+  test("detectOpenMenu still catches it — its strip never deletes the row", async () => {
+    expect(await detectOpenMenu("pane:0.0", undefined, { captureFn })).toBe(true);
   });
 
   test("isSafeToInject is the actual fix: unsafe, reason 'menu', despite checkPaneIdle alone saying idle", async () => {
@@ -159,7 +159,7 @@ describe("kobo-508 — permission-menu row drawn in reverse instead of colour (h
 });
 
 /**
- * kobo-508 — checkPaneIdle and detectPermissionMenu must request the SAME
+ * kobo-508 — checkPaneIdle and detectOpenMenu must request the SAME
  * snapshot depth. Widening the window to catch a taller menu only works both
  * places if there's one declared source; if the two ever drift apart, one
  * gate reads a shorter (or taller) pane than the other and the hole this card
@@ -180,9 +180,9 @@ describe("kobo-508 — send-gate snapshot depth is declared once, used by both",
     expect(seen).toEqual([SEND_GATE_SNAPSHOT_LINES]);
   });
 
-  test("detectPermissionMenu requests SEND_GATE_SNAPSHOT_LINES rows", async () => {
+  test("detectOpenMenu requests SEND_GATE_SNAPSHOT_LINES rows", async () => {
     const seen: number[] = [];
-    await detectPermissionMenu("pane:0.0", undefined, {
+    await detectOpenMenu("pane:0.0", undefined, {
       captureFn: async (_t, lines) => { seen.push(lines as number); return ""; },
     });
     expect(seen).toEqual([SEND_GATE_SNAPSHOT_LINES]);

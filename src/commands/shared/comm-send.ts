@@ -820,7 +820,7 @@ export function stripGhostText(line: string): string {
 
 /**
  * kobo-508 — the single declared source for how many rows the send-gate
- * captures. checkPaneIdle and detectPermissionMenu both read the input box
+ * captures. checkPaneIdle and detectOpenMenu both read the input box
  * above its divider+footer and MUST request the same depth: widen this once
  * to catch a taller menu and both see it. If the two call sites ever drift
  * apart, the two gates read a different depth of the same pane — a silent
@@ -876,24 +876,34 @@ export async function checkPaneIdle(
 }
 
 /**
- * eq3-004 — detect a Claude Code permission/confirm MODAL on a pane.
+ * eq3-004 — detect an OPEN MENU on a Claude Code pane: any modal that is waiting
+ * for the human in front of it to pick a numbered option.
+ *
+ * kobo-941 — this was called `detectPermissionMenu`, and the name is the whole
+ * reason a caller mislabeled it. It has never checked a permission. The two
+ * signals below are the chrome of EVERY Claude Code selection surface —
+ * permission/confirm prompts, AskUserQuestion, the slash-command picker, the
+ * model picker, the file picker — and that width is correct: what this answers
+ * is "may I type into this pane", and the answer is no for all of them.
+ * Narrowing it to real permission prompts would overtype the other kinds.
+ * Callers must describe the result as a menu, never as a permission check.
  *
  * Deliberately SEPARATE from checkPaneIdle's typing detection (the #38 dim-strip
- * + Pass1/Pass2 logic, which must stay untouched). A permission menu's selected
- * row (`❯ 1. Yes`) already reads as "typing" to Pass 1, so it DEFERS correctly —
+ * + Pass1/Pass2 logic, which must stay untouched). A menu's selected row
+ * (`❯ 1. Yes`) already reads as "typing" to Pass 1, so it DEFERS correctly —
  * but the sender is never told why, and a menu never self-clears the way mid-
  * typed operator input does. This additive layer recognizes the modal so the
  * dispatch engine can notify the sender immediately instead of waiting out the
  * stall threshold.
  *
- * Signature (stable across confirm prompts — verified on real captures,
+ * Signature (stable across these surfaces — verified on real captures,
  * kang / demo-web-qa): a numbered selection cursor `❯ <n>.` together with the
  * modal-only footer `Esc to cancel`. BOTH are required so an operator literally
  * typing "1. ..." on the prompt line — with no modal footer — can't false-trigger.
  * We strip only ANSI codes here (not whole dim spans): the footer text must
  * survive the strip so it can be matched.
  */
-export async function detectPermissionMenu(
+export async function detectOpenMenu(
   target: string,
   host?: string,
   deps: { captureFn?: typeof capture } = {},
@@ -914,12 +924,12 @@ export async function detectPermissionMenu(
 
 /**
  * kobo-508 — answers the question this card exists to force an answer to:
- * should detectPermissionMenu also gate SENDING, not just notify? Yes. On the
+ * should detectOpenMenu also gate SENDING, not just notify? Yes. On the
  * two paths this fix touches — cmdSend's direct injection below, and the
  * DispatchEngine sweep via server.ts's sweepPaneIdleCheck — checkPaneIdle used
  * to be the only send-gate (dispatch-engine's own detectMenu call is
  * notify-only — see checkStall). checkPaneIdle's ghost-strip deletes a whole
- * reverse-video span; detectPermissionMenu strips only ANSI codes and never a
+ * reverse-video span; detectOpenMenu strips only ANSI codes and never a
  * whole attribute span, so its numbered-cursor + modal-footer signal survives a
  * shape that would fool checkPaneIdle alone (a menu row drawn in reverse
  * instead of colour — not observed yet, but no longer able to slip through
@@ -933,7 +943,7 @@ export async function isSafeToInject(
   host?: string,
   deps: { captureFn?: typeof capture } = {},
 ): Promise<{ safe: boolean; reason?: "typing" | "menu"; lastInput: string }> {
-  // %5's request-change: checkPaneIdle + detectPermissionMenu each captured
+  // %5's request-change: checkPaneIdle + detectOpenMenu each captured
   // independently doubled the real tmux round-trips per send (1 -> 2) — on a
   // shared tmux server that has already hung once tonight (kobo-477) with an
   // open latency card (kobo-408), that is not a cost to pay silently as a
@@ -946,7 +956,7 @@ export async function isSafeToInject(
 
   const pane = await checkPaneIdle(target, host, onceDeps);
   if (!pane.idle) return { safe: false, reason: "typing", lastInput: pane.lastInput };
-  const menuOpen = await detectPermissionMenu(target, host, onceDeps);
+  const menuOpen = await detectOpenMenu(target, host, onceDeps);
   if (menuOpen) return { safe: false, reason: "menu", lastInput: pane.lastInput };
   return { safe: true, lastInput: pane.lastInput };
 }
@@ -956,7 +966,7 @@ export async function isSafeToInject(
  *
  * It used to say "a permission/confirm menu is open" / "has a permission menu
  * open". There is no permission check anywhere on this path: the gate is
- * `detectPermissionMenu` matching a numbered cursor and an `Esc to cancel`
+ * `detectOpenMenu` matching a numbered cursor and an `Esc to cancel`
  * footer in the last SEND_GATE_SNAPSHOT_LINES lines of the target's screen, plus
  * `checkPaneIdle` seeing a non-empty prompt line. Naming an ACL that does not
  * exist sent people looking for one — four times in one session on m5 — so the
@@ -1990,7 +2000,7 @@ export async function cmdSend(
     // Read off the already-loaded config (not a new barrel helper) so the wide
     // set of modules that mock `src/config` inline don't all need a new export.
     if (config.inputGuard?.enabled ?? true) {
-      // kobo-508: checkPaneIdle alone was the only real send-gate (detectPermissionMenu
+      // kobo-508: checkPaneIdle alone was the only real send-gate (detectOpenMenu
       // used to be notify-only). isSafeToInject combines both so a menu drawn in a
       // shape that fools checkPaneIdle's ghost-strip still defers instead of typing
       // over an open confirm dialog.
@@ -2001,7 +2011,7 @@ export async function cmdSend(
         // kobo-835 — say what was SEEN, not what it was mistaken for. Nothing on
         // this path checks a permission: `isSafeToInject` reads the last
         // SEND_GATE_SNAPSHOT_LINES lines of the target's screen and matches a
-        // numbered cursor + `Esc to cancel` footer (detectPermissionMenu, above),
+        // numbered cursor + `Esc to cancel` footer (detectOpenMenu, above),
         // or a non-empty prompt line (checkPaneIdle). Calling that "permission"
         // sent people looking for an ACL that does not exist, so the word is gone.
         //

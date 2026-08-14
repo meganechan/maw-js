@@ -9,7 +9,7 @@ type SendKeysFn = (target: string, text: string) => Promise<void>;
 type PaneIdleFn = (target: string) => Promise<boolean>;
 /** Surface a pending-message badge on the target (eq3-003); count 0 clears it. */
 type SetIndicatorFn = (target: string, count: number) => Promise<void>;
-/** eq3-004 — true when the target pane is showing a permission/confirm modal. */
+/** eq3-004 — true when the target pane has a menu open (any kind: confirm, AskUserQuestion, picker). */
 type DetectMenuFn = (target: string) => Promise<boolean>;
 /**
  * eq3-004 — resolve a queued message's `from` to a locally-injectable pane so a
@@ -25,7 +25,7 @@ export interface DispatchEngineOptions {
   setIndicator?: SetIndicatorFn;
   /** A deferred message older than this (ms) fires a one-shot stall notify. 0 disables. */
   stallThresholdMs?: number;
-  /** eq3-004 — permission-menu detector; when omitted, no pane is ever treated as a menu. */
+  /** eq3-004 — open-menu detector; when omitted, no pane is ever treated as a menu. */
   detectMenu?: DetectMenuFn;
   /** eq3-004 — sender-pane resolver for routing stall/menu notifies back to msg.from. */
   resolveSenderTarget?: ResolveSenderFn;
@@ -161,7 +161,7 @@ export class DispatchEngine {
     if (!(await this.paneIdle(msg.target))) {
       await this.refreshIndicator(oracle);
       // eq3-004 — a busy→ready transition that still can't deliver may mean the
-      // pane popped a permission modal; surface it to the sender right away
+      // pane popped a menu; surface it to the sender right away
       // instead of waiting for the next sweep tick.
       await this.checkStall(oracle);
       return;
@@ -199,7 +199,7 @@ export class DispatchEngine {
 
   /**
    * One-shot stall/menu notify. For each undelivered message on `oracle`:
-   *   (b) target is showing a permission modal → notify NOW (menus never
+   *   (b) target has a menu open → notify NOW (menus never
    *       self-clear, so there's no point waiting out the threshold), or
    *   (a) the message has sat behind dirty input past the threshold → notify.
    * Each fires exactly once (deduped via `stallNotified`) and NEVER escalates to
@@ -213,7 +213,16 @@ export class DispatchEngine {
       const menu = await this.detectMenu(m.target);
       const stalled = this.stallThresholdMs > 0 && now - m.queuedAt >= this.stallThresholdMs;
       if (!menu && !stalled) continue;
-      await this.notifyStuck(m, oracle, menu ? "permission prompt" : "operator input", now);
+      // kobo-941 — this label used to read "permission prompt". `detectMenu`
+      // does not check a permission and never did: it matches a numbered cursor
+      // plus an `Esc to cancel` footer, which is what EVERY Claude Code
+      // selection surface draws (AskUserQuestion, slash/model/file pickers).
+      // Senders were told to go clear a permission dialog, found none, and
+      // stopped trusting the warning — twice in one hour on 2026-08-14. The
+      // detector is right and stays wide (narrowing it would overtype the other
+      // menu kinds); only this label was lying. Same wording the `maw hey`
+      // channel already reaches via `deferredPaneReason` (comm-send.ts).
+      await this.notifyStuck(m, oracle, menu ? "an open menu that needs a human to choose" : "operator input", now);
     }
   }
 

@@ -280,7 +280,7 @@ function profileFlag(profile: ServeProfile, key: "intervals" | "views"): boolean
  * kobo-508 — the `paneIdle` re-check DispatchEngine's sweep uses before
  * auto-delivering a queued message (dispatch-engine.ts:134/161). This is one of
  * the small enumerated set of paths that actually gate an injection with the
- * combined checkPaneIdle+detectPermissionMenu signal (isSafeToInject) rather
+ * combined checkPaneIdle+detectOpenMenu signal (isSafeToInject) rather
  * than checkPaneIdle alone — comm-send.ts's direct cmdSend path is the other.
  * Several OTHER send paths do not go through either (WebSocket handlers, the
  * cross-node inbound path, raw type-text callers) — see kobo-508's card note
@@ -357,11 +357,12 @@ export async function startBunGatewayServer(
       // Dynamic imports keep comm-send / tmux-class out of server.ts's static
       // link graph (they pull heavy deps that some serve-boot tests mock partially).
       paneIdle: sweepPaneIdleCheck,
-      // eq3-004 — permission-modal detector (separate from the typing guard) so a
-      // pane stuck on a confirm prompt notifies the sender immediately.
+      // eq3-004 — open-menu detector (separate from the typing guard) so a pane
+      // sitting on a menu notifies the sender immediately. kobo-941: any menu
+      // kind, not just a permission prompt — do not describe it as one.
       detectMenu: async (target) => {
-        const { detectPermissionMenu } = await import("../commands/shared/comm-send");
-        return detectPermissionMenu(target);
+        const { detectOpenMenu } = await import("../commands/shared/comm-send");
+        return detectOpenMenu(target);
       },
       // eq3-004 — resolve a stuck message's sender to a local pane so the stall/
       // menu warning can be injected back. Cross-node / unresolved senders → null

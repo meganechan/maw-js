@@ -6,7 +6,7 @@
  * it never proves server.ts installs the RIGHT callback. This file imports
  * `sweepPaneIdleCheck` directly (the real exported wiring, not a re-created
  * stub) and only mocks the underlying tmux capture, so the real
- * checkPaneIdle + detectPermissionMenu logic runs for real.
+ * checkPaneIdle + detectOpenMenu logic runs for real.
  *
  * kobo-394 lesson applied to the test itself: this only proves what THIS
  * function does. It does not enumerate every send path in the codebase.

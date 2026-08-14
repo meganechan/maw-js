@@ -99,7 +99,22 @@ export function readPresenceRows(
   const dir = presenceDir();
   let files: string[];
   try {
-    files = readdirSync(dir).filter((f) => f.endsWith(".json"));
+    // kobo-945 — SORT: row order is part of this route's contract, so it is
+    // pinned at the producer rather than left to the filesystem. `readdirSync`
+    // returns raw directory order, which is creation order on APFS but hash
+    // order on the ext4 CI runner — so /api/presence handed two hosts the same
+    // panes in different orders, and the kobo-283 test below was green locally
+    // and red on CI for a year of nobody's fault. A JSON API whose row order
+    // depends on which filesystem serves it is a defect on its own; the test
+    // only made it visible. Fixed here, not in the assertion, because this is
+    // the one place every consumer and every test routes through — the sibling
+    // reader of this SAME directory already sorts for the same reason
+    // (presence-away.ts, kobo-216: "so both twins pick the same first company
+    // instead of diverging on raw readdir order").
+    // Files are `<pane>.json` (scripts/hooks/maw-statusline.sh), so this is
+    // pane order — lexicographic, i.e. %10 sorts before %9. Deterministic is
+    // the contract; numeric is not promised.
+    files = readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
   } catch {
     return []; // no presence dir yet → nobody has a statusline capturing
   }

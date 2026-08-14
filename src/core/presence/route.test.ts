@@ -125,6 +125,19 @@ describe("readPresenceRows", () => {
     expect(readPresenceRows(NOW, { alive: new Set() })).toEqual([]);
   });
 
+  test("row order is the sorted file order, never the filesystem's own (kobo-945)", () => {
+    // The order the kobo-283 test above relies on is a CONTRACT, so it gets an
+    // assertion that names it. Written late-name-first on purpose: a producer
+    // that returns raw readdir order hands these back in creation order on APFS
+    // (and in hash order on the ext4 CI runner) — either way, not this.
+    writePane("zzz.json", { pane: "%zzz", oracle: "x", ts: NOW });
+    writePane("aaa.json", { pane: "%aaa", oracle: "x", ts: NOW });
+    const panes = readPresenceRows(NOW).map((r) => r.pane).filter((p) => p === "%aaa" || p === "%zzz");
+    expect(panes).toEqual(["%aaa", "%zzz"]);
+    rmSync(join(presDir, "zzz.json"));
+    rmSync(join(presDir, "aaa.json"));
+  });
+
   test("ts=0 (never captured a real timestamp) counts as stale", () => {
     writePane("pctzero.json", { pane: "%7", oracle: "x", ts: 0, model: "m" });
     const row = readPresenceRows(NOW).find((r) => r.pane === "%7")!;

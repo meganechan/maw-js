@@ -286,7 +286,9 @@ describe("append safety + route", () => {
     const entriesRes = await handleWorklogRequest(new Request("http://x/api/worklog?company=rc&limit=10"));
     expect(await entriesRes.json()).toEqual({ entries: expect.arrayContaining([expect.objectContaining({ summary: "git route-marker" })]) });
     const injectRes = await handleWorklogRequest(new Request("http://x/api/worklog?oracle=rr"));
-    expect((await injectRes.json())).toHaveProperty("inject");
+    // typeof, not toHaveProperty: the slice is async since kobo-949, and a dropped
+    // `await` here still serializes as {"inject":{}} — property present, hook silent.
+    expect(typeof (await injectRes.json()).inject).toBe("string");
   });
 });
 

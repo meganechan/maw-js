@@ -18,6 +18,7 @@ import { join } from "path";
 import { buildInjectSlice } from "./slice";
 import { appendWorklog } from "./store";
 import { _setCompaniesDir, saveCompany, COMPANIES_DIR } from "../../vendor/mpr-plugins/company/company-helpers";
+import { _clearScopeCache } from "./company-scope";
 
 interface StubCard { id: string; company: string; lane: string; assignee: string | null; pr?: number | null }
 interface StubEvent { seq: number; cardId: string; ts: string; who: string; kind: string; summary: string }
@@ -60,12 +61,18 @@ beforeAll(() => {
   companiesDir = mkdtempSync(join(tmpdir(), "kobo949-reg-"));
   _setCompaniesDir(join(companiesDir, "companies"));
   // Two companies on one board: the inject for `mine` must never leak `other`.
-  saveCompany({ name: "mine", manager: "eq3", teams: { core: { lead: "eq3", members: [{ oracle: "eq3", role: "lead" }] } } } as any);
+  saveCompany({ name: "mine", manager: "kobo949bot", teams: { core: { lead: "kobo949bot", members: [{ oracle: "kobo949bot", role: "lead" }] } } } as any);
   saveCompany({ name: "other", manager: "zz", teams: { core: { lead: "zz", members: [{ oracle: "zz", role: "lead" }] } } } as any);
+  // scopeOfOracle memoizes HITS per process. Sharing a Bun process with any file
+  // that already resolved an oracle against this machine's REAL registry would
+  // otherwise hand us its real company and quietly query the stub for cards that
+  // aren't there — an empty inject that looks like a code bug.
+  _clearScopeCache();
 });
 
 afterAll(() => {
   _setCompaniesDir(origCompaniesDir);
+  _clearScopeCache();
   rmSync(companiesDir, { recursive: true, force: true });
   if (origApi === undefined) delete process.env.MAW_KOBO_API; else process.env.MAW_KOBO_API = origApi;
 });
@@ -81,7 +88,7 @@ describe("inject slice — kobo feed (kobo-949)", () => {
     );
     process.env.MAW_KOBO_API = server.url.origin;
     try {
-      const out = await buildInjectSlice("eq3");
+      const out = await buildInjectSlice("kobo949bot");
       expect(out).toContain("MY-COMPANY-MARKER");
       expect(out).not.toContain("OTHER-COMPANY-MARKER");
       expect(out).not.toContain("k-2"); // no other-company card id anywhere in the block
@@ -107,7 +114,7 @@ describe("inject slice — kobo feed (kobo-949)", () => {
     );
     process.env.MAW_KOBO_API = server.url.origin;
     try {
-      const out = await buildInjectSlice("eq3");
+      const out = await buildInjectSlice("kobo949bot");
       expect(out).toContain("SIGNAL-MOVE");
       for (const noise of ["NOISE-COMMENT", "NOISE-NOTE", "NOISE-WORK-ORDER", "NOISE-BODY-EDITED"]) {
         expect(out).not.toContain(noise);
@@ -124,7 +131,7 @@ describe("inject slice — kobo feed (kobo-949)", () => {
 
     // Port 1 on loopback: nothing listens, connection refused immediately.
     process.env.MAW_KOBO_API = "http://127.0.0.1:1";
-    const out = await buildInjectSlice("eq3");
+    const out = await buildInjectSlice("kobo949bot");
 
     expect(out.split("\n")).toHaveLength(1);
     expect(out.toLowerCase()).toContain("kobo");
@@ -147,7 +154,7 @@ describe("inject slice — kobo feed (kobo-949)", () => {
     );
     process.env.MAW_KOBO_API = server.url.origin;
     try {
-      const out = await buildInjectSlice("eq3");
+      const out = await buildInjectSlice("kobo949bot");
       const inFlight = out.split("recent")[0]!;
       expect(inFlight).toContain("k-doing");
       expect(inFlight).toContain("k-review");
@@ -167,7 +174,7 @@ describe("inject slice — kobo feed (kobo-949)", () => {
     const server = startStubKobo([{ id: "k-1", company: "mine", lane: "doing", assignee: "eq3" }], events);
     process.env.MAW_KOBO_API = server.url.origin;
     try {
-      const out = await buildInjectSlice("eq3");
+      const out = await buildInjectSlice("kobo949bot");
       expect(out).toContain("EVENT-900"); // newest
       expect(out).not.toContain("EVENT-1 "); // oldest — what `?limit=200` would have returned
       expect(out).not.toContain("EVENT-200");

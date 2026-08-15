@@ -175,10 +175,15 @@ describe("inject slice — kobo feed (kobo-949)", () => {
     process.env.MAW_KOBO_API = server.url.origin;
     try {
       const out = await buildInjectSlice("kobo949bot");
-      expect(out).toContain("EVENT-900"); // newest
+      // AC1 says twelve lines, so assert twelve — not "fewer than 25", which a
+      // DEFAULT_EVENTS of 18 satisfied while making every inject 50% bigger
+      // (mutant 12→18 survived the first round of these tests).
+      const activity = out.split("recent board activity:")[1]!.trim().split("\n");
+      expect(activity).toHaveLength(12);
+      expect(activity[activity.length - 1]).toContain("EVENT-900"); // newest, and last
+      expect(activity[0]).toContain("EVENT-889"); // exactly 12 back — pins both ends of the window
       expect(out).not.toContain("EVENT-1 "); // oldest — what `?limit=200` would have returned
       expect(out).not.toContain("EVENT-200");
-      expect(out.split("\n").length).toBeLessThan(25); // stays token-bounded
     } finally {
       server.stop(true);
     }

@@ -79,4 +79,32 @@ describe("watch plugin Room retirement", () => {
     // And the module-global Set — the wrong one under a bundle — is never touched.
     expect(moduleGlobal.size).toBe(0);
   });
+
+  /**
+   * kobo-949 turned buildInjectSlice() into an async fetch of the kobo board.
+   * `maw company worklog inject` renders it as `emit(slice || "(nothing…)")` —
+   * a Promise is always truthy, so a dropped `await` does not throw, does not
+   * fail a type check at runtime, and does not lose the fallback: it quietly
+   * prints "[object Promise]" to whoever asked what their next prompt will say.
+   * Asserted on the emitted OUTPUT rather than by grepping for "await", because
+   * the grep passes on a file that awaits somewhere else.
+   *
+   * Hermetic: MAW_KOBO_API points at a closed port, so the slice takes its
+   * documented degraded path instead of this machine's real board.
+   */
+  test("worklog inject emits the resolved slice text, never a pending Promise", async () => {
+    const { runWorklog } = await import("../../src/vendor/mpr-plugins/watch/index");
+    const orig = process.env.MAW_KOBO_API;
+    process.env.MAW_KOBO_API = "http://127.0.0.1:1"; // connection refused → one-line degrade
+    try {
+      const lines: unknown[] = [];
+      const res = await runWorklog(["inject"], (line) => lines.push(line));
+      expect(res.ok).toBe(true);
+      expect(lines).toHaveLength(1);
+      expect(typeof lines[0]).toBe("string");
+      expect(String(lines[0])).not.toContain("[object Promise]");
+    } finally {
+      if (orig === undefined) delete process.env.MAW_KOBO_API; else process.env.MAW_KOBO_API = orig;
+    }
+  });
 });

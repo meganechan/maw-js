@@ -222,26 +222,28 @@ describe("claim logic", () => {
 });
 
 describe("inject slice", () => {
-  it("includes open claims + recent activity for the oracle's company", () => {
-    // company resolves to undefined in test env → _unscoped log
+  // kobo-949 moved the inject's SOURCE from the worklog to the kobo board, so the
+  // three assertions that used to live here (claims+activity present; idle starved
+  // the window, kobo-109; error survives, kobo-111) no longer have a subject —
+  // nothing from this store reaches the inject at all any more. Their replacement
+  // (company filtering, noise-kind drop, API-down degradation) is in
+  // slice-kobo.test.ts. What stays here is the part that is still this module's
+  // job: the store keeps serving its OTHER readers, and the inject must not quietly
+  // start reading it again.
+  it("does NOT read the worklog any more — no claims, no activity lines (kobo-949)", async () => {
     appendWorklog({ ts: 30, iso: "i", oracle: "zz", kind: "claim", summary: "claim: slice-task", task: "slice-task" });
     appendWorklog({ ts: 31, iso: "i", oracle: "zz", kind: "tool", summary: "git slice-marker" });
-    const out = buildInjectSlice("zz");
-    expect(out).toContain("slice-task");
-    expect(out).toContain("git slice-marker");
-    expect(out).toContain("read before acting");
+    const out = await buildInjectSlice("zz");
+    expect(out).not.toContain("slice-task");
+    expect(out).not.toContain("git slice-marker");
+    expect(out).not.toContain("open claims");
   });
 
-  it("excludes 'idle' from the inject window so real activity isn't starved (kobo-109)", () => {
-    // 20 idle events (one per turn-end) would otherwise fill the 12-event window and
-    // push the single real event out entirely — the auto-inject must never show idle.
-    for (let i = 0; i < 20; i++) {
-      appendWorklog({ ts: 100 + i, iso: "i", oracle: "floody", paneId: "%9", kind: "idle", summary: "idle" });
-    }
-    appendWorklog({ ts: 90, iso: "i", oracle: "floody", pane: "0", kind: "tool", summary: "git real-work-marker" });
-    const out = buildInjectSlice("floody");
-    expect(out).toContain("git real-work-marker"); // survives despite 20 idles after it
-    expect(out).not.toContain("idle");
+  it("openClaims + readWorklog stay fully functional for their other readers (roster/away-gate/statusline)", () => {
+    appendWorklog({ ts: 90, iso: "i", oracle: "keepq", company: "keepc", kind: "claim", summary: "claim: still-open", task: "still-open" });
+    appendWorklog({ ts: 91, iso: "i", oracle: "keepq", company: "keepc", kind: "tool", summary: "git still-logged" });
+    expect(openClaims("keepc").map(c => c.task)).toEqual(["still-open"]);
+    expect(readWorklog("keepc").some(e => e.summary === "git still-logged")).toBe(true);
   });
 
   it("readWorklog excludeKinds drops before the limit slice", () => {
@@ -250,12 +252,6 @@ describe("inject slice", () => {
     const rows = readWorklog(null, { limit: 5, excludeKinds: ["idle"], oracle: "ek" });
     expect(rows.some(r => r.summary === "git keep-me")).toBe(true);
     expect(rows.every(r => r.kind !== "idle")).toBe(true);
-  });
-
-  it("KEEPS 'error' in the inject (only idle is excluded) — rare + actionable (kobo-111)", () => {
-    appendWorklog({ ts: 300, iso: "i", oracle: "errq", paneId: "%7", kind: "error", summary: "API error (turn ended)" });
-    const out = buildInjectSlice("errq");
-    expect(out).toContain("API error (turn ended)"); // error must reach the agent's inject
   });
 });
 
@@ -287,10 +283,12 @@ describe("append safety + route", () => {
 
   it("handleWorklogRequest serves inject + entries as JSON", async () => {
     appendWorklog({ ts: 1, iso: "i", oracle: "rr", company: "rc", kind: "tool", summary: "git route-marker" });
-    const entriesRes = handleWorklogRequest(new Request("http://x/api/worklog?company=rc&limit=10"));
+    const entriesRes = await handleWorklogRequest(new Request("http://x/api/worklog?company=rc&limit=10"));
     expect(await entriesRes.json()).toEqual({ entries: expect.arrayContaining([expect.objectContaining({ summary: "git route-marker" })]) });
-    const injectRes = handleWorklogRequest(new Request("http://x/api/worklog?oracle=rr"));
-    expect((await injectRes.json())).toHaveProperty("inject");
+    const injectRes = await handleWorklogRequest(new Request("http://x/api/worklog?oracle=rr"));
+    // typeof, not toHaveProperty: the slice is async since kobo-949, and a dropped
+    // `await` here still serializes as {"inject":{}} — property present, hook silent.
+    expect(typeof (await injectRes.json()).inject).toBe("string");
   });
 });
 

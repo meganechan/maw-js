@@ -13,13 +13,15 @@
 import { buildInjectSlice } from "./slice";
 import { readWorklog } from "./store";
 
-export function handleWorklogRequest(request: Request): Response {
+// async since kobo-949: the inject slice is now fetched from the kobo API, and
+// ctx.http.route already accepts a Promise<Response> handler (ServeRouteHandler).
+export async function handleWorklogRequest(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const oracle = url.searchParams.get("oracle");
   if (oracle) {
     const ev = url.searchParams.get("events");
     const events = ev ? Math.max(1, Math.min(50, +ev || 12)) : undefined;
-    return Response.json({ inject: buildInjectSlice(oracle, { events }) });
+    return Response.json({ inject: await buildInjectSlice(oracle, { events }) });
   }
   const company = url.searchParams.get("company");
   const lim = url.searchParams.get("limit");

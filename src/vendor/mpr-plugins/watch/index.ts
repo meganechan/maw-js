@@ -50,7 +50,7 @@ export async function runWorklog(
     // offline preview of the exact slice the hooks inject (no server needed)
     const flags = parseFlags(args.slice(1), { "--oracle": String }, 0);
     const oracle = flags["--oracle"] ?? myOracle();
-    const slice = buildInjectSlice(oracle);
+    const slice = await buildInjectSlice(oracle); // kobo-949: slice is fetched from the kobo API now
     emit(slice || `(nothing to inject for ${oracle} — no open claims or recent activity)`);
     return { ok: true };
   }

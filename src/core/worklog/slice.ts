@@ -26,8 +26,15 @@ const DEFAULT_BASE = "http://127.0.0.1:4171";
 const BUDGET_MS = 1_200;
 /** Board lanes that mean "someone is on this right now". */
 const IN_FLIGHT_LANES = new Set(["doing", "review"]);
-/** Board bookkeeping — real, but not activity worth a line in every prompt. */
-const NOISE_KINDS = new Set(["comment", "note", "work-order", "body-edited"]);
+/**
+ * Board bookkeeping — real, but not activity worth a line in every prompt.
+ *
+ * `ac-ticked` covers untick too: kobo writes ONE kind per toggle (kobo-board
+ * db.ts setAcDone → kind "ac-ticked", summary `ac[n] ticked|unticked`), so there
+ * is no `ac-unticked` to list — 0 of 8,451 events on the live board. One card
+ * re-ticking inside a minute took 11 of the 12 activity lines (kobo-954).
+ */
+const NOISE_KINDS = new Set(["comment", "note", "work-order", "body-edited", "ac-ticked"]);
 /** How many raw events back to look for this company's lines. */
 const WINDOW = 400;
 const MAX_SUMMARY = 90;

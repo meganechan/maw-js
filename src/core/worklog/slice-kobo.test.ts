@@ -101,7 +101,7 @@ describe("inject slice — kobo feed (kobo-949)", () => {
     }
   });
 
-  it("drops noise kinds (comment/note/work-order/body-edited) from the event lines", async () => {
+  it("drops noise kinds (comment/note/work-order/body-edited/ac-ticked) from the event lines", async () => {
     const server = startStubKobo(
       [{ id: "k-1", company: "mine", lane: "doing", assignee: "eq3" }],
       [
@@ -109,14 +109,18 @@ describe("inject slice — kobo feed (kobo-949)", () => {
         ev(2, "k-1", "note", "NOISE-NOTE"),
         ev(3, "k-1", "work-order", "NOISE-WORK-ORDER"),
         ev(4, "k-1", "body-edited", "NOISE-BODY-EDITED"),
-        ev(5, "k-1", "move", "SIGNAL-MOVE"),
+        // kobo-954: tick AND untick both arrive as kind `ac-ticked` — one card
+        // toggling took 11 of 12 activity lines on the live board.
+        ev(5, "k-1", "ac-ticked", 'ac[1] ticked: "NOISE-AC-TICKED"'),
+        ev(6, "k-1", "ac-ticked", 'ac[1] unticked: "NOISE-AC-UNTICKED"'),
+        ev(7, "k-1", "move", "SIGNAL-MOVE"),
       ],
     );
     process.env.MAW_KOBO_API = server.url.origin;
     try {
       const out = await buildInjectSlice("kobo949bot");
       expect(out).toContain("SIGNAL-MOVE");
-      for (const noise of ["NOISE-COMMENT", "NOISE-NOTE", "NOISE-WORK-ORDER", "NOISE-BODY-EDITED"]) {
+      for (const noise of ["NOISE-COMMENT", "NOISE-NOTE", "NOISE-WORK-ORDER", "NOISE-BODY-EDITED", "NOISE-AC-TICKED", "NOISE-AC-UNTICKED"]) {
         expect(out).not.toContain(noise);
       }
     } finally {

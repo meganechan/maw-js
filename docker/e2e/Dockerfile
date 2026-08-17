@@ -99,17 +99,11 @@ ENV MAW_PORT=3456 \
     E2E_ORACLE=stub \
     E2E_STATE=/home/maw/e2e/state
 
-# kobo's own launcher (bin/kobo) is the entry point under test, so the sandbox
-# uses it rather than reimplementing it. It derives KOBO_RUNTIME_SHA by running
-# `git -C $KOBO_REPO rev-parse HEAD`, which is why the mount must be a real git
-# repo and not a bare tree — run.sh clones one.
-ENV KOBO_REPO=/home/maw/kobo-board-runtime \
-    KOBO_RUNTIME_DIR=/home/maw/e2e/kobo-runtime \
-    KOBO_RUNTIME_SOCKET=/home/maw/e2e/kobo-runtime/kobo-taskd.sock \
-    KOBO_RUNTIME_DB=/home/maw/e2e/kobo-runtime/kobo-board.db
-
-# The board actor for CLI verbs that need one (resolveActor, cli.ts:115-129).
-ENV KOBO_BOARD_SESSION_ACTOR=harness
+# Only the mount path is left (kobo-971): the runtime dir/socket/DB vars and the
+# board session actor went with the kobo phases, because nothing in this sandbox
+# starts a kobo daemon or runs a kobo verb any more. KOBO_REPO stays because
+# compose mounts to it and v3 names it when proving no OTHER host path is mounted.
+ENV KOBO_REPO=/home/maw/kobo-board-runtime
 
 # dispatch-run shells out to `maw hey` with no --from (kobo cli.ts:201), so maw
 # has to resolve a sender identity on its own or it exits 1 before sending
@@ -122,8 +116,9 @@ ENV CLAUDE_AGENT_NAME=harness
 RUN git config --global --add safe.directory '*'
 
 # Prepend, never replace: the base image puts bun on PATH and a literal list would
-# silently drop it. $KOBO_REPO/bin is where the real `kobo` launcher lives.
-ENV PATH=/home/maw/e2e/bin:/home/maw/kobo-board-runtime/bin:$PATH
+# silently drop it. The kobo launcher's bin dir is deliberately NOT on PATH any
+# more (kobo-971) — a `kobo` that resolves is a `kobo` someone will run here.
+ENV PATH=/home/maw/e2e/bin:$PATH
 
 # Cell contracts must exist on disk or self-spawn hard-fails before any pane is
 # created (cell/spawn.ts:280-282). Installs into $HOME/.claude — an image prereq,

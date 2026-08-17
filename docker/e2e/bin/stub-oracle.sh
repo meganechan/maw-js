@@ -62,10 +62,14 @@ while :; do
   if id="$(card_id "$line")" && [ -n "$id" ]; then
     {
       printf '=== dispatch %s ===\n' "$id"
-      # `start` is the owner's verb: taskd refuses it unless actor == assignee and
-      # lane == todo (runtime/server.ts:284-291), so this exercises the ownership
-      # gate rather than just writing a lane.
-      kobo task start "$id" --actor "$E2E_ORACLE" 2>&1
+      # It used to run `kobo task start "$id" --actor "$E2E_ORACLE"` here, which was
+      # the point of v1: taskd refuses `start` unless actor == assignee, so the
+      # ownership gate was under test. That phase moved to kobo's own repo
+      # (kobo-971) and there is no kobo on PATH in this image any more, so the pane
+      # records what it received and stops there. Do not "restore" this with a
+      # `command -v kobo` fallback: a board verb that runs only when a binary
+      # happens to be present is the silent half-test this card removed.
+      printf 'received (no board verb: kobo e2e lives in meganechan/kobo-board)\n'
     } >>"$KOBO_LOG"
     # Written last and only after the verb returns, so the tests can poll one file
     # instead of racing the board.

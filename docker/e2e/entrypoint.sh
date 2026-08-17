@@ -5,22 +5,17 @@ set -euo pipefail
 
 log() { printf '[e2e] %s\n' "$*" >&2; }
 
-mkdir -p "$E2E_STATE" "$KOBO_RUNTIME_DIR"
+mkdir -p "$E2E_STATE"
 
-# 0. taskd. Every kobo verb goes through the runtime socket — bin/kobo refuses to
-#    run without one — so this is a hard precondition, not a background nicety.
-#    KOBO_RUNTIME_SHA is the repo's own HEAD, the same value bin/kobo derives; the
-#    daemon refuses to start without all three vars (runtime/main.ts:7-10).
-KOBO_RUNTIME_SHA="$(git -C "$KOBO_REPO" rev-parse HEAD)"
-export KOBO_RUNTIME_SHA
-log "kobo taskd (sha=${KOBO_RUNTIME_SHA:0:8})"
-bun "$KOBO_REPO/src/runtime/main.ts" >"$E2E_STATE/taskd.log" 2>&1 &
-
-for _ in $(seq 1 100); do
-  [ -S "$KOBO_RUNTIME_SOCKET" ] && break
-  sleep 0.1
-done
-[ -S "$KOBO_RUNTIME_SOCKET" ] || { log "taskd never bound its socket"; cat "$E2E_STATE/taskd.log" >&2; exit 1; }
+# 0. kobo-taskd USED TO BOOT HERE (kobo-971, 2026-08-17 — removed).
+#    It existed only for the v1/v2 kobo flow phases, which had been dead for
+#    months and are now gone; kobo's e2e lives in meganechan/kobo-board
+#    (scripts/e2e.sh, #246). The boot is removed rather than left running because
+#    the line it logged — "[e2e] kobo taskd (sha=…)" — was the whole illusion: a
+#    daemon coming up in a sandbox that tests nothing about it reads, to anyone
+#    watching the log, exactly like kobo being exercised.
+#    The read-only kobo mount itself stays: v3 asserts against its path when it
+#    proves no OTHER host directory is mounted here.
 
 # 1. maw config. `node` has no default and cmdSend throws without it
 #    (comm-send.ts:1813) — after the message has already landed, so a missing

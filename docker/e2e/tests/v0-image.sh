@@ -30,21 +30,11 @@ check "git present (plugin bootstrap)" 'git --version'
 
 check "maw runs" 'maw --version'
 
-# The ref guard. The kobo half of this sandbox was once built against a checkout
-# that happened to sit on a stale feature branch, and every "that code does not
-# exist" conclusion drawn from it was wrong. Assert the mounted tree really is the
-# runtime — a wrong ref now fails here, loudly, instead of silently reshaping what
-# the suite appears to prove.
-check "kobo mount has bin/kobo" '[ -x "$KOBO_REPO/bin/kobo" ]'
-check "kobo mount has the taskd entry" '[ -f "$KOBO_REPO/src/runtime/main.ts" ]'
-check "kobo mount is a git repo (bin/kobo derives the SHA from it)" \
-  'git -C "$KOBO_REPO" rev-parse HEAD'
-check "kobo task CLI has the dispatch verbs" \
-  'grep -q "dispatch-run" "$KOBO_REPO/src/cli.ts"'
-
-check "taskd socket is bound" '[ -S "$KOBO_RUNTIME_SOCKET" ]'
-check "kobo runs through taskd" 'kobo task ls'
-check "kobo health" 'kobo health'
+# The kobo asserts that used to sit here are gone with the phases they guarded
+# (kobo-971): "kobo runs through taskd", "kobo health" and the ref guard all
+# claimed this sandbox exercises kobo, and it no longer does — that lives in
+# meganechan/kobo-board scripts/e2e.sh. Leaving a green "kobo health" behind is
+# how a retired harness keeps passing for another six months.
 
 # Cell contracts must exist on disk or self-spawn hard-fails before a single pane
 # is created (cell/spawn.ts:280-282).
@@ -73,8 +63,9 @@ done
 
 # The runtime DB must live outside the mounted repo — the repo ships a committed
 # kobo-board.db, and the sandbox must never be pointed at it.
-check "runtime DB is outside the kobo mount" \
-  'case "$KOBO_RUNTIME_DB" in "$KOBO_REPO"/*) false ;; *) [ -w "$KOBO_RUNTIME_DIR" ] ;; esac'
+# No runtime DB to place any more (the taskd boot went with the kobo phases), so
+# what is left to assert about the mount is the half that is still true and still
+# load-bearing: it is read-only, i.e. this sandbox cannot write the host checkout.
 # Asserted by reading the mount flags, NOT by attempting a write. A write probe
 # that unexpectedly SUCCEEDS leaves a file in the host's real checkout — the probe
 # would cause the exact contamination it is meant to rule out.

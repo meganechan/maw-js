@@ -1,16 +1,38 @@
-# e2e sandbox — maw + kobo in one throwaway container
+# e2e sandbox — maw in one throwaway container
 
-Runs the card → dispatch → pane → board-verb flow inside a container so a maw or
-kobo change can be exercised end to end without touching the host's `~/.maw`,
-`~/.claude`, tmux server, or any live service.
+Exercises maw's pane/delivery machinery inside a container, without touching the
+host's `~/.maw`, `~/.claude`, tmux server, or any live service.
 
 This is separate from `docker/compose.yml`, which is the 2-node federation
 harness. Different harness, different purpose, deliberately not merged.
 
+## kobo is NOT tested here any more (kobo-971, 2026-08-17)
+
+`tests/v1-flow.sh` and `tests/v2-dispatchd.sh` drove kobo cards through
+`task add → dispatch → dispatch-run → hey → pane → task start`. They are deleted,
+along with the taskd boot and the kobo asserts in v0.
+
+Why deleted rather than repaired: they had been failing at their FIRST command
+for as long as kobo has required `--kind` on `task add`, and the suite still
+printed phase names and read like a run that passed. That is worse than having no
+harness — the output is shaped like a test result and proves nothing. It rotted
+because it lived in a repo where no kobo change could ever break it.
+
+kobo's e2e now lives in kobo's own repo, where a kobo contract change breaks it on
+the commit that makes it:
+
+    meganechan/kobo-board   scripts/e2e.sh        (merged in #246)
+
+Known cost, recorded rather than hidden: that harness has no maw and no tmux, so
+**the dispatch DELIVERY path is currently covered by nothing**. A card's outbox row
+can be minted and observed there, but not delivered into a pane. If that coverage
+is wanted back, it belongs next to the code that owns delivery — with a maw-born
+pane, not a hand-stamped one.
+
 ## Run it
 
 ```sh
-docker/e2e/run.sh                                  # v0 + v1 + v2 + v3
+docker/e2e/run.sh                                  # v0 + v3
 docker/e2e/run.sh /home/maw/e2e/tests/v0-image.sh  # one phase
 docker/e2e/run.sh bash                             # poke around inside
 ```
@@ -35,45 +57,19 @@ config:
 | `MAW_PLUGINS_DIR` == `MAW_PLUGIN_HOME` | bootstrap reads the first (`cli.ts:47`), install/profile/create read the second (`plugins-install.ts:25`); set one and the dir you populate is not the dir that is read |
 | per-kind `MAW_*_DIR` vars **unset** | setting one instead of `MAW_HOME` leaks pr-watch writes to the real `~/.maw/watch-pr-state.json` (`pr-watch.ts:43-58`) |
 | cell contracts on disk | `self-spawn` hard-fails before any pane exists (`cell/spawn.ts:280-282`) |
-| runtime DB outside the mount | the repo ships a committed `kobo-board.db`, the real board |
-| the kobo mount really is the runtime | `bin/kobo`, `src/runtime/main.ts` and the `dispatch-run` verb are asserted present — a wrong ref fails loudly here instead of quietly reshaping what the suite proves |
+| the kobo mount is read-only | the clone must not be writable from in here; this is the one kobo assert that outlived the kobo phases, because it is about isolation, not about kobo |
 
-**v1 — the flow** (`tests/v1-flow.sh`), every step through code that ships:
-
-```
-kobo task add          card on the real board, through taskd's socket
-  task dispatch        writes an outbox row (state=queued)
-  task dispatch-run    drains it, shells out to `maw hey` (kobo cli.ts:201)
-    maw                real target resolution, real idle gate, real send-keys
-      stub pane        parses the dispatch JSON, runs `kobo task start`
-        assert         BOTH halves: card lane AND outbox row state
-```
-
-Both halves come from one `task show --json`: `.lane` is `doing`, and
-`.dispatches[0].state` is `delivered` — the latter set only on a zero-status
-`maw hey`. The `queued` state is asserted *before* the drain so that `delivered`
-cannot pass by having never been anything else.
-
-kobo picks the dispatch target itself, from the card's bare assignee name, so
-`maw hey stub` must resolve against the fleet naming convention the entrypoint
-sets up (session `01-stub`, window `stub-oracle`). The test surfaces the drain's
-own reason string on failure, because an unresolved target is the likeliest way
-this breaks.
-
-The stub runs `task start`, not a bare lane write: taskd refuses `start` unless
-the actor is the card's assignee (`runtime/server.ts:284-291`), so the ownership
-gate is under test too. Nothing is mocked except the agent's judgement.
-
-The stub (`bin/stub-oracle.sh`) is a shell showing a real `❯ ` prompt, which is
-all the boot gate (`cell/spawn.ts:35`) and the delivery gate
-(`comm-send.ts:761-803`) actually inspect. No `claude` binary is involved.
+**v1 / v2 — removed.** See the note at the top of this file: the kobo flow and
+kobo-dispatchd phases now live in `meganechan/kobo-board scripts/e2e.sh`.
 
 ## Deviations from the design spec
 
 The spec is `eq3-oracle ψ/writing/e2e-sandbox-design.md` @ `8279d3a`.
 
-The kobo half is built exactly as specified — `task add → dispatch → dispatch-run
-→ maw hey`, against taskd over its unix socket. What remains:
+The kobo half the spec describes (`task add → dispatch → dispatch-run → hey`) was
+built as specified and has since been REMOVED from here — see the top of this
+file. The spec is kept as the record of what was built, not as a description of
+what this suite runs today. What remains:
 
 1. **No tmpfs mounts.** The spec puts `$MAW_HOME` and the kobo runtime dir on
    tmpfs so state cannot survive a run. `run --rm` gives the same guarantee via

@@ -157,6 +157,66 @@ describe("Tmux.sendText — confirmed submit (#6)", () => {
     15_000,
   );
 
+  // --- kobo-998: status chrome is not unsent input ---
+  //
+  // Every string below is a VERBATIM `tmux capture-pane` line from a live pane
+  // on this machine, taken read-only on 2026-08-20. Invented fixtures were the
+  // hole here: the bug is in what the real TUIs actually draw.
+  //
+  // The pair is the point. CHROME_AGENT_ROW and CLAUDE_INPUT_BOX come from the
+  // same TUI and open with the same `❯` marker — the discrimination has to be
+  // what FOLLOWS it, so a fix that just returns false everywhere fails the
+  // second half. `sentText` never appears in any of these lines, so the
+  // sent-text needle check above the fallback cannot decide any of them; the
+  // fallback regex is what is under test.
+
+  /** 24-nai:1.0 — Claude Code background-agent row. `❯` is the list cursor. */
+  const CHROME_AGENT_ROW =
+    "❯ ◯ pgw104-worker  Execute kobo card **pgw-104** (company pgw, board ...                                                                               idle";
+  /** 376:0.0 — Codex footer. The `%` is a percentage, not a shell prompt. */
+  const CHROME_CODEX_FOOTER =
+    "  gpt-5.6-sol xhigh fast · ~ · gpt-5.6-sol · Ready · weekly 57% left · 258K window · 64.3K used · Main [default]";
+  /** 22-pm1:0.0 — text sitting UNSENT in the Claude Code input box. */
+  const CLAUDE_INPUT_BOX = "❯ เปิด card ให้ patchwork เลย";
+  /** 22-pm1:0.0 — a `maw hey` broadcast on the prompt row: load-buffer + paste-buffer, i.e. bracketed paste. */
+  const CLAUDE_PASTED_MESSAGE =
+    "❯ [broadcast from eq3-oracle] [m5:eq3] อัปเดต INTERIM MERGE RULE (Tony เคาะเพิ่ม):";
+  /** 83:0.0 — classic zsh prompt holding command text. */
+  const SHELL_PROMPT_TYPED = "tony@Tonys-MacBook-Air ~ % hermes dashboard";
+
+  test.each([
+    ["Claude Code background-agent row", CHROME_AGENT_ROW],
+    ["Codex footer percentage", CHROME_CODEX_FOOTER],
+  ])("kobo-998: %s is not pending input — one Enter, no warning", async (_name, paneLine) => {
+    const t = new FakeTmux();
+    t.captureScript = [paneLine]; // repeats → if this read as pending it would never clear
+
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.join(" ")); };
+    try {
+      await t.sendText("sess:agent", "ping");
+    } finally {
+      console.warn = origWarn;
+    }
+
+    expect(enterCount(t.calls)).toBe(1);
+    expect(warnings).toEqual([]);
+  }, 15_000);
+
+  test.each([
+    ["typed into the Claude Code input box", CLAUDE_INPUT_BOX],
+    ["bracketed-paste stuck in the input box", CLAUDE_PASTED_MESSAGE],
+    ["typed at a classic shell prompt", SHELL_PROMPT_TYPED],
+  ])("kobo-998: %s still reads as pending — Enter retried until it clears", async (_name, paneLine) => {
+    const t = new FakeTmux();
+    t.captureScript = [paneLine, PROMPT_IDLE];
+    await t.sendText("sess:pane", "ping");
+
+    expect(enterCount(t.calls)).toBe(2);
+    expect(t.calls.at(-1)).toBe("capture");
+  }, 15_000);
+
   test(
     "multiline content routes through loadBuffer + pasteBuffer, then confirmed submit",
     async () => {

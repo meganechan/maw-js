@@ -24,6 +24,34 @@ const MAX_SUBMIT_ATTEMPTS = 4;
 /** ANSI escape stripper — matches checkPaneIdle in comm-send.ts (#405). */
 const ANSI_RE = /\x1b\[[0-9;]*[mGKHFJA-Z]/g;
 
+/**
+ * Prompt marker + text still sitting on the input line — minus the two shapes
+ * that are TUI chrome rather than input.
+ *
+ * kobo-998: the bare `/[#$%>❯»›]\s+\S/` read a pane's *status* row as unsent
+ * input, so `submitWithConfirm` warned on panes that had submitted fine. 50 of
+ * 55 `unreachable` dispatches on the kobo board were this misread, each one a
+ * pane that merely had a background agent running. Two guards, both derived
+ * from real `capture-pane` output over all 61 live panes, 2026-08-20 — 7 panes
+ * read as "pending", 6 of them wrongly:
+ *   `(?!\p{So})` — Claude Code's background-agent rows put a status glyph
+ *     straight after the list cursor: `❯ ◯ pgw104-worker  Execute … idle`.
+ *     Real input starts with text, not a symbol glyph. (3 of the 6.)
+ *   `(?<!\d)%` — a digit-glued `%` is a percentage, not a prompt: `weekly 84%
+ *     left · 258K window` (Codex footer), `· ctx 41% · thawanban` (Claude Code
+ *     footer), `0% packet loss`. (The other 3.) Deliberately narrower than
+ *     "any word character": `bash-5.2$ `, `sqlite> `, `agent% ` are real
+ *     prompts and must keep reading as pending.
+ *
+ * ponytail: this matches shapes, it does not parse a prompt. A prompt whose
+ * last character before the `%` is a digit (`m5% cmd` — not present on any of
+ * the 61 panes measured), or sent text whose visible form begins with a symbol
+ * glyph, now falls through to the sent-text check above instead of this
+ * fallback. Widen these two guards if that bites — never the marker class,
+ * which is what got too loose in the first place.
+ */
+const PROMPT_WITH_INPUT = /(?:(?<!\d)%|[#$>❯»›])\s+(?!\p{So})\S/u;
+
 function pendingInputNeedles(sentText: string): string[] {
   const normalized = sentText.replace(/\r/g, "").trim();
   if (!normalized) return [];
@@ -554,7 +582,7 @@ export class Tmux {
       // Fallback: prompt marker followed by non-whitespace → user/command text
       // still sitting on the input line. Includes Codex `›` for immediate #2380
       // relief while sent-text detection handles unknown future engines.
-      return /[#$%>❯»›]\s+\S/.test(last);
+      return PROMPT_WITH_INPUT.test(last);
     } catch {
       return false;
     }
